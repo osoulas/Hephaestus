@@ -78,6 +78,7 @@ hephaestus = ["py.typed", "interfaces/web/**/*"]
 # command line overrides this one: `pytest -m slow`, `pytest -m live`.
 addopts = "-ra --strict-config --strict-markers -m 'not slow and not live'"
 testpaths = ["tests"]
+pythonpath = ["tests"]
 markers = [
   "slow: real MACE / MEGNet on cached tiny cases (pytest -m slow)",
   "live: real LLM, Valency or Materials Project calls (pytest -m live)",
