@@ -748,11 +748,22 @@ export function mountRun(root, id, tab, hooks) {
         const thinking = e.type === "thinking";
         const long = e.text.length > 280;
         return h(
-          `div.log-entry${long ? ".expandable" : ""}${open ? ".open" : ""}`,
-          { onclick: long ? () => toggleOpen(key) : null },
+          `div.log-entry.reasoning${thinking ? ".is-thinking" : ""}${long ? ".expandable" : ""}${open ? ".open" : ""}`,
+          {
+            onclick: long ? () => toggleOpen(key) : null,
+            role: long ? "button" : null,
+            tabindex: long ? 0 : null,
+            "aria-expanded": long ? String(open) : null,
+            onkeydown: long ? (ev) => (ev.key === "Enter" || ev.key === " ") && (ev.preventDefault(), toggleOpen(key)) : null,
+          },
           h("div.log-icon", null, icon(thinking ? "sparkles" : "message")),
-          h("div.log-main", null, h(`div.${thinking ? "log-thinking" : "log-text"}`, null, long && !open ? e.text.slice(0, 280) + "…" : e.text)),
-          h("div.log-side", null, time),
+          h(
+            "div.log-main",
+            null,
+            h("div.reasoning-kind", null, thinking ? "Thinking" : "Orchestrator"),
+            h(`div.${thinking ? "log-thinking" : "log-text"}`, null, long && !open ? e.text.slice(0, 280) + "…" : e.text),
+          ),
+          h("div.log-side", null, time, long ? h("span.expand-hint", null, open ? "Show less" : "Show more", icon("chevron")) : null),
         );
       }
       case "tool":
