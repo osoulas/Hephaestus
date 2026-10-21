@@ -1537,7 +1537,7 @@ table.data tr.best td:first-child {
   border-radius: var(--radius);
 }
 .log-entry:hover {
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 .log-entry.expandable {
   cursor: pointer;
@@ -2666,4 +2666,75 @@ details.issues[open] > summary {
   .replay-bar {
     flex-wrap: wrap;
   }
+}
+
+/* reasoning entries: raised cards, set apart from tool calls */
+.log-entry.reasoning {
+  margin: 8px 0;
+  padding: 12px 14px;
+  background: var(--surface);
+  box-shadow:
+    var(--shadow-sm),
+    0 0 0 1px var(--hairline);
+  transition:
+    box-shadow 0.15s,
+    transform 0.15s;
+}
+.log-entry.reasoning:hover {
+  background: var(--surface); /* already raised: no fill change */
+}
+.log-entry.reasoning .log-icon {
+  background: var(--ember-soft);
+  color: var(--ember);
+}
+.log-entry.reasoning:not(.is-thinking) .log-icon {
+  background: var(--primary);
+  color: var(--primary-ink);
+}
+.reasoning-kind {
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.log-entry.reasoning.expandable:hover,
+.log-entry.reasoning.expandable:focus-visible {
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 1px var(--hairline-strong);
+  transform: translateY(-1px);
+}
+.log-entry.reasoning.open {
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 1px var(--hairline-strong);
+}
+.log-entry.reasoning .log-side {
+  align-self: start;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.expand-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.expand-hint svg {
+  width: 13px;
+  height: 13px;
+  transform: rotate(90deg);
+  transition: transform 0.15s;
+}
+.log-entry.open .expand-hint svg {
+  transform: rotate(-90deg);
+}
+.log-entry.reasoning.expandable:hover .expand-hint {
+  color: var(--ink);
 }
