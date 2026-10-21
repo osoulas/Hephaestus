@@ -1,0 +1,37 @@
+{
+  "raw_goal": "a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable (<= 0.05 eV/atom above hull) and dynamically stable",
+  "material_family": "oxide perovskite",
+  "elements": [],
+  "excluded_elements": [
+    "Pb"
+  ],
+  "target_property": "band_gap",
+  "target_value": 3.12,
+  "target_units": "eV",
+  "direction": "minimise",
+  "target_tolerance": null,
+  "reference_material": "SrTiO3",
+  "reference_value": {
+    "value": 3.12,
+    "uncertainty": 0.65,
+    "units": "eV",
+    "source": "MEGNet-BandGap-mfi-MP-2019.4.1 (hse) on mp-5229"
+  },
+  "conditions": {
+    "temperature_K": 300.0,
+    "pressure_GPa": 0.0001
+  },
+  "hard_constraints": [
+    "no Pb",
+    "thermodynamically stable: E_hull <= 0.05 eV/atom",
+    "dynamically stable"
+  ],
+  "soft_preferences": [],
+  "stability_thresholds": {
+    "e_hull_max_eV_per_atom": 0.05,
+    "phonon_min_THz": -0.1
+  },
+  "assumptions": [
+    "Operating conditions default to 300 K and ambient pressure."
+  ]
+}

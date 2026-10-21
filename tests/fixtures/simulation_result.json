@@ -1,0 +1,71 @@
+{
+  "candidate_id": "c1-1",
+  "potential": "mace-mp-0-small",
+  "converged": true,
+  "relaxed": {
+    "candidate_id": "c1-1",
+    "cif": "data_SrTiO3\n_cell_length_a 3.905\n",
+    "pmg_dict": {
+      "@module": "pymatgen.core.structure",
+      "@class": "Structure",
+      "lattice": {
+        "matrix": [
+          [
+            3.905,
+            0,
+            0
+          ],
+          [
+            0,
+            3.905,
+            0
+          ],
+          [
+            0,
+            0,
+            3.905
+          ]
+        ]
+      },
+      "sites": []
+    },
+    "source": "template:perovskite_cubic",
+    "supercell": [
+      2,
+      2,
+      2
+    ],
+    "n_atoms": 40,
+    "disorder_seed": 0,
+    "composition_error": 0.0
+  },
+  "space_group": "Pm-3m",
+  "lattice": {
+    "a": 7.81,
+    "b": 7.81,
+    "c": 7.81,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+  },
+  "density_g_cm3": 5.1,
+  "energy_eV_per_atom": -7.9,
+  "formation_energy_eV_per_atom": -3.4,
+  "energy_above_hull_eV_per_atom": 0.021,
+  "thermo_stable": true,
+  "phonons": {
+    "mode": "fast",
+    "stable": true,
+    "min_frequency_THz": -0.3,
+    "instability_at": "R",
+    "supercell": [
+      2,
+      2,
+      2
+    ]
+  },
+  "md_stable": null,
+  "domain_note": "All elements in MPtrj.",
+  "wall_time_s": 12.5,
+  "errors": []
+}
