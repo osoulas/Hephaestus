@@ -253,7 +253,12 @@ export function check(ok, yes = "Pass", no = "Fail") {
  * @param {string} [kind] "critical" for errors.
  */
 export function toast(text, kind) {
-  const root = document.getElementById("toasts");
+  // A modal dialog sits in the top layer, above the page's toasts: show them inside it instead.
+  const dlg = document.querySelector("dialog[open]");
+  let root = document.getElementById("toasts");
+  if (dlg) {
+    root = dlg.querySelector(".toasts") || dlg.appendChild(h("div.toasts"));
+  }
   const el = h(`div.toast${kind ? "." + kind : ""}`, { role: "status" }, icon(kind ? "alert" : "check"), text);
   root.append(el);
   setTimeout(() => el.remove(), kind ? 7000 : 3500);

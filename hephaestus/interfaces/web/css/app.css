@@ -2165,3 +2165,111 @@ table.data tr.best td:first-child {
     padding: 0;
   }
 }
+
+/* ------------------------------------------------------------------ connect dialog */
+
+.modal {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-lg);
+  overflow: auto;
+}
+.modal::backdrop {
+  background: rgba(10, 9, 8, 0.45);
+  backdrop-filter: blur(2px);
+}
+.modal[open] {
+  animation: toast-in 0.16s ease-out;
+}
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 22px 6px;
+}
+.modal-head h2 {
+  font-size: 17px;
+}
+.modal-head .muted {
+  font-size: 13px;
+  margin-top: 2px;
+}
+.modal-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px 22px 22px;
+}
+.connect-panel {
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.connect-panel.focus {
+  border-color: var(--hairline-strong);
+  box-shadow: var(--shadow-sm);
+}
+.connect-head {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 0;
+  font-size: 12.5px;
+}
+.connect-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--ember-soft);
+  color: var(--ember);
+}
+.connect-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.connect-body {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  padding: 14px 16px 16px;
+}
+.connect-body > .callout,
+.connect-body > .connect-row {
+  width: 100%;
+}
+.connect-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.connect-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.connect-wait {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  width: 100%;
+}
+.connect-wait .spinner {
+  margin-top: 3px;
+}
+.status-row.clickable {
+  cursor: pointer;
+}
+.status-row.clickable:hover {
+  background: var(--surface-2);
+}

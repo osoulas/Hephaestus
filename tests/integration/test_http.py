@@ -157,3 +157,34 @@ def test_ui1_web_ui_is_served_offline(client: TestClient) -> None:
         if f.suffix in {".html", ".js", ".css"}:
             text = f.read_text(encoding="utf-8")
             assert "https://cdn" not in text and "fonts.googleapis" not in text, f
+
+
+def test_ui12_claude_sign_in_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start, follow and finish a Claude Code sign-in over HTTP with a fake CLI."""
+    from test_auth import fake_login, wait_for
+
+    login = fake_login(tmp_path, "code")
+    c = TestClient(http.create_app(tmp_path, deps_factory=deps, claude_login=login))
+    st = c.post("/auth/claude/start").json()
+    assert st["status"] in ("starting", "waiting")
+    wait_for(login, {"waiting"})
+    st = c.get("/auth/claude").json()
+    assert st["status"] == "waiting" and st["code_prompt"] and st["url"].startswith("https://")
+    assert c.post("/auth/claude/code", json={"code": "good"}).status_code == 200
+    wait_for(login, {"signed_in"})
+    assert c.get("/auth/claude").json()["signed_in"] is True
+    assert c.post("/auth/claude/code", json={"code": "again"}).status_code == 409
+
+
+def test_ui12_api_key_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Save, report and forget an API key; the key itself never comes back."""
+    monkeypatch.setenv("HEPHAESTUS_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    c = TestClient(http.create_app(tmp_path, deps_factory=deps, key_check=None))
+    assert c.get("/auth/anthropic").json()["present"] is False
+    assert c.post("/auth/anthropic", json={"api_key": "nope"}).status_code == 422
+    key = "sk-ant-api03-secret-ABCD"
+    saved = c.post("/auth/anthropic", json={"api_key": key})
+    assert saved.status_code == 200 and saved.json()["hint"] == "sk-…ABCD" and key not in saved.text
+    assert c.delete("/auth/anthropic").json()["present"] is False

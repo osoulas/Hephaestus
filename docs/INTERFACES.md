@@ -200,11 +200,21 @@ signed-out Claude Code CLI hangs instead of failing. If it's not ready, tell the
 does: `Experiment(goal, root=tmp_path, deps=runner.Deps(llm=ScriptedLLM(...), handlers=stub_handlers(), …))`.
 Or render `events.jsonl` from the fixture directly with `ProgressEvent.model_validate_json(line)`.
 
-## Not built yet (ask A)
+## Signing in to Claude
 
-- Browser sign-in to Claude Code: `POST /auth/claude/start|code|cancel` return 501. Meanwhile, sign
-  in from a terminal with `python -m hephaestus login`.
-- `interfaces/cli/app.py` doesn't call `serve` yet. Wiring it up is B's.
+| Endpoint | Body | Response |
+| --- | --- | --- |
+| `GET /auth/claude` | | `{status, signed_in, url, code_prompt, error}`; `status` is `checking`, `signed_in`, `signed_out`, or a running sign-in's `starting`, `waiting`, `verifying`, `failed`, `cancelled` |
+| `POST /auth/claude/start` | | Runs `claude auth login --claudeai`, which opens the Claude page and finishes by itself after authorising. `url` is the fallback page |
+| `POST /auth/claude/code` | `{code}` | Passes the code the fallback page shows; 409 when no sign-in is waiting |
+| `POST /auth/claude/cancel` | | Stops a running sign-in |
+| `GET /auth/anthropic` | | `{present, source: saved\|environment\|null, hint: "sk-…WXYZ"}`; never the key |
+| `POST /auth/anthropic` | `{api_key}` | Checks the key with one request, saves it owner-only in `~/.hephaestus/anthropic_api_key` and uses it at once; 422 if malformed or rejected |
+| `DELETE /auth/anthropic` | | Deletes the saved key (a key from the environment stays) |
+
+From a terminal: `python -m hephaestus login` (Claude subscription), `login --api-key` (prompts, hidden),
+`login --forget-api-key`, and `python -m hephaestus backends` to check readiness. A saved key is loaded at
+start-up by the server and the CLI unless `ANTHROPIC_API_KEY` is already set.
 
 ## The web UI as built
 
