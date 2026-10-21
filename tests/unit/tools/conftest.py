@@ -1,15 +1,16 @@
-"""Test doubles for the literature tools: a fake Valency backend and a minimal workspace."""
+"""Test doubles for the literature tools: a fake Valency backend and an empty workspace."""
 
 import json
 from collections.abc import Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
+from factories import workspace
 
-from hephaestus.core.types import Insight, Paper
+from hephaestus.core.types import Paper
 from hephaestus.tools import literature
+from hephaestus.tools.registry import Workspace
 
 VALENCY_FIXTURES = Path(__file__).parents[2] / "fixtures" / "valency"
 
@@ -65,16 +66,6 @@ class FakeValency:
         return self.responses[tool]
 
 
-@dataclass
-class FakeWorkspace:
-    """The literature fields of ``Workspace`` (``docs/TOOLS.md``)."""
-
-    papers: dict[str, Paper] = field(default_factory=dict)
-    insights: list[Insight] = field(default_factory=list)
-    trend: dict[int, int] = field(default_factory=dict)
-    queries: list[dict[str, Any]] = field(default_factory=list)
-
-
 class MemoryCache:
     """In-memory stand-in for ``core.store.cached`` (DL-3)."""
 
@@ -121,15 +112,15 @@ def valency() -> Iterator[FakeValency]:
 
 
 @pytest.fixture
-def ws() -> FakeWorkspace:
-    """Return an empty workspace.
+def ws() -> Workspace:
+    """Return an empty run workspace.
 
     Returns
     -------
-    FakeWorkspace
-        Workspace with no papers.
+    Workspace
+        The real ``Workspace``, so snapshots and resume see what the handlers store.
     """
-    return FakeWorkspace()
+    return workspace()
 
 
 @pytest.fixture

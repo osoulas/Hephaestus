@@ -1,7 +1,5 @@
 """Valency Bond client, evidence notes and novelty search (Section 2, LM-*).
 
-Owner: C.
-
 Four layers, bottom up:
 
 1. **Client.** :class:`McpValency` runs the async MCP session on one background thread. :func:`_call`
@@ -11,7 +9,8 @@ Four layers, bottom up:
    (LM-15), the value-in-abstract check (LM-14), aggregation (LM-16, LM-19) and novelty (SC-11).
 3. **Tool handlers.** ``search_literature``, ``related_papers``, ``get_paper``,
    ``publication_trend`` and ``note_evidence``, as specified in ``docs/TOOLS.md``.
-4. **Schemas.** :data:`LITERATURE_TOOLS` and :data:`HANDLERS` for the registry.
+   Each is registered with :func:`~hephaestus.tools.registry.register`; the schemas live in
+   ``registry.TOOLS``.
 
 ``find_open_questions`` (LM-17) needs an LLM call, so it lives in ``harness`` (tools may not import
 ``llm``).
@@ -33,7 +32,7 @@ from typing import Any, Protocol
 from pymatgen.core import Composition, Element
 
 from hephaestus.core.types import Insight, LiteratureContext, Paper, Quantity
-from hephaestus.tools.registry import ToolError
+from hephaestus.tools.registry import ToolError, register
 
 # Bump when the wrappers change what they send, so stale cache entries are not reused (DL-3).
 VALENCY_CLIENT_VERSION = "1"
@@ -47,6 +46,10 @@ COVERAGE_NOTE = (
     "Journal-only papers with no preprint or PubMed record are not covered."
 )
 CALL_TIMEOUT_S = 330.0
+# Literature calls run in parallel (``registry.lock_key`` is None for them), so changes to the
+# shared workspace collections and the lazy backend are guarded.
+_WS_LOCK = threading.Lock()
+_BACKEND_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -150,9 +153,10 @@ def get_backend() -> ValencyBackend:
     ValencyBackend
         The Valency client.
     """
-    if _Config.backend is None:
-        _Config.backend = McpValency()
-    return _Config.backend
+    with _BACKEND_LOCK:
+        if _Config.backend is None:
+            _Config.backend = McpValency()
+        return _Config.backend
 
 
 class McpValency:
@@ -891,9 +895,11 @@ def numbers_in_text(text: str) -> list[tuple[float, int]]:
 
 
 def value_in_abstract(value: float, abstract: str) -> bool:
-    """Whether ``value`` appears in the abstract, to the precision it is written there (LM-14).
+    """Whether ``value`` is a number written in the abstract (LM-14).
 
-    Signs are ignored, because abstracts often write a negative quantity as a magnitude.
+    The value must equal the number as written: ``3.20`` matches ``3.2``, but ``2.7`` does not
+    match ``3`` and ``3.24`` does not match ``3.2``. Signs are ignored, because abstracts often
+    write a negative quantity as a magnitude.
 
     Parameters
     ----------
@@ -905,12 +911,13 @@ def value_in_abstract(value: float, abstract: str) -> bool:
     Returns
     -------
     bool
-        True if some number in the abstract equals ``value`` after rounding to its precision.
+        True if some number in the abstract equals ``value``.
     """
-    for number, places in numbers_in_text(abstract):
-        if abs(abs(value) - abs(number)) < 0.5 * 10.0**-places + 1e-9:
-            return True
-    return False
+    target = abs(value)
+    return any(
+        math.isclose(target, abs(number), rel_tol=1e-9, abs_tol=1e-12)
+        for number, _ in numbers_in_text(abstract)
+    )
 
 
 def _better(new: float, old: float, direction: str, target: float | None) -> bool:
@@ -1013,11 +1020,97 @@ def aggregate_context(
     )
 
 
-_FORMULA_TOKEN_RE = re.compile(r"\b[A-Z][A-Za-z0-9.()]*\d[A-Za-z0-9.()]*")
+# Formula-like tokens, including digit-free (GaN), mixed-site (Sr(Ti,Sn)O3) and variable
+# (SrTi1-xSnxO3) notation.
+_FORMULA_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])[A-Z][A-Za-z0-9.()\[\],+\-\u2212\u03b4]*")
+_ELEMENT_RE = re.compile(r"[A-Z][a-z]?")
+_DOPED_RE = r"(?<![A-Za-z]){el}(?:[\s-]*(?:doped|doping|substituted|substitution|incorporated|alloyed)\b)"
+
+
+def _elements_in(token: str) -> set[str]:
+    """Element symbols in a formula token, ignoring variables such as ``x`` and ``δ``.
+
+    Parameters
+    ----------
+    token : str
+        Formula-like token.
+
+    Returns
+    -------
+    set of str
+        Symbols that are real elements; empty if any capitalised part is not an element.
+    """
+    found = set()
+    for symbol in _ELEMENT_RE.findall(token):
+        try:
+            Element(symbol)
+        except ValueError:
+            return set()
+        found.add(symbol)
+    return found
+
+
+def _host_and_dopants(composition: str) -> tuple[str, set[str]]:
+    """Split a substituted composition into its parent compound and its dopant elements.
+
+    A dopant is an element with a fractional amount below 0.5 per formula unit; the host keeps
+    the other elements with their amounts rounded to integers.
+
+    Parameters
+    ----------
+    composition : str
+        Reduced formula, e.g. ``"SrTi0.875Sn0.125O3"``.
+
+    Returns
+    -------
+    host : str
+        Parent reduced formula, e.g. ``"SrTiO3"``; the composition itself if nothing is fractional.
+    dopants : set of str
+        Dopant symbols, e.g. ``{"Sn"}``.
+    """
+    comp = Composition(composition)
+    amounts = comp.get_el_amt_dict()
+    dopants = {el for el, n in amounts.items() if n < 0.5 and abs(n - round(n)) > 1e-6}
+    if not dopants:
+        return comp.reduced_formula, set()
+    host = {el: max(1, round(n)) for el, n in amounts.items() if el not in dopants}
+    return Composition(host).reduced_formula, dopants
+
+
+def _formula_tokens(text: str) -> list[str]:
+    """Formula-like tokens in text, with PubMed's bracketed subscripts unwrapped.
+
+    Parameters
+    ----------
+    text : str
+        Title and abstract.
+
+    Returns
+    -------
+    list of str
+        Candidate tokens, trailing punctuation removed; hyphenated tokens (``SrTiO3-based``)
+        also contribute their parts.
+    """
+    text = re.sub(r"\((\d+(?:\.\d+)?)\)", r"\1", text)
+    tokens = []
+    for tok in _FORMULA_TOKEN_RE.findall(text):
+        tok = tok.rstrip(".,;:-")
+        tokens.append(tok)
+        parts = [part for part in re.split(r"[-\u2212]", tok) if part]
+        if len(parts) > 1:
+            tokens.extend(parts)
+    return tokens
 
 
 def mentions_composition(paper: Paper, composition: str) -> bool:
-    """Whether a paper's title or abstract names a formula equal to ``composition``.
+    """Whether a paper reports ``composition`` or, for a substituted one, the same substitution.
+
+    A paper counts if its title or abstract has
+
+    - a formula that normalises to ``composition``; or
+    - for a substituted composition, a mixed-site or variable formula with exactly the same
+      elements (``Sr(Ti,Sn)O3``, ``SrTi1-xSnxO3``), or the parent formula together with every
+      dopant named as doped or substituted (``Sn-doped SrTiO3``).
 
     Parameters
     ----------
@@ -1029,22 +1122,41 @@ def mentions_composition(paper: Paper, composition: str) -> bool:
     Returns
     -------
     bool
-        True if some formula token normalises to ``composition``.
+        True if the paper reports it.
     """
     text = f"{paper.title} {paper.abstract}"
-    return any(normalise_composition(tok) == composition for tok in _FORMULA_TOKEN_RE.findall(text))
+    tokens = _formula_tokens(text)
+    if any(normalise_composition(tok) == composition for tok in tokens):
+        return True
+    host, dopants = _host_and_dopants(composition)
+    if not dopants:
+        return False
+    elements = {str(el) for el in Composition(composition).elements}
+    for tok in tokens:
+        mixed = any(ch in tok for ch in ",x\u03b4") or bool(re.search(r"\d\.\d", tok))
+        if mixed and _elements_in(tok) == elements:
+            return True
+    if not any(normalise_composition(tok) == host for tok in tokens):
+        return False
+    return all(re.search(_DOPED_RE.format(el=el), text, re.IGNORECASE) for el in dopants)
 
 
-def check_novelty(composition: str, limit: int = 15) -> dict[str, Any]:
-    """Search for prior reports of an exact composition (SC-11, CG-12, the novelty gate).
+def check_novelty(ws: Any, composition: str, property: str | None = None, limit: int = 15) -> dict[str, Any]:
+    """Search for prior reports of a composition (SC-11, CG-12, the novelty gate).
 
-    Runs a semantic and an abstract search for the formula. A hit is a paper whose title or
-    abstract names a formula that normalises to the same composition.
+    Runs a semantic and an abstract search for the formula, plus an abstract search for the
+    parent and dopants of a substituted composition. A hit is a paper that names the composition,
+    or the same substitution in mixed-site, variable or "X-doped" notation (see
+    :func:`mentions_composition`).
 
     Parameters
     ----------
+    ws : Workspace
+        Per-run workspace (unused; the harness passes it to every novelty function).
     composition : str
         Candidate formula.
+    property : str or None
+        Target property (unused; reports of any property count as prior reports).
     limit : int
         Papers per search.
 
@@ -1064,6 +1176,10 @@ def check_novelty(composition: str, limit: int = 15) -> dict[str, Any]:
     found = valency_semantic_search(composition, limit=limit) + valency_abstract_search(
         composition, limit=limit, found_via="semantic"
     )
+    host, dopants = _host_and_dopants(target)
+    if dopants:
+        query = f"{host} {' '.join(sorted(dopants))}"
+        found += valency_abstract_search(query, limit=limit, found_via="semantic")
     ids = [p.paper_id for p in merge_duplicates(found) if mentions_composition(p, target)]
     return {"composition": target, "hits": len(ids), "paper_ids": ids}
 
@@ -1088,16 +1204,31 @@ def _remember(ws: Any, papers: Iterable[Paper]) -> list[Paper]:
     list of Paper
         The stored records for these papers, in order, without repeats.
     """
-    index: dict[str, str] = {}
-    for pid, held in ws.papers.items():
-        for key in _dedupe_keys(held):
-            index.setdefault(key, pid)
-    ids: list[str] = []
-    for paper in papers:
-        pid = _add_paper(ws.papers, index, paper)
-        if pid not in ids:
-            ids.append(pid)
-    return [ws.papers[pid] for pid in ids]
+    with _WS_LOCK:
+        index: dict[str, str] = {}
+        for pid, held in ws.papers.items():
+            for key in _dedupe_keys(held):
+                index.setdefault(key, pid)
+        ids: list[str] = []
+        for paper in papers:
+            pid = _add_paper(ws.papers, index, paper)
+            if pid not in ids:
+                ids.append(pid)
+        return [ws.papers[pid] for pid in ids]
+
+
+def _log_query(ws: Any, entry: str) -> None:
+    """Record a query in ``ws.queries`` (LM-3).
+
+    Parameters
+    ----------
+    ws : Workspace
+        Per-run workspace.
+    entry : str
+        ``"<tool>:<detail>"``, e.g. ``"search_literature:abstract:SrTiO3 secondary phase"``.
+    """
+    with _WS_LOCK:
+        ws.queries.append(entry)
 
 
 def _brief(paper: Paper, abstract_chars: int) -> dict[str, Any]:
@@ -1145,6 +1276,7 @@ def _cap(limit: Any, default: int, maximum: int) -> int:
     return max(1, min(int(limit) if limit is not None else default, maximum))
 
 
+@register("search_literature")
 def search_literature(
     ws: Any, query: str, mode: str = "semantic", limit: int | None = None
 ) -> dict[str, Any]:
@@ -1153,7 +1285,8 @@ def search_literature(
     Parameters
     ----------
     ws : Workspace
-        Per-run workspace; papers are added to ``ws.papers`` and the query to ``ws.queries``.
+        Per-run workspace; papers are added to ``ws.papers`` and the query to ``ws.queries``
+        as ``"search_literature:<mode>:<query>"``.
     query : str
         Search text.
     mode : {"semantic", "abstract", "citations"}
@@ -1183,11 +1316,12 @@ def search_literature(
         found = valency_abstract_search(query, n)
     else:
         raise ToolError(f"unknown mode {mode!r}; use semantic, abstract or citations")
-    ws.queries.append({"tool": "search_literature", "query": query, "mode": mode})
+    _log_query(ws, f"search_literature:{mode}:{query}")
     papers = _remember(ws, found)
     return {"n": len(papers), "papers": [_brief(p, 700) for p in papers]}
 
 
+@register("related_papers")
 def related_papers(
     ws: Any, paper_id: str, relation: str = "similar", limit: int | None = None
 ) -> dict[str, Any]:
@@ -1224,11 +1358,12 @@ def related_papers(
         found = valency_citing(paper_id, n)
     else:
         raise ToolError(f"unknown relation {relation!r}; use similar or citing")
-    ws.queries.append({"tool": "related_papers", "paper_id": paper_id, "relation": relation})
+    _log_query(ws, f"related_papers:{relation}:{paper_id}")
     papers = [p for p in _remember(ws, found) if p.paper_id != paper_id]
     return {"n": len(papers), "papers": [_brief(p, 400) for p in papers]}
 
 
+@register("get_paper")
 def get_paper(ws: Any, paper_id: str) -> dict[str, Any]:
     """Full record of one paper, reusing the workspace copy when it has an abstract (LM-9).
 
@@ -1260,6 +1395,7 @@ def get_paper(ws: Any, paper_id: str) -> dict[str, Any]:
     return {**_brief(paper, 3000), "doi": paper.doi, "url": paper.url, "authors": paper.authors}
 
 
+@register("publication_trend")
 def publication_trend(ws: Any, query: str) -> dict[str, Any]:
     """Papers per year for a keyword query (LM-8).
 
@@ -1283,12 +1419,14 @@ def publication_trend(ws: Any, query: str) -> dict[str, Any]:
     if not query or not query.strip():
         raise ToolError("query is empty")
     counts = valency_trend(query)
-    ws.trend.clear()
-    ws.trend.update(counts)
-    ws.queries.append({"tool": "publication_trend", "query": query})
+    with _WS_LOCK:
+        ws.trend.clear()
+        ws.trend.update(counts)
+    _log_query(ws, f"publication_trend:{query}")
     return {"query": query, "papers_per_year": counts}
 
 
+@register("note_evidence")
 def note_evidence(
     ws: Any,
     paper_id: str,
@@ -1342,116 +1480,16 @@ def note_evidence(
     quantity = None
     if value is not None and not dropped:
         quantity = Quantity(value=float(value), uncertainty=None, units=units or "", source=paper_id)
-    ws.insights.append(
-        Insight(
-            composition=normalise_composition(composition),
-            property=property,
-            value=quantity,
-            conditions=conditions,
-            finding_type=finding_type,  # type: ignore[arg-type]
-            summary=summary,
-            paper_id=paper_id,
-        )
+    insight = Insight(
+        composition=normalise_composition(composition),
+        property=property,
+        value=quantity,
+        conditions=conditions,
+        finding_type=finding_type,  # type: ignore[arg-type]
+        summary=summary,
+        paper_id=paper_id,
     )
-    return {"recorded": True, "value_dropped_not_in_abstract": dropped, "n_insights": len(ws.insights)}
-
-
-# ---------------------------------------------------------------------------------------------
-# 4. Schemas for the registry
-# ---------------------------------------------------------------------------------------------
-
-
-def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
-    """Build a closed JSON-schema object.
-
-    Parameters
-    ----------
-    properties : dict
-        Property schemas.
-    required : list of str
-        Required property names.
-
-    Returns
-    -------
-    dict
-        Object schema with ``additionalProperties: false``.
-    """
-    return {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
-
-
-_PAPER_ID = {"type": "string", "description": "Valency paper ID from an earlier result."}
-
-LITERATURE_TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "search_literature",
-        "description": (
-            "Search Valency Bond. mode=semantic searches by concept; mode=abstract is keyword search in "
-            "abstracts, use it to find failed attempts such as secondary phases or solubility limits; "
-            "mode=citations finds highly cited foundational work."
-        ),
-        "input_schema": _schema(
-            {
-                "query": {"type": "string"},
-                "mode": {"type": "string", "enum": ["semantic", "abstract", "citations"]},
-                "limit": {"type": "integer", "description": "At most 15."},
-            },
-            ["query", "mode"],
-        ),
-    },
-    {
-        "name": "related_papers",
-        "description": (
-            "Papers similar to, or citing, a paper you already retrieved. Citing papers catch later "
-            "revisions of headline numbers."
-        ),
-        "input_schema": _schema(
-            {
-                "paper_id": _PAPER_ID,
-                "relation": {"type": "string", "enum": ["similar", "citing"]},
-                "limit": {"type": "integer", "description": "At most 10."},
-            },
-            ["paper_id", "relation"],
-        ),
-    },
-    {
-        "name": "get_paper",
-        "description": "Full record of one paper: abstract (up to 3000 characters), DOI, link and authors.",
-        "input_schema": _schema({"paper_id": _PAPER_ID}, ["paper_id"]),
-    },
-    {
-        "name": "publication_trend",
-        "description": "Papers per year for a keyword query; missing years are filled with 0.",
-        "input_schema": _schema({"query": {"type": "string"}}, ["query"]),
-    },
-    {
-        "name": "note_evidence",
-        "description": (
-            "Record a finding from a retrieved paper for the reviewer and the brief. A value is dropped "
-            "by code unless that number appears in the paper's abstract."
-        ),
-        "input_schema": _schema(
-            {
-                "paper_id": _PAPER_ID,
-                "composition": {"type": ["string", "null"], "description": "Formula, e.g. SrTiO3."},
-                "property": {"type": "string", "description": "e.g. band_gap, bulk_modulus."},
-                "value": {"type": ["number", "null"]},
-                "units": {"type": ["string", "null"]},
-                "conditions": {"type": "string"},
-                "finding_type": {
-                    "type": "string",
-                    "enum": ["positive", "negative", "mechanism", "synthesis"],
-                },
-                "summary": {"type": "string", "description": "One line."},
-            },
-            ["paper_id", "property", "finding_type", "summary"],
-        ),
-    },
-]
-
-HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {
-    "search_literature": search_literature,
-    "related_papers": related_papers,
-    "get_paper": get_paper,
-    "publication_trend": publication_trend,
-    "note_evidence": note_evidence,
-}
+    with _WS_LOCK:
+        ws.insights.append(insight)
+        n = len(ws.insights)
+    return {"recorded": True, "value_dropped_not_in_abstract": dropped, "n_insights": n}

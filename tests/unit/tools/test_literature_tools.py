@@ -6,8 +6,6 @@ import pytest
 
 from hephaestus.tools import literature
 from hephaestus.tools.literature import (
-    HANDLERS,
-    LITERATURE_TOOLS,
     check_novelty,
     get_paper,
     note_evidence,
@@ -25,7 +23,7 @@ def test_search_returns_compact_papers_and_records_query(valency: Any, ws: Any) 
     assert set(result["papers"][0]) == {"paper_id", "title", "year", "citations", "source", "abstract"}
     assert set(ws.papers) == {"2101.00001v2", "2203.04567v1"}
     assert ws.papers["2101.00001v2"].citation_count == 130
-    assert ws.queries == [{"tool": "search_literature", "query": "SrTiO3 band gap", "mode": "semantic"}]
+    assert ws.queries == ["search_literature:semantic:SrTiO3 band gap"]
 
 
 def test_search_limit_capped_at_15_and_abstract_at_700(valency: Any, ws: Any) -> None:
@@ -58,7 +56,7 @@ def test_lm3_distinct_queries_are_all_recorded(valency: Any, ws: Any) -> None:
     """Every query the agent makes is kept for the log (LM-3 needs at least four)."""
     for mode, query in [("semantic", "a"), ("abstract", "b"), ("citations", "c"), ("semantic", "d")]:
         search_literature(ws, query, mode, 5)
-    assert len({q["query"] for q in ws.queries}) == 4
+    assert len(set(ws.queries)) == 4
 
 
 def test_unknown_mode_and_empty_query_are_tool_errors(valency: Any, ws: Any) -> None:
@@ -159,36 +157,55 @@ def test_lm14_note_evidence_drops_invented_value(valency: Any, ws: Any) -> None:
     assert ws.insights[0].value is None
 
 
-def test_check_novelty_hits_and_none(valency: Any) -> None:
-    """A composition named in a result is a hit; one never named has none."""
-    known = check_novelty("SrTi0.875Sn0.125O3")
-    assert known["hits"] == 1
-    assert known["paper_ids"] == ["2101.00001v2"]
-    novel = check_novelty("BaHfS3")
+def test_check_novelty_hits_and_none(valency: Any, ws: Any) -> None:
+    """A composition or the same substitution in words is a hit; one never named has none."""
+    known = check_novelty(ws, "SrTi0.875Sn0.125O3")
+    assert known["paper_ids"] == ["2101.00001v2", "1905.11111v1"]
+    assert known["hits"] == 2
+    novel = check_novelty(ws, "BaHfS3")
     assert novel == {"composition": "BaHfS3", "hits": 0, "paper_ids": []}
 
 
-def test_check_novelty_rejects_non_formula(valency: Any) -> None:
+def test_check_novelty_rejects_non_formula(valency: Any, ws: Any) -> None:
     """An unparseable composition is a tool error."""
     with pytest.raises(ToolError, match="cannot parse"):
-        check_novelty("perovskite")
+        check_novelty(ws, "perovskite")
 
 
-def test_schemas_match_handlers() -> None:
-    """Every schema has a handler, a closed input object and only declared required fields."""
-    assert {tool["name"] for tool in LITERATURE_TOOLS} == set(HANDLERS)
-    for tool in LITERATURE_TOOLS:
-        schema = tool["input_schema"]
-        assert schema["additionalProperties"] is False
-        assert set(schema["required"]) <= set(schema["properties"])
+def test_handlers_registered_with_registry_schemas() -> None:
+    """Every literature tool is registered under its ``registry.TOOLS`` name, with matching arguments."""
+    import inspect
+
+    from hephaestus.tools import registry
+
+    handlers = registry.load_default_handlers()
+    for tool in registry.TOOLS:
+        if tool["name"] not in agent_literature_tools():
+            continue
+        fn = handlers[tool["name"]]
+        assert fn.__module__ == "hephaestus.tools.literature"
+        params = set(inspect.signature(fn).parameters) - {"ws"}
+        assert set(tool["input_schema"]["properties"]) == params
+
+
+def agent_literature_tools() -> set[str]:
+    """Return the harness's literature tool names.
+
+    Returns
+    -------
+    set of str
+        Tool names.
+    """
+    from hephaestus.harness.agent import LITERATURE_TOOLS
+
+    return LITERATURE_TOOLS
 
 
 def test_workspaces_do_not_share_state(valency: Any, ws: Any) -> None:
     """Handlers keep no state of their own: a second workspace sees none of the first's papers."""
-    other = type(ws)()
+    other = ws.model_copy(deep=True)
     search_literature(ws, "SrTiO3", "semantic", 5)
     assert other.papers == {}
-    assert literature.HANDLERS["search_literature"] is search_literature
 
 
 def test_citing_paper_abstract_fetched_on_get_paper(valency: Any, ws: Any) -> None:
@@ -202,3 +219,114 @@ def test_citing_paper_abstract_fetched_on_get_paper(valency: Any, ws: Any) -> No
     result = get_paper(ws, "2310.33333v1")
     assert result["abstract"].startswith("SrTiO3 nanocubes")
     assert ws.papers["2310.33333v1"].found_via == "citing"
+
+
+def test_or6_workspace_with_literature_round_trips(valency: Any, ws: Any) -> None:
+    """Queries, papers, insights and the trend survive a snapshot and resume (OR-6)."""
+    from hephaestus.tools.registry import Workspace
+
+    search_literature(ws, "SrTiO3", "semantic", 5)
+    related_papers(ws, "2101.00001v2", "similar", 5)
+    publication_trend(ws, "SrTiO3 photocatalyst")
+    note_evidence(ws, "2101.00001v2", "band_gap", "positive", "s", composition="SrTiO3")
+    restored = Workspace.model_validate_json(ws.model_dump_json())
+    assert restored.queries == ws.queries
+    assert all(isinstance(q, str) for q in restored.queries)
+    assert set(restored.papers) == set(ws.papers)
+    assert restored.insights == ws.insights
+
+
+def test_sc11_harness_novelty_fn_calls_check_novelty(valency: Any, ws: Any) -> None:
+    """The harness's default novelty function calls ``check_novelty(ws, composition, property)``."""
+    from hephaestus.harness.agent import default_novelty_fn
+
+    fn = default_novelty_fn()
+    assert fn is not None
+    assert fn(ws, "SrTi0.875Sn0.125O3")["hits"] == 2
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Sn-doped SrTiO3 films show a narrower gap.",
+        "We grew Sr(Ti,Sn)O3 thin films.",
+        "SrTi1-xSnxO3 solid solutions were prepared for x up to 0.2.",
+        "Sn substitution in SrTiO3-based ceramics.",
+    ],
+)
+def test_sc11_novelty_counts_substitution_notation(make_paper: Any, text: str) -> None:
+    """A report of the same substitution counts as prior work, whatever the notation."""
+    assert literature.mentions_composition(make_paper(abstract=text), "SrTi0.875Sn0.125O3")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Undoped SrTiO3 has a 3.2 eV gap.",
+        "Fe-doped SrTiO3 is a mixed conductor.",
+        "Sr(Ti,Fe)O3 cathodes.",
+        "SrSnO3 is a wide-gap stannate.",
+    ],
+)
+def test_sc11_novelty_ignores_other_substitutions(make_paper: Any, text: str) -> None:
+    """The parent alone, another dopant or the end member is not a prior report."""
+    assert not literature.mentions_composition(make_paper(abstract=text), "SrTi0.875Sn0.125O3")
+
+
+def test_sc11_novelty_matches_digit_free_formula(make_paper: Any) -> None:
+    """Formulae without digits, such as GaN, can be hits; sentence words cannot."""
+    assert literature.mentions_composition(make_paper(abstract="Epitaxial GaN on sapphire."), "GaN")
+    assert not literature.mentions_composition(make_paper(abstract="In this work, no Co."), "InCo")
+
+
+def test_or7_parallel_searches_share_workspace_safely(valency: Any, ws: Any) -> None:
+    """Literature calls run in parallel; concurrent stores neither crash nor duplicate papers."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda i: search_literature(ws, f"q{i}", "semantic", 5), range(32)))
+    assert len(ws.queries) == 32
+    assert set(ws.papers) == {"2101.00001v2", "2203.04567v1"}
+
+
+def test_backend_created_once_under_parallel_calls(monkeypatch: Any) -> None:
+    """Parallel first calls build a single Valency client, so only one OAuth session opens."""
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    made = []
+    barrier = threading.Barrier(8)
+
+    class Slow:
+        """Backend whose construction is slow enough to expose a race."""
+
+        def __init__(self) -> None:
+            """Record the construction."""
+            time.sleep(0.05)
+            made.append(self)
+
+    literature.reset()
+    monkeypatch.setattr(literature, "McpValency", Slow)
+
+    def first_call(_: int) -> object:
+        """Get the backend once all threads are ready.
+
+        Parameters
+        ----------
+        _ : int
+            Unused.
+
+        Returns
+        -------
+        object
+            The backend.
+        """
+        barrier.wait()
+        return literature.get_backend()
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        backends = set(map(id, pool.map(first_call, range(8))))
+    literature.reset()
+    assert len(made) == 1
+    assert len(backends) == 1
