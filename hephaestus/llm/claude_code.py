@@ -270,6 +270,7 @@ class ClaudeCodeLLM:
         result: Any = None
         async for msg in client.receive_response():
             if isinstance(msg, ResultMessage):
+                self.last_usage = {k: int(v) for k, v in (msg.usage or {}).items() if isinstance(v, int)}
                 if msg.is_error:
                     raise LLMError(f"Claude Code error: {msg.result or msg.subtype}")
                 result = msg.structured_output if msg.structured_output is not None else msg.result

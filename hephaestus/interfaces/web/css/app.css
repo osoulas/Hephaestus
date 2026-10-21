@@ -3173,3 +3173,23 @@ details.issues[open] > summary {
   color: var(--ink);
   outline: none;
 }
+
+.tokens {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+  font-size: 12.5px;
+  cursor: default;
+}
+.tokens-values {
+  display: inline-flex;
+  gap: 12px;
+  color: var(--ink-3);
+}
+.tokens-values strong {
+  color: var(--ink);
+  font-weight: 650;
+}

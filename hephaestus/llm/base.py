@@ -229,6 +229,7 @@ class LoggedLLM:
         self.model = inner.model
         self.log_path = log_path
         self.usage: dict[str, int] = {}
+        self.structured_usage: dict[str, int] = {}  # parser, reviewer, brief: not orchestrator turns
         self.section = "orchestrator"
         self.iteration: int | None = None
 
@@ -265,6 +266,8 @@ class LoggedLLM:
         """
         for k, v in usage.items():
             self.usage[k] = self.usage.get(k, 0) + int(v or 0)
+            if section != "orchestrator":
+                self.structured_usage[k] = self.structured_usage.get(k, 0) + int(v or 0)
         append_jsonl(
             self.log_path,
             {
@@ -321,10 +324,13 @@ class LoggedLLM:
             The parsed answer.
         """
         t0 = time.monotonic()
+        self.inner.last_usage = {}  # type: ignore[attr-defined]
         try:
             out = self.inner.structured(section, system, prompt, schema)
         except Exception as exc:
-            self._log(section, prompt, {"error": str(exc)}, {}, t0)
+            self._log(
+                section, prompt, {"error": str(exc)}, dict(getattr(self.inner, "last_usage", {}) or {}), t0
+            )
             raise
-        self._log(section, prompt, out, {}, t0)
+        self._log(section, prompt, out, dict(getattr(self.inner, "last_usage", {}) or {}), t0)
         return out

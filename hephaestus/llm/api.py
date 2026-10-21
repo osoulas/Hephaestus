@@ -140,6 +140,7 @@ class AnthropicAPI:
         kw = self._common(section)
         kw["output_config"] = {**kw["output_config"], "format": {"type": "json_schema", "schema": schema}}
         msg = self._send(system=system, messages=[{"role": "user", "content": prompt}], **kw)
+        self.last_usage = usage_of(msg)
         if msg.stop_reason == "refusal":
             raise LLMError(f"Model declined the {section} request.")
         text = next((b.text for b in msg.content if b.type == "text"), "")
@@ -171,9 +172,25 @@ def to_turn(msg: Any) -> Turn:
             turn.thinking.append(getattr(block, "thinking", "") or "")
         elif block.type == "tool_use":
             turn.tool_calls.append(ToolCall(id=block.id, name=block.name, input=dict(block.input or {})))
-    u = msg.usage
-    turn.usage = {
+    turn.usage = usage_of(msg)
+    return turn
+
+
+def usage_of(msg: Any) -> dict[str, int]:
+    """Token counts of one API response.
+
+    Parameters
+    ----------
+    msg : anthropic.types.Message
+        Response.
+
+    Returns
+    -------
+    dict
+        Input, output, cache-read and cache-creation tokens.
+    """
+    u = getattr(msg, "usage", None)
+    return {
         k: int(getattr(u, k, 0) or 0)
         for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
     }
-    return turn
