@@ -1,0 +1,17 @@
+{
+  "paper_id": "2401.44444v1",
+  "query_type": "paper_by_id",
+  "found": true,
+  "warnings": [],
+  "paper": {
+    "id": "2401.44444v1",
+    "title": "Hydrothermal synthesis of SrTiO3 nanocubes",
+    "abstract": "SrTiO3 nanocubes were grown hydrothermally at 180 °C for 24 h.",
+    "authors": ["Gil Moore"],
+    "doi": "10.1000/syn.2024.3",
+    "url": "https://arxiv.org/abs/2401.44444v1",
+    "source": "arxiv",
+    "citation_count": 8,
+    "dates": {"first_available": {"value": "2024-01-15", "precision": "day", "basis": "preprint_posted"}}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "papers": [
+    {
+      "id": "1905.11111v1",
+      "title": "Solubility limit of Sn in SrTiO3",
+      "abstract": "Attempts to exceed 15 % Sn substitution failed: a SnO2 secondary phase formed above 1200 °C.",
+      "authors": ["Dmitri Ivanov"],
+      "doi": "10.1000/neg.2019.7",
+      "url": "https://arxiv.org/abs/1905.11111v1",
+      "source": "arxiv",
+      "citation_count": 4,
+      "dates": {"first_available": "2019-05-20"}
+    }
+  ]
+}
