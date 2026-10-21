@@ -270,10 +270,7 @@ pre,
   font: 600 11px/1.35 var(--mono);
   color: var(--gold-ink);
 }
-.brand-motto {
-  font: 10.5px/1.4 var(--mono);
-  color: var(--ink-3);
-}
+
 
 .sidebar-actions {
   padding: 4px 14px 12px;
@@ -1132,12 +1129,12 @@ button.link {
 .tab-body {
   max-width: 1240px;
   margin: 0 auto;
-  padding: 24px 32px 64px;
+  padding: 28px 32px 72px;
 }
 
 .grid {
   display: grid;
-  gap: 16px;
+  gap: 20px;
   align-content: start;
 }
 .grid.cols-2 {
@@ -1720,7 +1717,7 @@ table.data tr.best td:first-child {
 /* ------------------------------------------------------------------ candidates */
 
 .round-block + .round-block {
-  margin-top: 26px;
+  margin-top: 32px;
 }
 .round-head {
   display: flex;
@@ -2391,4 +2388,156 @@ button.round-head[aria-expanded="false"] .round-chevron {
 }
 .round-content[hidden] {
   display: none;
+}
+
+/* ------------------------------------------------------------------ polish */
+
+.clamp {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  min-width: 0;
+}
+.clamp-text {
+  min-width: 0;
+}
+.clamp-text.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: var(--lines, 3);
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-toggle,
+.abstract-toggle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+  text-decoration: underline;
+  text-decoration-color: var(--hairline-strong);
+  text-underline-offset: 3px;
+}
+.clamp-toggle:hover,
+.abstract-toggle:hover {
+  color: var(--ink);
+}
+
+.hero-foot {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.menu {
+  position: relative;
+}
+.menu > summary {
+  list-style: none;
+}
+.menu > summary::-webkit-details-marker {
+  display: none;
+}
+.menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 10;
+  display: grid;
+  min-width: 150px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-md);
+}
+.menu-list button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+.menu-list button:hover {
+  background: var(--surface-2);
+}
+
+.log-time {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.log-entry:hover .log-time,
+.log-entry:focus-within .log-time {
+  opacity: 1;
+}
+.log-entry:not(.open) .log-result {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.review {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr);
+  gap: 32px;
+}
+.review-scores,
+.review-words {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+.score-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 28px;
+}
+.score-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.score-name {
+  font-weight: 600;
+}
+.score-sub {
+  font-size: 12px;
+}
+.check-list {
+  display: grid;
+  gap: 6px;
+}
+.breakdown-row {
+  grid-template-columns: 120px minmax(0, 1fr) 40px;
+}
+.review-words .field-label {
+  margin-bottom: 6px;
+}
+@media (max-width: 900px) {
+  .review {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+details.issues > summary {
+  list-style: none;
+  cursor: pointer;
+  padding-bottom: 14px;
+}
+details.issues > summary::-webkit-details-marker {
+  display: none;
+}
+details.issues .card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+details.issues .round-chevron {
+  transform: none;
+}
+details.issues[open] .round-chevron {
+  transform: rotate(90deg);
+}
+details.issues[open] > summary {
+  padding-bottom: 0;
 }
