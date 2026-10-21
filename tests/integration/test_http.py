@@ -150,6 +150,7 @@ def test_ui1_web_ui_is_served_offline(client: TestClient) -> None:
     assert index.status_code == 200 and "<title>Hephaestus</title>" in index.text
     app_js = client.get("/js/app.js")
     assert app_js.status_code == 200 and "javascript" in app_js.headers["content-type"]
+    assert app_js.headers["cache-control"] == "no-cache"  # no stale module beside a new one
     for path in ["/css/app.css", "/js/run.js", "/js/viewer.js", "/favicon.svg"]:
         assert client.get(path).status_code == 200, path
     web = Path(http.WEB_DIR)
