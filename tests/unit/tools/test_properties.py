@@ -144,3 +144,103 @@ def test_pp5_widen_factor() -> None:
     assert S.widen_factor(["Sr", "Ti", "O"], True) == 1.0
     assert S.widen_factor(["Sr", "Ta", "O", "N"], True) == 1.5
     assert S.widen_factor(["Xe", "F"], False) == 2.0
+
+
+class FakeMEGNet:
+    """Band-gap model stand-in: the gap depends on the fidelity index; counts calls."""
+
+    def __init__(self, gaps: dict[int, float]) -> None:
+        """Set the gap per fidelity index.
+
+        Parameters
+        ----------
+        gaps : dict
+            Fidelity index to gap, eV.
+        """
+        self.gaps = gaps
+        self.calls = 0
+
+    def predict_structure(self, structure: object, state_attr: object) -> float:
+        """Return the gap for the requested fidelity.
+
+        Parameters
+        ----------
+        structure : Structure
+            Ignored.
+        state_attr : torch.Tensor
+            One-element fidelity index.
+
+        Returns
+        -------
+        float
+            Gap, eV.
+        """
+        self.calls += 1
+        return self.gaps[int(state_attr[0])]  # type: ignore[index]
+
+
+@pytest.fixture
+def fake_megnet(monkeypatch: pytest.MonkeyPatch) -> FakeMEGNet:
+    """Replace MEGNet with a fake: PBE 1.8 eV, HSE 3.5 eV.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Patches the factory.
+
+    Returns
+    -------
+    FakeMEGNet
+        The fake.
+    """
+    pytest.importorskip("torch")
+    fake = FakeMEGNet({0: 1.8, 2: 3.5})
+    monkeypatch.setattr(S, "BANDGAP_FACTORY", lambda: fake)
+    monkeypatch.setattr(S, "_BANDGAP", {})
+    return fake
+
+
+def test_pp1_band_gap_uses_chosen_fidelity_and_caches(fake_megnet: FakeMEGNet) -> None:
+    """HSE and PBE map to their state attributes; a repeat call is served from the cache."""
+    s = S.to_pmg(bulk("Cu", "fcc", a=3.6))
+    assert S.band_gap(s, "hse") == 3.5 and S.band_gap(s, "pbe") == 1.8
+    S.band_gap(s, "hse")
+    assert fake_megnet.calls == 2
+    with pytest.raises(S.ToolError, match="fidelity"):
+        S.band_gap(s, "lda")
+
+
+def test_band_gap_is_floored_at_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A small negative prediction (a metal) is reported as 0 eV."""
+    pytest.importorskip("torch")
+    monkeypatch.setattr(S, "BANDGAP_FACTORY", lambda: FakeMEGNet({2: -0.2}))
+    monkeypatch.setattr(S, "_BANDGAP", {})
+    assert S.band_gap(S.to_pmg(bulk("Cu", "fcc", a=3.6)), "hse") == 0.0
+
+
+def test_pp4_band_gap_tool_reports_error_bar_and_target(
+    monkeypatch: pytest.MonkeyPatch, fake_megnet: FakeMEGNet
+) -> None:
+    """predict_property(band_gap) gives ±0.65 eV at HSE, the target, and stores the prediction."""
+    monkeypatch.setattr(S, "FACTORIES", {name: (lambda d, t: EMT()) for name in S.FACTORIES})
+    monkeypatch.setattr(S, "_LOADED", {})
+    ws = workspace()
+    cand = Candidate(
+        candidate_id="c1-1", iteration=1, composition="Cu", structure_type="perovskite_cubic", rationale="r"
+    )
+    rec = StructureRecord(
+        candidate_id="c1-1",
+        cif="",
+        source="mp:mp-30",
+        n_atoms=1,
+        pmg_dict=S.to_pmg(bulk("Cu", "fcc", a=3.6)).as_dict(),
+    )
+    ws.candidates["c1-1"] = CandidateState(candidate=cand, round=1, record=rec)
+    execute(ws, "relax", {"candidate_id": "c1-1", "potential": "mace-mp-0-small", "fmax": 0.02})
+    r, err = execute(ws, "predict_property", {"candidate_id": "c1-1", "property": "band_gap"})
+    assert not err and r["value"] == 3.5 and r["uncertainty"] == 0.65 and r["units"] == "eV"
+    assert r["model"].startswith("MEGNet-BandGap-mfi") and r["target"]["direction"] == "minimise"
+    assert ws.candidates["c1-1"].predictions["band_gap"].value.uncertainty == 0.65
+    ws.cfg.band_gap_fidelity = "pbe"
+    r, _ = execute(ws, "predict_property", {"candidate_id": "c1-1", "property": "band_gap"})
+    assert r["value"] == 1.8 and r["uncertainty"] == 0.57
