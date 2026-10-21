@@ -100,7 +100,7 @@ def test_ui2_ui3_ui8_parse_run_stream_and_brief(client: TestClient) -> None:
     brief = client.get(f"/runs/{run_id}/brief")
     assert brief.status_code == 200 and "## Scope and assumptions" in brief.text
     assert client.get(f"/runs/{run_id}/brief", params={"format": "pdf"}).status_code == 404
-    assert client.get(f"/runs/{run_id}/structure/c2-1").text.startswith("data_")
+    assert client.get(f"/runs/{run_id}/structure/c2-1").status_code == 404  # stub tools store no atoms
     assert client.get(f"/runs/{run_id}/structure/zz").status_code == 404
     assert [r["run_id"] for r in client.get("/runs").json()] == [run_id]
     assert client.post(f"/runs/{run_id}/resume").status_code == 409
@@ -142,3 +142,18 @@ def test_ui12_status_endpoints(client: TestClient) -> None:
     assert client.get("/runs/nope").status_code == 404
     assert client.post("/runs", json={}).status_code == 422
     assert client.get("/").status_code == 200
+
+
+def test_ui1_web_ui_is_served_offline(client: TestClient) -> None:
+    """The static UI loads from the package with no external assets (UI-9: works with Wi-Fi off)."""
+    index = client.get("/")
+    assert index.status_code == 200 and "<title>Hephaestus</title>" in index.text
+    app_js = client.get("/js/app.js")
+    assert app_js.status_code == 200 and "javascript" in app_js.headers["content-type"]
+    for path in ["/css/app.css", "/js/run.js", "/js/viewer.js", "/favicon.svg"]:
+        assert client.get(path).status_code == 200, path
+    web = Path(http.WEB_DIR)
+    for f in web.rglob("*"):
+        if f.suffix in {".html", ".js", ".css"}:
+            text = f.read_text(encoding="utf-8")
+            assert "https://cdn" not in text and "fonts.googleapis" not in text, f

@@ -1,5 +1,6 @@
 """Python API: ``Experiment`` run, parse, background start, events, resume, replay and tool steps."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -71,8 +72,7 @@ def test_or1_experiment_runs_goal_to_brief(tmp_path: Path) -> None:
     loaded = Experiment.load("p1", tmp_path)
     assert loaded.state.status == "finished" and loaded.spec is not None
     assert loaded.brief and "## Recommended composition and structure" in loaded.brief
-    cif = loaded.structure("c2-1")
-    assert cif is not None and cif.startswith("data_")
+    assert loaded.structure("c2-1") is None  # stub tools store no atoms
     assert [r["run_id"] for r in list_runs(tmp_path)] == ["p1"]
     with pytest.raises(ExperimentError):
         loaded.resume()
@@ -168,6 +168,25 @@ def test_or1_tool_steps_need_a_ready_spec(tmp_path: Path) -> None:
     exp = Experiment(scripts.GOAL, root=tmp_path, deps=deps(structured={"goal_parser": [asked]}))
     with pytest.raises(ExperimentError, match="Which reference material"):
         exp.tool("candidate_status")
+
+
+def test_ui7_structure_falls_back_to_the_stored_state(tmp_path: Path) -> None:
+    """A run stored without ``workspace.json`` still serves the relaxed structure as CIF."""
+    from pymatgen.core import Lattice, Structure
+
+    exp = Experiment(scripts.GOAL, root=tmp_path, deps=deps(), run_id="p5")
+    exp.run()
+    (tmp_path / "p5" / "workspace.json").unlink()
+    sto = Structure(
+        Lattice.cubic(3.9),
+        ["Sr", "Ti", "O", "O", "O"],
+        [[0, 0, 0], [0.5, 0.5, 0.5], [0.5, 0.5, 0], [0.5, 0, 0.5], [0, 0.5, 0.5]],
+    )
+    state = json.loads((tmp_path / "p5" / "state.json").read_text(encoding="utf-8"))
+    state["iterations"][1]["sims"][0]["relaxed"]["pmg_dict"] = sto.as_dict()
+    (tmp_path / "p5" / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    cif = Experiment.load("p5", tmp_path).structure("c2-1")
+    assert cif is not None and "_atom_site_fract_x" in cif and "Sr" in cif
 
 
 def test_or4_options_override_config() -> None:
