@@ -42,6 +42,7 @@ SUBCOMMANDS = {
     "runs": "List stored runs.",
     "show": "Show a run's spec, rounds, candidates and summary.",
     "brief": "Print a run's experimental brief.",
+    "literature": "Show the papers, evidence and failed approaches a run found.",
     "backends": "Show LLM backend readiness.",
     "login": "Sign in to Claude (subscription via Claude Code, or an Anthropic API key); save a Materials Project key.",
     "signin": "Sign in to Valency.",
@@ -133,6 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "brief":
             p.add_argument("--pdf", action="store_true", help="print the PDF's path instead")
         p.add_argument("--root", type=Path, default=argparse.SUPPRESS, metavar="DIR")
+    p = sub.add_parser("literature", help=SUBCOMMANDS["literature"], description=SUBCOMMANDS["literature"])
+    p.add_argument("run_id", help="run ID, or a path to a run folder")
+    p.add_argument("--filter", default=None, metavar="TEXT", help="only papers mentioning TEXT")
+    p.add_argument("--limit", type=int, default=15, metavar="N", help="most papers to list (default 15)")
+    p.add_argument("--all", action="store_true", help="every paper, with whole abstracts")
+    p.add_argument("--root", type=Path, default=argparse.SUPPRESS, metavar="DIR")
     for name in ("backends", "signin"):
         sub.add_parser(name, help=SUBCOMMANDS[name], description=SUBCOMMANDS[name])
     p = sub.add_parser("login", help=SUBCOMMANDS["login"], description=SUBCOMMANDS["login"])
@@ -348,6 +355,15 @@ def _dispatch(
         return actions.show_view(out, args.run_id, folder)
     if cmd == "brief":
         return actions.brief_view(out, args.run_id, folder, pdf=args.pdf)
+    if cmd == "literature":
+        return actions.literature_cmd(
+            out,
+            args.run_id,
+            folder,
+            text_filter=args.filter,
+            limit=None if args.all else args.limit,
+            full=args.all,
+        )
     if cmd == "backends":
         return actions.backends_view(out)
     if cmd == "login":

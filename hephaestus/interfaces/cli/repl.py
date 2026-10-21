@@ -25,6 +25,7 @@ from hephaestus.interfaces.cli.stream import (
     EXIT_OK,
     DepsSource,
     Prompts,
+    describe_blocker,
     make_deps,
     replay_run,
     resume_run,
@@ -285,6 +286,16 @@ class Session:
             "device",
             dev["device"] + ("" if dev["torch"] else " [muted](no torch: simulation tools unavailable)[/]"),
         )
+        if not self.scripted:
+            found = actions.blockers()
+            grid.add_row(
+                "simulation",
+                f"{mark(True)} runs can start"
+                if not found
+                else f"{mark(False)} "
+                + " ".join(describe_blocker(b) for b in found)
+                + " [muted]· /backends[/]",
+            )
         grid.add_row("runs", str(self.root or runs_root()))
         width = self.console.width
         self.console.print()
@@ -601,6 +612,28 @@ def _brief(s: Session, args: list[str]) -> bool:
     return True
 
 
+def _literature(s: Session, args: list[str]) -> bool:
+    """``/literature [id] [filter]``: the papers, evidence and failed approaches of a run (UI-4).
+
+    Parameters
+    ----------
+    s : Session
+        Session.
+    args : list of str
+        Run ID (the newest run by default), then optional filter words.
+
+    Returns
+    -------
+    bool
+        True.
+    """
+    rid = _need_id(s, args[:1], "/literature <run id> [filter]")
+    if rid:
+        text_filter = " ".join(args[1:]) or None
+        actions.literature_cmd(s.console, rid, s.root, text_filter=text_filter, full=s.verbose)
+    return True
+
+
 def _resume(s: Session, args: list[str]) -> bool:
     """``/resume <id>``: resume an interrupted run (UI-16).
 
@@ -761,6 +794,13 @@ _ALL = [
     Command("runs", "", "List stored runs", _runs),
     Command("show", "[id]", "A run's spec, rounds, candidates and summary", _show, _run_ids),
     Command("brief", "[id]", "Print a run's experimental brief", _brief, _run_ids),
+    Command(
+        "literature",
+        "[id] [filter]",
+        "Papers, evidence and failed approaches of a run",
+        _literature,
+        _run_ids,
+    ),
     Command("resume", "<id>", "Resume an interrupted run", _resume, _run_ids),
     Command("replay", "<id> [speed]", "Replay a stored run, offline", _replay, _run_ids),
     Command("backends", "", "Readiness of each model-access option", lambda s, a: _backend(s, [])),

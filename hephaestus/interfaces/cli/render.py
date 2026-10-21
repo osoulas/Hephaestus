@@ -19,6 +19,7 @@ from typing import Any
 
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
@@ -83,6 +84,16 @@ VERBS: dict[str, str] = {
     "submit_final": "Submitting",
 }
 
+# Names of the final re-check's steps (``final_step`` events), as the web UI shows them.
+FINAL_STEP_NAMES: dict[str, str] = {
+    "relax": "Re-relax",
+    "phonons": "Full phonons",
+    "energy_above_hull": "Hull",
+    "predict_property": "Target property",
+    "build_structure": "Build structure",
+    "run_md": "MD",
+}
+
 CANDIDATE_FIELDS = (
     "composition",
     "cand_round",
@@ -145,7 +156,12 @@ class Renderer:
     first_time: datetime | None = None
     last_time: datetime | None = None
     _local_start: float | None = None
+    live: bool = False  # True while watching a running run: open time spans run up to the clock
+    replaying: bool = False  # Ctrl+C ends a replay rather than stopping a campaign
+    campaign_span: list[datetime | None] = field(default_factory=lambda: [None, None])
+    final_span: list[datetime | None] = field(default_factory=lambda: [None, None])
     in_campaign: bool = False  # draw the timeline gutter from the campaign's start to the run's end
+    final_steps: dict[str, _Call] = field(default_factory=dict)  # open final re-check steps, by tool
     _pending: list[RenderableType] = field(default_factory=list)  # round line held until its review prints
 
     # ------------------------------------------------------------------ dispatch
@@ -168,6 +184,7 @@ class Renderer:
         self.run_id = self.run_id or event.run_id
         self.first_time = self.first_time or event.time
         self.last_time = event.time
+        self._track_spans(event)
         handler = getattr(self, f"_on_{event.section}", None)
         if handler is None:
             return [self._line(GLYPH["dot"], f"[muted]{event.section} {event.status}[/]", "muted")]
@@ -177,6 +194,112 @@ class Renderer:
         if event.section == "run" and event.status != "started":
             self.in_campaign = False
         return out
+
+    def _track_spans(self, e: ProgressEvent) -> None:
+        """Keep the campaign and final re-check time spans from event timestamps, as the web UI does.
+
+        The campaign runs from the first orchestrator start to the submission (else the final
+        re-check's start, else the run's end); a resume reopens it. The re-check runs from its
+        start to its end, or the run's end.
+
+        Parameters
+        ----------
+        e : ProgressEvent
+            The event being fed.
+        """
+        c, f = self.campaign_span, self.final_span
+        if e.section == "orchestrator" and e.status == "started":
+            c[0] = c[0] or e.time
+            c[1] = None
+        elif e.section == "orchestrator" and "submitted" in e.payload:
+            c[1] = c[1] or e.time
+        elif e.section == "final_calculation":
+            if e.status == "started":
+                c[1] = c[1] or (e.time if c[0] else None)
+                f[0], f[1] = e.time, None
+            else:
+                f[1] = e.time
+        elif e.section == "run" and e.status != "started":
+            if c[0] and not c[1]:
+                c[1] = e.time
+            if f[0] and not f[1]:
+                f[1] = e.time
+
+    def _span_s(self, span: list[datetime | None]) -> float | None:
+        """Seconds in a time span; an open one runs to now (live) or to the last event (replays).
+
+        Parameters
+        ----------
+        span : list
+            ``[start, end]`` timestamps.
+
+        Returns
+        -------
+        float or None
+            Duration, or ``None`` before the span starts.
+        """
+        start, end = span
+        if start is None:
+            return None
+        if end is None:
+            from hephaestus.core.types import utcnow
+
+            end = utcnow() if self.live else (self.last_time or start)
+        return max((end - start).total_seconds(), 0.0)
+
+    def budget_text(self) -> Text:
+        """Campaign and final re-check time against their budgets (OR-9, FC-9); display only.
+
+        The harness enforces the budgets; this only colours the time amber above 80 % and red
+        at 100 %.
+
+        Returns
+        -------
+        rich.text.Text
+            E.g. ``"campaign 4m 12s / 15m · re-check - / 10m"`` (a dash before it starts).
+        """
+        text = Text()
+        parts = [("campaign", self.campaign_span, self.config.get("time_budget_s"))]
+        if self.config.get("run_final", True):
+            parts.append(("re-check", self.final_span, self.config.get("final_time_budget_s")))
+        for i, (label, span, budget) in enumerate(parts):
+            if i:
+                text.append(f"  {GLYPH['sep']} ", style="gutter")
+            used = self._span_s(span)
+            style = "muted"
+            if used is not None and budget:
+                frac = used / float(budget)
+                style = "bad" if frac >= 1 else ("warn" if frac > 0.8 else "muted")
+            text.append(f"{label} ", style="faint")
+            text.append(elapsed(used) if used is not None else DASH, style=style)
+            if budget:
+                text.append(f" / {elapsed(float(budget))}", style="faint")
+        return text
+
+    def candidate_facts(self, cid: str) -> str:
+        """One-line facts for a candidate: composition, target value ± uncertainty, hull and phonon verdicts.
+
+        Parameters
+        ----------
+        cid : str
+            Candidate ID.
+
+        Returns
+        -------
+        str
+            Markup; the ticks and crosses are the harness's verdicts.
+        """
+        c = self.candidates.get(cid, {})
+        facts = [str(c.get("composition") or "")]
+        if c.get("value") is not None:
+            prop = str((self.spec or {}).get("target_property", "value")).replace("_", " ")
+            units = (self.spec or {}).get("target_units", "")
+            facts.append(f"{prop} {fmt_quantity(c.get('value'), c.get('uncertainty'), units)}")
+        if c.get("e_hull") is not None:
+            facts.append(f"E_hull {fmt_num(c.get('e_hull'), 3)} eV/atom {mark(c.get('thermo_stable'))}")
+        if c.get("verdict"):
+            facts.append(f"phonons {c.get('verdict')} {mark(c.get('dyn_stable'))}")
+        return " · ".join(f for f in facts if f)
 
     def _on_run(self, e: ProgressEvent) -> list[RenderableType]:
         """Run header, or the run's end.
@@ -389,6 +512,37 @@ class Renderer:
         self.validation = p
         return [validation_panel(p)]
 
+    def _on_final_step(self, e: ProgressEvent) -> list[RenderableType]:
+        """One line per finished step of the final re-check (Section 9, FC-9).
+
+        Steps are paired with their start by tool, as only one of each runs at a time.
+
+        Parameters
+        ----------
+        e : ProgressEvent
+            A ``final_step`` event: ``{tool, candidate_id, potential, mode}``, plus ``wall_s`` when done.
+
+        Returns
+        -------
+        list of RenderableType
+            Output; nothing for ``started``.
+        """
+        p = e.payload
+        tool = str(p.get("tool"))
+        cid = p.get("candidate_id")
+        if e.status == "started":
+            self.final_steps[tool] = _Call(tool, p, e.time, self.clock(), cid)
+            return []
+        start = self.final_steps.pop(tool, None)
+        took = p.get("wall_s")
+        if took is None and start is not None:
+            took = (e.time - start.started).total_seconds()
+        failed = e.status == "failed"
+        line = final_step_line(p, took)
+        if failed:
+            return [line, result_line(f"[bad]failed[/] {_escape(str(p.get('error') or ''))}".rstrip())]
+        return [line]
+
     def _on_brief_generator(self, e: ProgressEvent) -> list[RenderableType]:
         """Brief progress.
 
@@ -463,6 +617,10 @@ class Renderer:
             f"reviewer {reviewer} · threshold {self.config.get('confidence_threshold', 72)} · {outcome}{trend}"
         )
         rows: list[RenderableType] = [self._line(GLYPH["mark"], body, "ember")]
+        if p.get("best"):
+            rows.append(
+                result_line(f"best so far [accent]{p['best']}[/] {self.candidate_facts(str(p['best']))}")
+            )
         if p.get("gate_note"):
             rows.append(result_line(f"[warn]{_escape(str(p['gate_note']))}[/]"))
         out: list[RenderableType] = [Group(*rows)]
@@ -514,6 +672,9 @@ class Renderer:
             verb = "Stopping: submitting the best candidate"
         elif self.calls:
             verb = _verb(next(reversed(self.calls.values())))
+        elif self.final_steps:
+            step = next(reversed(self.final_steps.values()))
+            verb = f"Re-checking: {final_step_label(step.input)}"
         else:
             verb = self.phase
         max_rounds = self.config.get("max_iterations")
@@ -523,13 +684,17 @@ class Renderer:
             bits.append(f"round {min(self.round, int(max_rounds))}/{max_rounds}")
         if max_calls:
             bits.append(f"{self.tool_calls}/{max_calls} tools")
-        bits.append("^C again to detach" if self.stopping else "^C stop")
+        bits.append(
+            "^C ends the replay" if self.replaying else ("^C again to detach" if self.stopping else "^C stop")
+        )
         line = ember_frame(now)
         line.append(f" {verb}", style="accent")
         for bit in bits:
             line.append(f"  {GLYPH['sep']} ", style="gutter")
             line.append(bit, style="muted")
         rows: list[RenderableType] = [line]
+        if self.campaign_span[0] is not None:
+            rows.append(Text.assemble("   ", self.budget_text()))
         for call in list(self.calls.values())[-4:]:
             target = f" {call.candidate_id}" if call.candidate_id else ""
             rows.append(
@@ -623,17 +788,7 @@ class Renderer:
         grid.add_column()
         grid.add_row("status", f"[{colour}]{status}[/]" + (f" · {stop}" if stop else ""))
         if best:
-            c = self.candidates.get(best, {})
-            facts = [str(c.get("composition") or "")]
-            if c.get("value") is not None:
-                prop = str((self.spec or {}).get("target_property", "value")).replace("_", " ")
-                units = (self.spec or {}).get("target_units", "")
-                facts.append(f"{prop} {fmt_quantity(c.get('value'), c.get('uncertainty'), units)}")
-            if c.get("e_hull") is not None:
-                facts.append(f"E_hull {fmt_num(c.get('e_hull'), 3)} eV/atom {mark(c.get('thermo_stable'))}")
-            if c.get("verdict"):
-                facts.append(f"phonons {c.get('verdict')} {mark(c.get('dyn_stable'))}")
-            grid.add_row("best", f"[accent]{best}[/] " + " · ".join(f for f in facts if f))
+            grid.add_row("best", f"[accent]{best}[/] {self.candidate_facts(best)}")
         if self.submitted:
             grid.add_row("gate", f"{mark(self.submitted.get('gate_passed'))} code gate")
         if self.validation:
@@ -643,9 +798,19 @@ class Renderer:
         if self.first_time and self.last_time:
             took = elapsed((self.last_time - self.first_time).total_seconds())
             grid.add_row("time", f"{took} · {self.tool_calls} tool calls · {len(self.rounds)} rounds")
+            if self.campaign_span[0] is not None:
+                grid.add_row("budgets", self.budget_text())
         tokens = (state.usage if state and state.usage else None) or self.usage
         if tokens and any(tokens.values()):
             grid.add_row("tokens", " · ".join(f"{k.replace('_', ' ')} {v:,}" for k, v in tokens.items() if v))
+        lit = state.literature if state is not None else None
+        if state is not None and lit is not None and lit.papers:
+            n_fail = len(lit.failed_approaches)
+            grid.add_row(
+                "literature",
+                f"{len(lit.papers)} papers · {len(lit.insights)} evidence notes · {n_fail} failed approach"
+                f"{'' if n_fail == 1 else 'es'} [faint]· hephaestus literature {self.run_id or state.run_id}[/]",
+            )
         if brief_path:
             grid.add_row("brief", brief_path)
         rid = self.run_id or (state.run_id if state else "")
@@ -751,6 +916,58 @@ def call_line(tool: str, inp: dict[str, Any], took: float | None = None) -> Tabl
     grid.add_column(ratio=1)
     grid.add_column(justify="right", no_wrap=True)
     grid.add_row(Text(GLYPH["tool"], style="accent"), text, Text(took_text, style="faint"))
+    return grid
+
+
+def final_step_label(p: dict[str, Any]) -> str:
+    """Describe a final re-check step: ``"Full phonons for c2-1 · mace-mp-0-medium"``.
+
+    Parameters
+    ----------
+    p : dict
+        ``final_step`` payload.
+
+    Returns
+    -------
+    str
+        Step name, candidate (``ref`` shown as the reference) and potential.
+    """
+    name = FINAL_STEP_NAMES.get(str(p.get("tool")), str(p.get("tool")))
+    cid = p.get("candidate_id")
+    who = "the reference" if cid == "ref" else (cid or "")
+    pot = f" {GLYPH['dot']} {p['potential']}" if p.get("potential") else ""
+    return f"{name} for {who}{pot}" if who else f"{name}{pot}"
+
+
+def final_step_line(p: dict[str, Any], took: float | None) -> Table:
+    """``▸ Full phonons  c2-1 · mace-mp-0-medium · full   38s`` for a finished re-check step.
+
+    Parameters
+    ----------
+    p : dict
+        ``final_step`` payload.
+    took : float or None
+        Duration in seconds.
+
+    Returns
+    -------
+    rich.table.Table
+        The line.
+    """
+    name = FINAL_STEP_NAMES.get(str(p.get("tool")), str(p.get("tool")))
+    cid = p.get("candidate_id")
+    bits = ["reference" if cid == "ref" else cid, p.get("potential"), p.get("mode")]
+    args = f" {GLYPH['dot']} ".join(str(b) for b in bits if b)
+    took_text = "" if took is None else (elapsed(float(took)) if float(took) >= 1 else f"{float(took):.1f}s")
+    grid = Table.grid(padding=(0, 1))
+    grid.add_column(width=1, no_wrap=True)
+    grid.add_column(ratio=1)
+    grid.add_column(justify="right", no_wrap=True)
+    grid.add_row(
+        Text(GLYPH["tool"], style="ember"),
+        Text.assemble((name, "accent"), ("  ", ""), (args, "id")),
+        Text(took_text, style="faint"),
+    )
     return grid
 
 
@@ -1463,3 +1680,132 @@ def brief_panel(markdown: str) -> Panel:
         The panel.
     """
     return panel(Markdown(markdown), "experimental brief", padding=(1, 2))
+
+
+def literature_view(
+    lit: dict[str, Any],
+    cited: set[str] | None = None,
+    *,
+    text_filter: str | None = None,
+    limit: int | None = 15,
+    full: bool = False,
+) -> RenderableType:
+    """Show the literature a run gathered: papers, evidence, failed approaches, trend (Section 2, UI-4).
+
+    Parameters
+    ----------
+    lit : dict
+        ``LiteratureContext`` as a dict.
+    cited : set of str, optional
+        Paper IDs cited in the brief.
+    text_filter : str, optional
+        Keep only papers whose title, abstract or authors contain this text (any case).
+    limit : int or None
+        Most papers to list; ``None`` lists all.
+    full : bool
+        Show whole abstracts instead of about three lines.
+
+    Returns
+    -------
+    RenderableType
+        Headline counts, the papers, then the evidence and the synthesised lists.
+    """
+    cited = cited or set()
+    papers = sorted(
+        lit.get("papers") or [],
+        key=lambda x: (-(x.get("relevance") or 0.0), -(x.get("citation_count") or 0)),
+    )
+    if text_filter:
+        needle = text_filter.lower()
+        papers = [
+            x
+            for x in papers
+            if needle
+            in " ".join([x.get("title") or "", x.get("abstract") or "", *(x.get("authors") or [])]).lower()
+        ]
+    insights = lit.get("insights") or []
+    failed = lit.get("failed_approaches") or []
+    n_cited = sum(1 for x in lit.get("papers") or [] if x.get("paper_id") in cited)
+    head = Text.assemble(
+        (f"{len(lit.get('papers') or [])} papers", "bold"),
+        (f"  {GLYPH['sep']}  ", "gutter"),
+        (f"{len(insights)} evidence note{'' if len(insights) == 1 else 's'}", "bold"),
+        (f"  {GLYPH['sep']}  ", "gutter"),
+        (f"{len(failed)} failed approach{'' if len(failed) == 1 else 'es'}", "bold"),
+        (f"  {GLYPH['sep']}  ", "gutter"),
+        (f"{n_cited} cited in the brief", "bold"),
+    )
+    rows: list[RenderableType] = [head, Text()]
+    shown = papers if limit is None else papers[:limit]
+    for i, x in enumerate(shown, 1):
+        title = _escape(str(x.get("title") or x.get("paper_id")))
+        link = x.get("url") or (f"https://doi.org/{x['doi']}" if x.get("doi") else None)
+        title_markup = f"[link={link}]{title}[/link]" if link else title
+        meta = [
+            str(x["year"]) if x.get("year") else "",
+            _cites(x.get("citation_count")),
+            str(x.get("found_via") or ""),
+        ]
+        star = f"  [accent]{GLYPH['mark']} cited in brief[/]" if x.get("paper_id") in cited else ""
+        rows.append(Text.from_markup(f"[faint]{i:>2}.[/] [bold]{title_markup}[/]{star}"))
+        authors = x.get("authors") or []
+        who = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
+        rel = float(x.get("relevance") or 0.0)
+        line2 = f" {GLYPH['dot']} ".join(b for b in [who, *meta, str(x.get("paper_id") or "")] if b)
+        rows.append(
+            Text.from_markup(
+                f"    [muted]{_escape(line2)}[/]  [faint]relevance[/] [accent]{bar(rel, 1.0, 8)}[/]"
+            )
+        )
+        abstract = " ".join(str(x.get("abstract") or "").split())
+        if abstract:
+            if not full and len(abstract) > 320:
+                abstract = abstract[:317].rsplit(" ", 1)[0] + "…"
+            rows.append(Padding(Text(abstract, style="faint"), (0, 0, 0, 4)))
+        rows.append(Text())
+    if len(papers) > len(shown):
+        rows.append(
+            Text(f"    … {len(papers) - len(shown)} more papers (use --limit or --all)", style="muted")
+        )
+        rows.append(Text())
+    if insights:
+        t = Table(box=None, header_style="muted", pad_edge=False, padding=(0, 2))
+        for col in ("type", "composition", "value", "finding", "paper"):
+            t.add_column(col, no_wrap=col in ("type", "composition", "paper"))
+        for ins in insights:
+            v = ins.get("value") or {}
+            value = fmt_quantity(v.get("value"), v.get("uncertainty"), v.get("units", "")) if v else DASH
+            kind = str(ins.get("finding_type") or "")
+            style = "bad" if kind == "negative" else "accent"
+            t.add_row(
+                f"[{style}]{kind}[/]",
+                str(ins.get("composition") or DASH),
+                value,
+                _escape(str(ins.get("summary") or ""))
+                + (f" [faint]({_escape(str(ins['conditions']))})[/]" if ins.get("conditions") else ""),
+                f"[id]{ins.get('paper_id', '')}[/]",
+            )
+        rows += [round_rule("evidence notes"), t, Text()]
+    for title, key in (
+        ("failed approaches", "failed_approaches"),
+        ("mechanisms", "mechanisms"),
+        ("synthesis routes", "synthesis_routes"),
+        ("open questions", "open_questions"),
+    ):
+        items = lit.get(key) or []
+        if items:
+            rows.append(round_rule(title))
+            rows += [Text.from_markup(f"  [accent]{GLYPH['tool']}[/] {_escape(str(item))}") for item in items]
+            rows.append(Text())
+    trend = lit.get("field_trend") or {}
+    if trend:
+        years = sorted(trend, key=lambda y: int(y))
+        counts = [float(trend[y]) for y in years]
+        top = max(counts) or 1.0
+        rows.append(round_rule("papers per year"))
+        for y, c in zip(years, counts, strict=True):
+            rows.append(Text.from_markup(f"  [muted]{y}[/] [accent]{bar(c, top, 30)}[/] {int(c)}"))
+        rows.append(Text())
+    if lit.get("coverage_note"):
+        rows.append(Text(str(lit["coverage_note"]), style="faint"))
+    return Group(*rows)
