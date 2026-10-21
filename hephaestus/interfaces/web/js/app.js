@@ -3,6 +3,7 @@
 
 import { api, ApiError } from "./api.js";
 import { ago, append, brandMark, h, icon, label, pill, store, stored, toast } from "./dom.js";
+import { openConnectDialog } from "./auth.js";
 import { mountRun } from "./run.js";
 import { modelName, specGrid } from "./spec.js";
 
@@ -126,14 +127,14 @@ function statusPanel() {
     if (!b) rows.push(h("div.status-row", null, h("span.spinner"), h("span.label", null, "Checking Claude access…")));
     else {
       const auto = b.auto || {};
-      const name = auto.resolves_to === "api" ? "Anthropic API" : "Claude Code";
+      const name = auto.resolves_to === "api" ? "API key" : "Claude Code";
       rows.push(
         h(
-          "div.status-row",
-          { title: auto.ready ? "" : (b[auto.resolves_to] || {}).error || "" },
+          "div.status-row.clickable",
+          { role: "button", tabindex: 0, title: "Connect Claude", onclick: () => connect(), onkeydown: (e) => e.key === "Enter" && connect() },
           h(`span.dot.${auto.ready ? "good" : "critical"}`),
           h("span.label", null, `Claude · ${name}`),
-          h("span.value", null, auto.ready ? "Ready" : "Sign in"),
+          h("span.value", auto.ready ? null : { style: { color: "var(--focus)", fontWeight: 550 } }, auto.ready ? "Ready" : "Sign in"),
         ),
       );
     }
@@ -153,6 +154,14 @@ function statusPanel() {
     if (d) rows.push(h("div.status-row", null, h(`span.dot.${d.cuda ? "good" : ""}`), h("span.label", null, "Compute"), h("span.value", null, d.cuda ? "GPU (CUDA)" : "CPU")));
   }
   return h("div.sidebar-foot", null, ...rows, h("div.foot-tools", null, themeButton(), h("a.btn.ghost.sm", { href: "/docs", target: "_blank", rel: "noopener" }, icon("terminal"), "API")));
+}
+
+/**
+ * Open the "Connect Claude" dialog.
+ * @param {"claude"|"api"} [focus] Option to highlight.
+ */
+export function connect(focus) {
+  openConnectDialog({ focus, onChange: refreshHealth });
 }
 
 /** Start the Valency browser sign-in and open its page when the URL is ready (UI-11). */
@@ -362,12 +371,13 @@ function mountComposer(root) {
         text,
       );
 
+    const selectedReady = () => (st.backend === "auto" ? Boolean(b.auto && b.auto.ready) : ready(st.backend));
     const backendNote = (() => {
       if (!b) return "Checking which access is available…";
       if (st.backend === "auto") return `Uses ${b.auto.resolves_to === "api" ? "the Anthropic API key" : "your Claude Code login"}${b.auto.ready ? "." : " (not ready)."}`;
       const s = b[st.backend];
       if (s && s.ready) return st.backend === "api" ? "API key found." : "Signed in to Claude Code.";
-      return st.backend === "api" ? "Set ANTHROPIC_API_KEY before starting the server." : "Run python -m hephaestus login in a terminal.";
+      return st.backend === "api" ? "No API key yet." : "Claude Code is signed out.";
     })();
 
     const numberField = (lab, key, placeholder, hint) =>
@@ -448,7 +458,12 @@ function mountComposer(root) {
             null,
             h("div.segmented", { role: "group", "aria-label": "Model access" }, backendBtn("auto", "Auto", "sparkles"), backendBtn("api", "Anthropic API key"), backendBtn("claude-code", "Claude Code login")),
           ),
-          h("span.field-hint", null, backendNote),
+          h(
+            "div",
+            { style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" } },
+            h("span.field-hint", null, backendNote),
+            b && !selectedReady() ? h("button.btn.sm", { onclick: () => connect(st.backend === "api" ? "api" : "claude") }, icon("key"), st.backend === "api" ? "Add API key" : "Sign in to Claude") : null,
+          ),
         ),
         h(
           "label.field",
