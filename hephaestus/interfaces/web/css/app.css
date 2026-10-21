@@ -3353,6 +3353,13 @@ details.issues[open] > summary {
   color: var(--ink-3);
   pointer-events: none;
 }
+.setting.inactive {
+  opacity: 0.4;
+}
+.unit-input.unlimited .unit {
+  color: var(--ember);
+  font-weight: 600;
+}
 .setup-foot {
   display: flex;
   align-items: center;

@@ -271,8 +271,8 @@ export function mountRun(root, id, tab, hooks) {
         el.textContent = model.elapsed == null ? "" : model.running ? `${duration(model.elapsed)} elapsed` : `took ${duration(model.elapsed)}`;
       } else if (kind === "campaign" || kind === "final") {
         const used = kind === "campaign" ? model.span(model.campaignStart, model.campaignEnd) : model.span(model.finalStart, model.finalEnd);
-        const max = kind === "campaign" ? cfg.time_budget_s || 900 : cfg.final_time_budget_s || 600;
-        setMeter(el, used || 0, max, `${duration(used || 0)} / ${duration(max)}`);
+        const max = kind === "campaign" ? cfg.time_budget_s ?? 900 : cfg.final_time_budget_s ?? 600;
+        setMeter(el, used || 0, max, max ? `${duration(used || 0)} / ${duration(max)}` : `${duration(used || 0)} · no limit`);
       } else if (kind === "finalstep" && model.finalStep && model.finalStep.status === "started") {
         el.textContent = duration((Date.now() - new Date(model.finalStep.started)) / 1000);
       }
@@ -496,7 +496,7 @@ export function mountRun(root, id, tab, hooks) {
       campaign: {
         failed: "Failed: see Overview",
         pending: "Not started",
-        active: `Round ${Math.max(model.round, 1)} of ${cfg.max_iterations ?? "?"} · ${model.toolCount} tool calls`,
+        active: `Round ${Math.max(model.round, 1)}${cfg.max_iterations === 0 ? "" : ` of ${cfg.max_iterations ?? "?"}`} · ${model.toolCount} tool calls`,
         done: `${model.roundRows.length} round${model.roundRows.length === 1 ? "" : "s"}${model.submitted ? ` · submitted ${cidText(model.submitted.candidate_id)}` : ""}`,
       },
       final: {
@@ -566,7 +566,7 @@ export function mountRun(root, id, tab, hooks) {
       h(
       "div.grid.overview",
       null,
-      h("div.grid", null, heroCard(), confidenceCard(rows, cfg.confidence_threshold ?? 72, cfg.max_iterations || 3)),
+      h("div.grid", null, heroCard(), confidenceCard(rows, cfg.confidence_threshold ?? 72, cfg.max_iterations ?? 3)),
       h("div.grid", { style: { alignContent: "start" } }, budgetCard(cfg), latestReviewCard()),
       ),
     );
@@ -712,7 +712,9 @@ export function mountRun(root, id, tab, hooks) {
   }
 
   function budgetCard(cfg) {
-    const maxCalls = cfg.max_tool_calls || 90;
+    const maxCalls = cfg.max_tool_calls ?? 90;
+    const maxRounds = cfg.max_iterations ?? 3;
+    const of = (v, max) => (max ? `${v} / ${max}` : `${v} · no limit`);
     const used = model.toolCount || (model.state && model.state.usage ? 0 : 0);
     const rounds = model.roundRows.length;
     const meter = (lab, v, max, text, tickKind) => {
@@ -732,9 +734,9 @@ export function mountRun(root, id, tab, hooks) {
       h(
         "div.card-body",
         { style: { display: "grid", gap: "14px" } },
-        meter("Tool calls", used, maxCalls, `${used} / ${maxCalls}`),
-        meter("Review rounds", rounds, cfg.max_iterations || 3, `${rounds} / ${cfg.max_iterations || 3}`),
-        meter("Campaign time", 0, cfg.time_budget_s || 900, "", "campaign"),
+        meter("Tool calls", used, maxCalls, of(used, maxCalls)),
+        meter("Review rounds", rounds, maxRounds, of(rounds, maxRounds)),
+        meter("Campaign time", 0, cfg.time_budget_s ?? 900, "", "campaign"),
         tokensRow(),
       ),
     );

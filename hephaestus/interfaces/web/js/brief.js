@@ -73,7 +73,7 @@ function glance(doc) {
       const t = value.textContent.toLowerCase();
       tone = t.startsWith("confirmed") ? "good" : t.startsWith("overturned") ? "critical" : "warning";
     }
-    if (lk === "stable?") tone = /unstable/.test(value.textContent) ? "warning" : "good";
+    if (lk === "stable?") tone = /unstable|not checked/.test(value.textContent) ? "warning" : "good";
     grid.append(
       h(
         `div.glance-tile${lk === "first experiment" ? ".wide.next" : ""}${tone ? "." + tone : ""}`,

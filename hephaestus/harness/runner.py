@@ -27,7 +27,7 @@ from hephaestus.core.types import (
 from hephaestus.harness.agent import Campaign, NoveltyFn
 from hephaestus.harness.brief import assemble_brief
 from hephaestus.harness.brief_pdf import export_pdf
-from hephaestus.harness.goal import parse_goal, validate_spec
+from hephaestus.harness.goal import apply_stability_options, parse_goal, validate_spec
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot, sync_state, write_artifacts
 from hephaestus.llm.base import LLM, LoggedLLM, make_llm
 from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
@@ -497,6 +497,7 @@ def _workspace(state: RunState, files: RunFiles, resume: bool) -> tuple[Workspac
         _, ws, critiques = load_for_resume(files)
         return ws, critiques
     assert state.spec is not None
+    state.spec = apply_stability_options(state.spec, state.config)
     return Workspace(run_id=state.run_id, spec=state.spec, cfg=state.config), []
 
 

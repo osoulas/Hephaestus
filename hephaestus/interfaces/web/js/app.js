@@ -5,7 +5,7 @@ import { api, ApiError } from "./api.js";
 import { ago, append, cid, cidLong, h, icon, label, pill, store, stored, toast, wordmark } from "./dom.js";
 import { openConnectDialog } from "./auth.js";
 import { mountRun } from "./run.js";
-import { CONFIG_GROUPS, POTENTIALS, PROFILES, TOP_LEVEL_SETTINGS, VALUE_NAMES, modelName, potentialName, specGrid } from "./spec.js";
+import { CONFIG_GROUPS, DEPENDS_ON, LIMITS, POTENTIALS, PROFILES, TOP_LEVEL_SETTINGS, VALUE_NAMES, modelName, potentialName, specGrid } from "./spec.js";
 
 const main = document.getElementById("main");
 const sidebar = document.getElementById("sidebar");
@@ -293,6 +293,9 @@ function mountComposer(root) {
           llm_model: cfg.llm_model,
           require_novel: cfg.require_novel,
           band_gap_model: cfg.band_gap_model,
+          run_hull: cfg.run_hull,
+          e_hull_max_eV_per_atom: cfg.e_hull_max_eV_per_atom,
+          run_phonons: cfg.run_phonons,
         },
       });
     } catch (e) {
@@ -499,7 +502,8 @@ function mountComposer(root) {
     const d = app.defaults || {};
     if (value === d[key] || (value === "" && d[key] == null)) delete st.overrides[key];
     else st.overrides[key] = value;
-    if (key === "band_gap_model") st.parsed = null; // changes the parsed target's scale
+    // These change the parsed target's scale or its stability constraints
+    if (["band_gap_model", "run_hull", "run_phonons", "e_hull_max_eV_per_atom"].includes(key)) st.parsed = null;
     persist();
   }
 
@@ -526,7 +530,7 @@ function mountComposer(root) {
     return m ? m.label.replace("MEGNet multi-fidelity · ", "MEGNet ") : id;
   }
 
-  function settingControl(key, prop, meta) {
+  function settingControl(key, prop, meta, inactive = false) {
     const d = app.defaults || {};
     const [name, hint, unit] = meta;
     const value = key in st.overrides ? st.overrides[key] : d[key];
@@ -565,21 +569,23 @@ function mountComposer(root) {
       control = h("select.select", { onchange: (e) => set(e.target.value) }, enumValues.map((v) => h("option", { value: v, selected: v === value }, VALUE_NAMES[v] || String(v))));
     } else if (type === "integer" || type === "number") {
       const scale = unit === "min" ? 60 : 1;
+      const unlimited = LIMITS.has(key) && value === 0;
       control = h(
-        "div.unit-input",
+        `div.unit-input${unlimited ? ".unlimited" : ""}`,
         null,
         h("input.input.num", {
           type: "number",
           min: 0,
           step: type === "integer" ? 1 : "any",
           value: value == null ? "" : +(value / scale).toFixed(2),
+          placeholder: nullable ? "From the goal" : "",
           onchange: (e) => {
             const raw = e.target.value;
             if (raw === "") set(d[key]);
-            else set(type === "integer" ? Math.round(Number(raw)) : Number(raw) * scale);
+            else set(Math.max(0, type === "integer" ? Math.round(Number(raw)) : Number(raw) * scale));
           },
         }),
-        unit ? h("span.unit", null, unit) : null,
+        unit || unlimited ? h("span.unit", null, unlimited ? "no limit" : unit) : null,
       );
     } else {
       control = h("input.input.mono", { value: value ?? "", placeholder: nullable ? "none" : "", onchange: (e) => set(e.target.value.trim() || (nullable ? null : d[key])) });
@@ -587,8 +593,8 @@ function mountComposer(root) {
     const def = d[key];
     const defText = unit === "min" && typeof def === "number" ? `${+(def / 60).toFixed(2)} min` : key.endsWith("potential") ? potentialName(def) : key === "band_gap_model" ? bandGapLabel(def) : def == null ? "none" : VALUE_NAMES[def] || String(def);
     return h(
-      "div.field.setting",
-      { class: changed ? "changed" : "" },
+      `div.field.setting${inactive ? ".inactive" : ""}`,
+      { class: changed ? "changed" : "", inert: inactive, title: inactive ? "Turned off above" : null },
       h(
         "span.field-label",
         null,
@@ -658,7 +664,7 @@ function mountComposer(root) {
           ? h(
               "div.group-body",
               null,
-              h("div.group-grid", null, fields.map(([k, meta]) => settingControl(k, schema[k], meta))),
+              h("div.group-grid", null, fields.map(([k, meta]) => settingControl(k, schema[k], meta, Boolean(DEPENDS_ON[k]) && !c[DEPENDS_ON[k]]))),
               changedHere.length
                 ? h(
                     "button.link.reset-group",

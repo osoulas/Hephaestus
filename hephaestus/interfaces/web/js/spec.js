@@ -73,13 +73,18 @@ export const CONFIG_GROUPS = [
     id: "budget",
     icon: "gauge",
     fields: {
-      max_iterations: ["Review rounds", "Rounds of proposing, simulating and reviewing before it must submit.", "rounds"],
-      max_tool_calls: ["Tool calls", "Calls before it is told to submit.", "calls"],
-      time_budget_s: ["Time for the search", "When it runs out, the best candidate goes to the final re-check.", "min"],
+      max_iterations: ["Review rounds", "Rounds of proposing, simulating and reviewing before it must submit. 0 for no limit.", "rounds"],
+      max_tool_calls: ["Tool calls", "Calls before it is told to submit. 0 for no limit.", "calls"],
+      time_budget_s: ["Time for the search", "When it runs out, the best candidate goes to the final re-check. 0 for no limit.", "min"],
       confidence_threshold: ["Stop threshold", "Code rubric and reviewer must both reach this to stop on target.", "/ 100", true],
       max_parallel_tools: ["Parallel tool calls", "Calls on different candidates that run at once.", "", true],
     },
-    summary: (c) => `${c.max_iterations} rounds · ${c.max_tool_calls} tool calls · ${Math.round(c.time_budget_s / 60)} min`,
+    summary: (c) =>
+      [
+        c.max_iterations ? `${c.max_iterations} rounds` : "unlimited rounds",
+        c.max_tool_calls ? `${c.max_tool_calls} tool calls` : "unlimited tool calls",
+        c.time_budget_s ? `${minutes(c.time_budget_s)} min` : "no time limit",
+      ].join(" · "),
   },
   {
     name: "Models",
@@ -98,19 +103,24 @@ export const CONFIG_GROUPS = [
     id: "checks",
     icon: "shield",
     fields: {
+      run_hull: ["Energy above hull", "Check thermodynamic stability against competing phases relaxed with the same potential."],
+      e_hull_max_eV_per_atom: ["Hull threshold", "Highest energy above hull that counts as stable. Leave empty to use the goal's (0.05 if it names none).", "eV/atom"],
       run_phonons: ["Phonons", "Check dynamic stability."],
       phonon_mode: ["Phonon detail", "Fast during screening; full is slower but samples more of the Brillouin zone."],
       run_final: ["Final re-check", "Re-check the winner and runner-up at higher fidelity."],
-      final_time_budget_s: ["Time for the re-check", "Optional extras are skipped if they would not fit.", "min"],
+      final_time_budget_s: ["Time for the re-check", "Optional extras are skipped if they would not fit. 0 for no limit.", "min"],
       phonon_gate: ["Instability rule", "Mode mapping freezes soft modes in and re-relaxes; strict fails any imaginary mode.", "", true],
       distortion_threshold_meV: ["Mode-mapping threshold", "Energy drop that counts as a real instability.", "meV/atom", true],
       max_atoms: ["Largest cell", "Biggest supercell built.", "atoms", true],
     },
     summary: (c) =>
       [
-        c.run_phonons ? `${c.phonon_mode === "full" ? "Full" : "Fast"} phonons` : "No phonons",
-        c.run_final ? `final re-check (${Math.round(c.final_time_budget_s / 60)} min)` : "no final re-check",
-      ].join(" · "),
+        c.run_hull ? `hull ≤ ${c.e_hull_max_eV_per_atom ?? "goal's"} eV/atom`.replace("goal's eV/atom", "goal's threshold") : "no hull",
+        c.run_phonons ? `${c.phonon_mode === "full" ? "full" : "fast"} phonons` : "no phonons",
+        c.run_final ? `final re-check (${c.final_time_budget_s ? `${minutes(c.final_time_budget_s)} min` : "no time limit"})` : "no final re-check",
+      ]
+        .join(" · ")
+        .replace(/^./, (x) => x.toUpperCase()),
   },
   {
     name: "Compute",
@@ -126,6 +136,22 @@ export const CONFIG_GROUPS = [
     summary: (c) => `${c.device === "auto" ? "Auto device" : c.device === "cuda" ? "GPU" : "CPU"}${c.offline ? " · offline" : ""}`,
   },
 ];
+
+/** Fields shown only while the switch they depend on is on. */
+export const DEPENDS_ON = {
+  e_hull_max_eV_per_atom: "run_hull",
+  phonon_mode: "run_phonons",
+  phonon_gate: "run_phonons",
+  distortion_threshold_meV: "run_phonons",
+  final_time_budget_s: "run_final",
+};
+
+/** Budgets where 0 means no limit. */
+export const LIMITS = new Set(["max_iterations", "max_tool_calls", "time_budget_s", "final_time_budget_s"]);
+
+function minutes(s) {
+  return +(s / 60).toFixed(1);
+}
 
 /** Profiles: one click sets the budget and depth of checking. */
 export const PROFILES = [

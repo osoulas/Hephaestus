@@ -91,6 +91,9 @@ class ParseRequest(BaseModel):
     require_novel: bool | None = None
     band_gap_model: str | None = None
     band_gap_fidelity: str | None = None  # older clients; mapped to band_gap_model
+    run_hull: bool | None = None
+    e_hull_max_eV_per_atom: float | None = None
+    run_phonons: bool | None = None
 
 
 class RunRequest(BaseModel):

@@ -23,6 +23,7 @@ live in the owning module and are registered by name.
 - **Caching.** Every external call and every relaxation is cached by its exact inputs (`core/store.py`), so
   repeating a tool call is cheap and the demo works offline.
 - **Budget.** Each call counts towards `RunConfig.max_tool_calls`. Compute tools also add to `ws.compute_s`.
+  A budget of 0 (`max_iterations`, `max_tool_calls`, `time_budget_s`, `final_time_budget_s`) means no limit.
 - **Events.** The harness, not the tool, emits a `ProgressEvent` before and after each call. The payload
   carries `tool`, `input`, `result`, plus flat fields for the UI (see *Event payloads*).
 
@@ -260,6 +261,10 @@ The first use of a new chemical system relaxes its competing phases, which can t
 n_competing_phases, thermo_stable, threshold, wall_time_s}`. `thermo_stable` (code) means
 E_hull ≤ `spec.stability_thresholds.e_hull_max_eV_per_atom`.
 
+`RunConfig.run_hull = false` turns the tool off (it returns an error) and the gate stops requiring it.
+`RunConfig.e_hull_max_eV_per_atom`, when set, replaces the goal's threshold; `null` keeps the goal's
+(0.05 eV/atom if the goal names none). `run_phonons = false` does the same for `phonons`.
+
 #### `phonons`
 Finite-displacement phonons with phonopy, at commensurate q-points (SE-6 to SE-8).
 - `mode=fast`: supercell ≥ 7 Å.
@@ -352,8 +357,9 @@ reviewer confidence below the threshold.
 #### `submit_final`
 Submit the recommended candidate. **Code gate:**
 - **Required calculations:** `relax`, `energy_above_hull` (not stale), `phonons` and the target
-  `predict_property` must have run.
-- **Checks:** the target check and both stability verdicts must pass.
+  `predict_property` must have run. A stability check turned off for the run is not required.
+- **Checks:** the target check and both stability verdicts must pass. A check turned off for the run
+  reports `null` and is left out; the code rubric is then rescaled to 0–100 without it.
 - **Novelty** (when `require_novel`): the literature search must find no prior report of the composition.
 - **A failing gate** returns `accepted: false` with the reasons. The agent can improve the candidate, or
   resubmit with `accept_not_met: true` to report the best attempt as not meeting the target.

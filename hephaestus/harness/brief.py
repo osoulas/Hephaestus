@@ -96,6 +96,22 @@ Next step. One sentence: the first experiment to do."""
 # ---------------------------------------------------------------------- facts
 
 
+def _yes_no(x: bool | None) -> str:
+    """Format a stability verdict for the brief.
+
+    Parameters
+    ----------
+    x : bool or None
+        The verdict; ``None`` when the check was turned off for the run.
+
+    Returns
+    -------
+    str
+        ``Yes``, ``No`` or ``Not checked``.
+    """
+    return "Not checked" if x is None else "Yes" if x else "No"
+
+
 def _fmt(x: Any) -> str:
     """Format a fact for the brief.
 
@@ -790,9 +806,9 @@ def property_table(facts: dict[str, Any]) -> str:
         "| --- | --- | --- | --- |",
         f"| {facts['target_name']} | {pred} | {target} | {met} |",
         f"| Energy above hull | {_fmt(facts.get('win_e_hull'))} eV/atom | ≤ {_fmt(facts['e_hull_threshold'])} eV/atom | "
-        f"{'Yes' if facts.get('win_thermo_stable') else 'No'} |",
+        f"{_yes_no(facts.get('win_thermo_stable'))} |",
         f"| Lowest phonon frequency | {_fmt(facts.get('win_min_freq'))} THz | no unstable modes after mode mapping | "
-        f"{'Yes' if facts.get('win_dyn_stable') else 'No'} |",
+        f"{_yes_no(facts.get('win_dyn_stable'))} |",
     ]
     return "\n".join(rows)
 
@@ -896,8 +912,19 @@ def _summary(facts: dict[str, Any], state: RunState, next_step: str | None) -> l
         f"- **What to make:** {facts['win_composition']}, {facts.get('win_structure_type', '').replace('_', ' ')}"
         f"{', ' + facts['win_space_group'] if facts.get('win_space_group') else ''}.",
         f"- **Why:** predicted {facts['target_name'].lower()} {pred} {facts['target_units']} against {target} on the same model.",
-        f"- **Stable?** {_fmt(facts.get('win_e_hull'))} eV/atom above the hull (limit {_fmt(facts['e_hull_threshold'])}); "
-        + ("no unstable phonon modes." if facts.get("win_dyn_stable") else "unstable phonon modes remain."),
+        "- **Stable?** "
+        + (
+            "hull not checked; "
+            if facts.get("win_thermo_stable") is None
+            else f"{_fmt(facts.get('win_e_hull'))} eV/atom above the hull (limit {_fmt(facts['e_hull_threshold'])}); "
+        )
+        + (
+            "phonons not checked."
+            if facts.get("win_dyn_stable") is None
+            else "no unstable phonon modes."
+            if facts["win_dyn_stable"]
+            else "unstable phonon modes remain."
+        ),
     ]
     if state.validation:
         v = state.validation[0]
@@ -959,7 +986,7 @@ def assemble_brief(state: RunState, ws: Workspace, llm: LLM | None = None) -> tu
                 "| --- | --- | --- | --- |",
                 f"| {facts['run_composition']} ({candidate_label(facts['run_id'])}) | {_fmt(facts['run_value'])} ± "
                 f"{_fmt(facts['run_uncertainty'])} {facts['target_units']} | {_fmt(facts['run_e_hull'])} eV/atom | "
-                f"{'Yes' if facts['run_dyn_stable'] else 'No'} |",
+                f"{_yes_no(facts['run_dyn_stable'])} |",
             ]
         )
     else:
