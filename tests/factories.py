@@ -82,21 +82,42 @@ def candidate_state(
     CandidateState
         The candidate state.
     """
-    cand = Candidate(candidate_id=cid, iteration=round, composition=composition,
-                     structure_type="perovskite_cubic", rationale="test", evidence_ids=["mp:5229"])  # fmt: skip
+    cand = Candidate(
+        candidate_id=cid,
+        iteration=round,
+        composition=composition,
+        structure_type="perovskite_cubic",
+        rationale="test",
+        evidence_ids=["mp:5229"],
+    )
     rec = StructureRecord(
         candidate_id=cid, cif="", pmg_dict={}, source="template:perovskite_cubic", n_atoms=40
     )
-    cs = CandidateState(candidate=cand, round=round, record=rec, structure={}, energy_eV_per_atom=-7.0,
-                        converged=converged, potential="mace-mp-0-small", potential_in_domain=in_domain,
-                        e_hull=e_hull)  # fmt: skip
+    cs = CandidateState(
+        candidate=cand,
+        round=round,
+        record=rec,
+        structure={},
+        energy_eV_per_atom=-7.0,
+        converged=converged,
+        potential="mace-mp-0-small",
+        potential_in_domain=in_domain,
+        e_hull=e_hull,
+    )
     if dyn is not None:
-        cs.phonon = PhononResult(mode="fast", stable=dyn, min_frequency_THz=0.1 if dyn else -2.0,
-                                 instability_at=None if dyn else "R")  # fmt: skip
+        cs.phonon = PhononResult(
+            mode="fast",
+            stable=dyn,
+            min_frequency_THz=0.1 if dyn else -2.0,
+            instability_at=None if dyn else "R",
+        )
         cs.phonon_details = {"verdict": "stable" if dyn else "unstable"}
     if gap is not None:
         cs.predictions["band_gap"] = PropertyPrediction(
-            candidate_id=cid, property="band_gap", model="MEGNet",
-            value=Quantity(value=gap, uncertainty=unc, units="eV", source="MEGNet"), in_domain=in_domain,
-        )  # fmt: skip
+            candidate_id=cid,
+            property="band_gap",
+            model="MEGNet",
+            value=Quantity(value=gap, uncertainty=unc, units="eV", source="MEGNet"),
+            in_domain=in_domain,
+        )
     return cs
