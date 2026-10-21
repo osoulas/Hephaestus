@@ -54,13 +54,13 @@ class Deps:
     root: Path | None = None
 
 
-def default_final_check() -> FinalCheck | None:
+def default_final_check() -> Callable[..., list[ValidationReport]] | None:
     """Return B's ``validate_finalists`` when ``harness/final_check.py`` provides it.
 
     Returns
     -------
     callable or None
-        ``f(ws, submission) -> list of ValidationReport``.
+        ``f(ws, submission, handlers=...) -> list of ValidationReport``.
     """
     from hephaestus.harness import final_check
 
@@ -166,11 +166,14 @@ def _models(cfg: RunConfig, deps: Deps, files: RunFiles) -> tuple[LoggedLLM, Log
     return LoggedLLM(llm, files.llm_log), LoggedLLM(reviewer, files.llm_log)
 
 
-def resolve_reference(ws: Workspace, handlers: Mapping[str, Handler]) -> tuple[SearchSpec, list[ErrorRecord]]:
+def resolve_reference(
+    ws: Workspace, handlers: Mapping[str, Handler], potential: str | None = None, fmax: float = 0.02
+) -> tuple[SearchSpec, list[ErrorRecord]]:
     """Compute a relative target's reference value with the candidates' model (GP-11).
 
     Builds the reference material from Materials Project (ambient polymorph), relaxes it with
-    the screening potential and predicts the target property, through the same tool handlers.
+    the given potential and predicts the target property, through the same tool handlers. The
+    final check calls it again with the final potential (Section 9).
 
     Parameters
     ----------
@@ -178,6 +181,10 @@ def resolve_reference(ws: Workspace, handlers: Mapping[str, Handler]) -> tuple[S
         Workspace; the temporary ``ref`` candidate is removed afterwards.
     handlers : mapping
         Tool handlers.
+    potential : str, optional
+        Potential; defaults to the screening potential ``ws.cfg.potential``.
+    fmax : float
+        Force threshold for the relaxation, in eV/Å.
 
     Returns
     -------
@@ -200,7 +207,7 @@ def resolve_reference(ws: Workspace, handlers: Mapping[str, Handler]) -> tuple[S
     ws.candidates["ref"] = CandidateState(candidate=cand, round=0)
     calls: list[tuple[str, dict[str, Any]]] = [
         ("build_structure", {"candidate_id": "ref", "source": "auto", "mp_id": None, "seed": ws.cfg.seed}),
-        ("relax", {"candidate_id": "ref", "potential": ws.cfg.potential, "fmax": 0.02}),
+        ("relax", {"candidate_id": "ref", "potential": potential or ws.cfg.potential, "fmax": fmax}),
         ("predict_property", {"candidate_id": "ref", "property": spec.target_property}),
     ]
     result: dict[str, Any] = {}
@@ -359,7 +366,7 @@ def _drive(
             state.stop_reason = state.stop_reason or "submitted"
         sync_state(state, ws, [it.critique for it in state.iterations if it.critique])
         write_artifacts(files, state)
-        _final(state, files, ws, deps, bus)
+        _final(state, files, ws, deps, bus, handlers)
         _brief(state, files, ws, llm, bus)
         state.status = "finished"
         state.usage = {**state.usage, **llm.usage}
@@ -534,7 +541,14 @@ def _campaign(
         )
 
 
-def _final(state: RunState, files: RunFiles, ws: Workspace, deps: Deps, bus: EventBus) -> None:
+def _final(
+    state: RunState,
+    files: RunFiles,
+    ws: Workspace,
+    deps: Deps,
+    bus: EventBus,
+    handlers: Mapping[str, Handler],
+) -> None:
     """Run the higher-fidelity re-check of the finalists (Section 9); failures degrade the run.
 
     Parameters
@@ -549,10 +563,14 @@ def _final(state: RunState, files: RunFiles, ws: Workspace, deps: Deps, bus: Eve
         Dependencies.
     bus : EventBus
         Events.
+    handlers : mapping
+        The run's tool handlers, used by the default final check.
     """
     if not ws.cfg.run_final or ws.submitted is None or state.validation:
         return
-    fn = deps.final_check or default_final_check()
+    fn = deps.final_check
+    if fn is None and (default := default_final_check()) is not None:
+        fn = lambda w, sub: default(w, sub, handlers=handlers)  # noqa: E731
     if fn is None:
         state.errors.append(
             ErrorRecord(step="final_calculation", code="unavailable", message="Final check not implemented.")

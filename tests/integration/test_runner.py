@@ -183,11 +183,24 @@ def test_or6_resume_from_state_json_only(tmp_path: Path) -> None:
     assert state.status == "finished" and state.best == "c2-1"
 
 
-def test_sys6_missing_final_check_degrades(tmp_path: Path) -> None:
+def test_sys6_missing_final_check_degrades(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Without a final check the run still produces a brief that says so."""
     d = deps(tmp_path, scripts.ROUND_1 + scripts.ROUND_2, ANSWERS)
     d.final_check = None
+    monkeypatch.setattr(runner, "default_final_check", lambda: None)
     state = runner.run(scripts.GOAL, deps=d, run_id="r4")
     assert state.status == "finished" and state.brief is not None
     assert "Final re-check not run." in state.brief.markdown
     assert any(e.step == "final_calculation" for e in state.errors)
+
+
+def test_fc1_default_final_check_runs_with_the_run_handlers(tmp_path: Path) -> None:
+    """With no injected final check, the real one runs through the run's own (stub) handlers."""
+    d = deps(tmp_path, scripts.ROUND_1 + scripts.ROUND_2, ANSWERS)
+    d.final_check = None
+    state = runner.run(scripts.GOAL, deps=d, run_id="r-fc")
+    assert state.status == "finished"
+    assert state.validation and state.validation[0].candidate_id == state.submission.candidate_id
+    assert state.validation[0].verdict == "confirmed"
+    assert (tmp_path / "r-fc" / "final" / "validation.json").exists()
+    assert "Final settings: mace-mp-0-medium" in state.brief.markdown
