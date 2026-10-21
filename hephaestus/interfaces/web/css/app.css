@@ -1078,9 +1078,19 @@ button.link {
   background: var(--critical);
   color: #fff;
 }
+/* active phase: a track, and an ember bar that fills from the left, then clears from the left,
+   so the loop never jumps back to empty */
 .step.active::before {
-  background: linear-gradient(90deg, var(--ember) 0%, var(--ember) 40%, var(--surface-3) 40%);
-  background-size: 250% 100%;
+  background: var(--surface-3);
+}
+.step.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--ember);
   animation: progress 1.8s ease-in-out infinite;
   animation-delay: var(--sync, 0ms);
 }
@@ -1089,10 +1099,13 @@ button.link {
 }
 @keyframes progress {
   0% {
-    background-position: 100% 0;
+    clip-path: inset(0 100% 0 0);
+  }
+  50% {
+    clip-path: inset(0 0 0 0);
   }
   100% {
-    background-position: 0 0;
+    clip-path: inset(0 0 0 100%);
   }
 }
 .step-name {
