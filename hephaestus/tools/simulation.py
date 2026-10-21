@@ -16,6 +16,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -1284,7 +1285,7 @@ def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
     }[fidelity]
     reg: dict[str, dict[str, Any]] = {
         "band_gap": {
-            "model": f"MEGNet-BandGap-mfi-MP-2019.4.1 ({fidelity})",
+            "model": f"{BANDGAP_MODEL} ({fidelity})",
             "units": "eV",
             "published_error": gap_err[0],
             "error_note": gap_err[1],
@@ -1538,6 +1539,106 @@ def elastic_properties(
     }
 
 
+BANDGAP_MODEL = "MEGNet-BandGap-mfi-MP-2019.4.1"
+FIDELITY_INDEX = {"pbe": 0, "gllb-sc": 1, "hse": 2, "scan": 3}
+"""State attribute of the multi-fidelity MEGNet model for each training fidelity."""
+_BANDGAP: dict[str, Any] = {}
+_BANDGAP_LOCK = threading.Lock()
+
+
+def _load_megnet() -> Any:
+    """Load the pretrained multi-fidelity MEGNet band-gap model with matgl.
+
+    Loads from the local matgl cache when the model is there, so cached runs never touch the
+    network (SYS-8); otherwise downloads it by name.
+
+    Returns
+    -------
+    matgl.models.MEGNet
+        The model, on CPU.
+    """
+    import matgl
+
+    repo = Path.home() / ".cache" / "matgl" / f"models--materialyze--{BANDGAP_MODEL}" / "snapshots"
+    local = sorted(d for d in repo.glob("*") if (d / "model.json").exists()) if repo.is_dir() else []
+    return matgl.load_model(str(local[-1]) if local else BANDGAP_MODEL)
+
+
+BANDGAP_FACTORY: Callable[[], Any] = _load_megnet
+
+
+def band_gap_model() -> Any:
+    """Load the band-gap model once per process.
+
+    Returns
+    -------
+    Any
+        Model with ``predict_structure(structure, state_attr)``.
+
+    Raises
+    ------
+    ToolError
+        If matgl is not installed or the model cannot be loaded.
+    """
+    with _BANDGAP_LOCK:
+        if "model" not in _BANDGAP:
+            try:
+                _BANDGAP["model"] = BANDGAP_FACTORY()
+            except ImportError as exc:
+                raise ToolError("matgl is not installed; install the 'sim' extra for band gaps.") from exc
+            except Exception as exc:
+                raise ToolError(f"Could not load {BANDGAP_MODEL}: {exc}") from exc
+        return _BANDGAP["model"]
+
+
+def band_gap(structure: Any, fidelity: str = "hse") -> float:
+    """Band gap from multi-fidelity MEGNet at the chosen fidelity, cached (PP-1, Section 6 decision).
+
+    The model runs on CPU, so it never contends with MACE for the GPU (SE-15). Use the same
+    fidelity for the reference material and every candidate (GP-11).
+
+    Parameters
+    ----------
+    structure : pymatgen.core.Structure
+        Relaxed (or distorted) structure.
+    fidelity : {"hse", "pbe", "gllb-sc", "scan"}
+        Training fidelity; ``hse`` is the default, ``pbe`` runs about 1.6 eV low.
+
+    Returns
+    -------
+    float
+        Band gap in eV, floored at 0 (the model can return small negatives for metals).
+
+    Raises
+    ------
+    ToolError
+        For an unknown fidelity or a model failure.
+    """
+    if fidelity not in FIDELITY_INDEX:
+        raise ToolError(f"Unknown band gap fidelity {fidelity!r}; use one of {sorted(FIDELITY_INDEX)}.")
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    key = {"s": structure_key(AseAtomsAdaptor.get_atoms(structure)), "fidelity": fidelity}
+
+    def compute() -> float:
+        """Run the model.
+
+        Returns
+        -------
+        float
+            Raw prediction, eV.
+        """
+        import torch
+
+        model = band_gap_model()
+        out = model.predict_structure(
+            structure=structure, state_attr=torch.tensor([FIDELITY_INDEX[fidelity]])
+        )
+        return float(out)
+
+    return max(0.0, float(cached("megnet", key, compute, version=BANDGAP_MODEL)))
+
+
 def widen_factor(elements: list[str], in_domain: bool | None) -> float:
     """Uncertainty multiplier for out-of-domain chemistry (PP-5).
 
@@ -1634,8 +1735,14 @@ def predict_property(ws: Workspace, candidate_id: str, property: str) -> dict[st
     entry = reg[property]
     extra: dict[str, Any] = {}
     if property == "band_gap":
-        raise ToolError("band_gap (MEGNet) is not wired in yet.")
-    if property == "density":
+        t0 = time.monotonic()
+        mega_in, _ = domain_check(elements, BANDGAP_MODEL)
+        widen = widen_factor(elements, mega_in)
+        in_domain = widen == 1.0
+        value = band_gap(structure, ws.cfg.band_gap_fidelity)
+        unc, model = entry["published_error"], entry["model"]
+        ws.add_compute(round(time.monotonic() - t0, 2))
+    elif property == "density":
         value, unc, model = float(structure.density), entry["published_error"], entry["model"]
     elif property == "formation_energy":
         if cs.e_form is None or cs.hull_stale:
@@ -1684,7 +1791,7 @@ def predict_property(ws: Workspace, candidate_id: str, property: str) -> dict[st
         }
         extra["mechanically_stable"] = cs.elastic["born_stable"]
         extra["elastic_tensor_GPa"] = [[round(x) for x in row] for row in cs.elastic["tensor_GPa"]]
-    if property in ("density", "formation_energy"):
+    if property in ("band_gap", "density", "formation_energy"):
         if unc is not None:
             unc *= widen
         cs.predictions[property] = PropertyPrediction(
