@@ -1,0 +1,14 @@
+{
+  "papers": [
+    {
+      "id": "2008.22222v3",
+      "title": "Stannate perovskites as transparent conductors",
+      "abstract": "BaSnO3 combines a wide gap with high mobility.",
+      "authors": ["Eve Park"],
+      "source": "arxiv",
+      "citation_count": 300,
+      "relevance_score": 0.8,
+      "dates": {"first_available": "2020-08-01"}
+    }
+  ]
+}

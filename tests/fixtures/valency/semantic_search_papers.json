@@ -1,0 +1,77 @@
+{
+  "papers": [
+    {
+      "id": "2101.00001v2",
+      "base_id": "2101.00001",
+      "title": "Band gap narrowing in Sn-doped SrTiO3",
+      "abstract": "We report that SrTi0.875Sn0.125O3 has an optical band gap of 3.05 eV, compared with 3.25 eV for SrTiO3. Substitution beyond 20% gives a SnO2 secondary phase.",
+      "authors": [
+        "Alice Smith",
+        "Bo Chen"
+      ],
+      "doi": "10.1000/sto.2021.1",
+      "url": "https://arxiv.org/abs/2101.00001v2",
+      "source": "arxiv",
+      "citation_count": 120,
+      "relevance_score": 0.91,
+      "journal_ref": "Phys. Rev. Mater. 5, 045001 (2021)",
+      "dates": {
+        "first_available": "2020-12-30"
+      }
+    },
+    {
+      "id": "PMC1234567",
+      "base_id": "PMC1234567",
+      "title": "Band gap narrowing in Sn-doped SrTiO(3).",
+      "abstract": "Short PubMed copy.",
+      "authors": [
+        "Smith, Alice",
+        "Chen, Bo"
+      ],
+      "doi": "10.1000/STO.2021.1",
+      "url": "https://pubmed.example/1234567",
+      "source": "pubmed",
+      "citation_count": 130,
+      "relevance_score": 0.88,
+      "dates": {
+        "first_available": {
+          "value": "2021-04-02",
+          "precision": "day",
+          "basis": "electronic_publication"
+        }
+      }
+    },
+    {
+      "id": "2203.04567v1",
+      "base_id": "2203.04567",
+      "title": "Chalcogenide perovskites for photovoltaics",
+      "abstract": "BaZrS3 shows a direct gap near 1.8 eV.",
+      "authors": [
+        "Carla Diaz"
+      ],
+      "doi": null,
+      "url": "https://arxiv.org/abs/2203.04567v1",
+      "source": "arxiv",
+      "citation_count": 15,
+      "relevance_score": 0.74,
+      "dates": {
+        "first_available": "2022-03-09"
+      }
+    },
+    {
+      "id": "osf-999",
+      "title": "A psychology paper",
+      "abstract": "Not relevant.",
+      "authors": [
+        "X Y"
+      ],
+      "source": "psyarxiv",
+      "relevance_score": 0.2,
+      "dates": {
+        "first_available": "2020-01-01"
+      }
+    }
+  ],
+  "confidence": "high",
+  "top_similarity": 0.91
+}
