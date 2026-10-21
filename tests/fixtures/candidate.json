@@ -1,0 +1,22 @@
+{
+  "candidate_id": "c1-1",
+  "iteration": 1,
+  "composition": "SrTi0.875Fe0.125O3",
+  "structure_type": "perovskite_cubic",
+  "rationale": "Fe 3d states inside the gap lower it; reported by arxiv:2101.00001.",
+  "evidence_ids": [
+    "arxiv:2101.00001",
+    "mp:5229"
+  ],
+  "prior_estimate": {
+    "value": 2.5,
+    "uncertainty": null,
+    "units": "eV",
+    "source": "orchestrator prior"
+  },
+  "novelty": "variant",
+  "synthesis_feasibility": "easy",
+  "risks": [
+    "oxygen vacancies"
+  ]
+}

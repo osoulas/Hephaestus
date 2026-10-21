@@ -1,0 +1,18 @@
+{
+  "run_id": "r-fixture",
+  "seq": 3,
+  "time": "2026-10-21T10:00:00Z",
+  "section": "tool",
+  "status": "finished",
+  "iteration": 1,
+  "payload": {
+    "tool": "relax",
+    "input": {
+      "candidate_id": "c1-1"
+    },
+    "result": {
+      "converged": true
+    },
+    "candidate_id": "c1-1"
+  }
+}

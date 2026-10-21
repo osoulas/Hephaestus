@@ -1,0 +1,40 @@
+{
+  "iteration": 1,
+  "candidate_id": "c1-1",
+  "target_met_central": true,
+  "target_met_conservative": false,
+  "thermo_stable": true,
+  "dyn_stable": true,
+  "score": 72,
+  "score_breakdown": {
+    "property": 15,
+    "thermo": 20,
+    "dynamic": 20,
+    "reliability": 10,
+    "novelty_synthesis": 7
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "reliability",
+      "text": "MEGNet error bar (0.65 eV) exceeds the predicted gap reduction.",
+      "suggestion": "Try a larger Fe fraction.",
+      "paper_ids": []
+    },
+    {
+      "severity": "minor",
+      "category": "synthesis",
+      "text": "Fe-doped SrTiO3 is routinely made by solid-state reaction.",
+      "suggestion": "",
+      "paper_ids": [
+        "arxiv:2101.00001"
+      ]
+    }
+  ],
+  "next_composition": "SrTi0.75Fe0.25O3",
+  "next_rationale": "Larger gap reduction while staying on the hull.",
+  "stop_recommended": false,
+  "stop_reason": null,
+  "llm_confidence": 60,
+  "llm_confidence_reason": "Model-scale win is within the error bar."
+}
