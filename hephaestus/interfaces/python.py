@@ -27,7 +27,7 @@ from typing import Any
 
 from hephaestus.core.config import MODELS, RunConfig, runs_root
 from hephaestus.core.events import BUS, EventBus
-from hephaestus.core.store import load_model, new_run_id
+from hephaestus.core.store import atomic_write_text, load_model, new_run_id
 from hephaestus.core.types import ProgressEvent, RunState, SearchSpec
 from hephaestus.harness import runner
 from hephaestus.harness.agent import Campaign
@@ -264,6 +264,47 @@ class Experiment:
             state = self.state
             export_pdf(md.read_text(encoding="utf-8"), path, state.run_id, state.raw_goal)
         return path if path.exists() else None
+
+    @property
+    def title(self) -> str:
+        """The run's title: the user's edit if any, else the parser's, else the start of the goal.
+
+        Returns
+        -------
+        str
+            Title.
+        """
+        return run_title_of(self.root or runs_root(), self._source or self.run_id, self.state)
+
+    def set_title(self, title: str) -> str:
+        """Rename the run; safe while it runs, as the title lives in its own file.
+
+        Parameters
+        ----------
+        title : str
+            New title.
+
+        Returns
+        -------
+        str
+            The stored title.
+
+        Raises
+        ------
+        ExperimentError
+            If the run does not exist, is a replay, or the title is empty or too long.
+        """
+        if self._source is not None:
+            raise ExperimentError("A replay takes its title from the recorded run.")
+        if not self.exists:
+            raise ExperimentError(f"No run {self.run_id}.")
+        clean = " ".join(title.split())
+        if not clean:
+            raise ExperimentError("The title cannot be empty.")
+        if len(clean) > TITLE_MAX_EDIT:
+            raise ExperimentError(f"Keep the title under {TITLE_MAX_EDIT} characters.")
+        atomic_write_text(self.files.root / TITLE_FILE, clean)
+        return clean
 
     def structure(self, candidate_id: str) -> str | None:
         """CIF of a candidate's current structure, relaxed when available (UI-7).
@@ -746,6 +787,39 @@ class Experiment:
 
 # ---------------------------------------------------------------------- module helpers
 
+TITLE_FILE = "title.txt"
+TITLE_MAX_EDIT = 120
+
+
+def run_title_of(root: Path, run_id: str, state: RunState | None = None) -> str:
+    """Return a run's title: ``title.txt`` (the user's edit), else the parser's, else the goal's start.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Runs folder.
+    run_id : str
+        Run ID.
+    state : RunState, optional
+        The run's state, when already loaded.
+
+    Returns
+    -------
+    str
+        Title.
+    """
+    try:
+        edited = (Path(root) / run_id / TITLE_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        edited = ""
+    if edited:
+        return edited
+    if state is not None and state.spec is not None and state.spec.title:
+        return state.spec.title
+    from hephaestus.harness.goal import run_title
+
+    return run_title(None, state.raw_goal if state is not None else run_id)
+
 
 def _to_cif(pmg_dict: dict[str, Any] | None) -> str | None:
     """Render a pymatgen structure dict as CIF.
@@ -797,7 +871,7 @@ def list_runs(root: Path | None = None) -> list[dict[str, Any]]:
     Returns
     -------
     list of dict
-        ``{run_id, raw_goal, status, best, stop_reason, created_at, running}`` per run.
+        ``{run_id, raw_goal, title, status, best, stop_reason, created_at, running}`` per run.
     """
     base = Path(root) if root else runs_root()
     out = []
@@ -810,6 +884,7 @@ def list_runs(root: Path | None = None) -> list[dict[str, Any]]:
             {
                 "run_id": s.run_id,
                 "raw_goal": s.raw_goal,
+                "title": run_title_of(base, s.run_id, s),
                 "status": s.status,
                 "best": s.best,
                 "stop_reason": s.stop_reason,

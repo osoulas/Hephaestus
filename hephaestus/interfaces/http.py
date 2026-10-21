@@ -119,6 +119,14 @@ class ApiKeyRequest(BaseModel):
     api_key: str
 
 
+class TitleRequest(BaseModel):
+    """Body of ``PATCH /runs/{run_id}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+
+
 class ReplayRequest(BaseModel):
     """Body of ``POST /replay/{run_id}`` (UI-9)."""
 
@@ -462,7 +470,11 @@ def create_app(
             state = RunState(run_id=run_id, raw_goal=exp.goal, config=exp.config, status="created")
         else:
             state = exp.state
-        out = {**state.model_dump(mode="json"), "running": exp.running}
+        out = {
+            **state.model_dump(mode="json"),
+            "running": exp.running,
+            "title": exp.title if exp.exists else "",
+        }
         if exp.replay_control is not None:
             ctl = exp.replay_control
             out["replay"] = {
@@ -471,6 +483,29 @@ def create_app(
                 "speed": ctl["speed"],
             }
         return out
+
+    @app.patch("/runs/{run_id}")
+    def rename_run(run_id: str, req: TitleRequest) -> dict[str, Any]:
+        """Rename a run, also while it runs.
+
+        Parameters
+        ----------
+        run_id : str
+            Run ID.
+        req : TitleRequest
+            New title.
+
+        Returns
+        -------
+        dict
+            ``{run_id, title}``; 422 for an empty or over-long title, 409 for a replay.
+        """
+        exp = get_experiment(run_id)
+        try:
+            return {"run_id": run_id, "title": exp.set_title(req.title)}
+        except ExperimentError as exc:
+            code = 409 if "replay" in str(exc) else 404 if str(exc).startswith("No run") else 422
+            raise HTTPException(code, str(exc)) from exc
 
     @app.get("/runs/{run_id}/events")
     def events(run_id: str, history: bool = True) -> StreamingResponse:

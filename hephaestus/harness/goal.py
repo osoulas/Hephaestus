@@ -26,7 +26,10 @@ null: code computes the reference with the same model as the candidates. Map the
 one of the supported keys, or to "unsupported" if none fits. Separate hard constraints (must \
 hold) from soft preferences. Record every assumption in plain words. Ask at most three \
 clarifying questions, only when a required field (target property, value or reference, \
-direction) is missing or ambiguous."""
+direction) is missing or ambiguous. Give the run a short title (at most eight words, sentence \
+case, no full stop) that names the material family and the target, e.g. "Lead-free perovskite \
+with a smaller gap than SrTiO3"."""
+TITLE_MAX = 70
 
 
 def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
@@ -63,6 +66,7 @@ def goal_schema(keys: list[str]) -> dict[str, Any]:
     s, sn, nn = {"type": "string"}, {"type": ["string", "null"]}, {"type": ["number", "null"]}
     sa = {"type": "array", "items": {"type": "string"}}
     props = {
+        "title": s,
         "material_family": s,
         "elements": sa,
         "excluded_elements": sa,
@@ -127,6 +131,7 @@ def parse_goal(
     )
     spec = SearchSpec(
         raw_goal=raw_goal,
+        title=run_title(raw.get("title"), raw_goal),
         material_family=raw.get("material_family") or "",
         elements=list(raw.get("elements") or []),
         excluded_elements=list(raw.get("excluded_elements") or []),
@@ -152,6 +157,33 @@ def parse_goal(
         ErrorRecord(step="goal_parser", code="invalid_spec", message=m) for m in validate_spec(spec, registry)
     ]
     return spec, questions, errors
+
+
+def run_title(proposed: str | None, raw_goal: str) -> str:
+    """Return the run's title: the parser's proposal, tidied, else the start of the goal.
+
+    Parameters
+    ----------
+    proposed : str or None
+        Title from the LLM.
+    raw_goal : str
+        The goal, as typed.
+
+    Returns
+    -------
+    str
+        A title of at most ``TITLE_MAX`` characters.
+    """
+    title = " ".join((proposed or "").split()).strip(" .\"'")
+    if not title:
+        words = raw_goal.split()
+        title = " ".join(words[:10])
+        title = title[0].upper() + title[1:] if title else "Untitled run"
+        if len(words) > 10:
+            title += "…"
+    if len(title) > TITLE_MAX:
+        title = title[: TITLE_MAX - 1].rsplit(" ", 1)[0] + "…"
+    return title
 
 
 def expand_constraints(spec: SearchSpec, cfg: RunConfig) -> SearchSpec:

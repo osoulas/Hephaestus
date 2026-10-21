@@ -85,6 +85,7 @@ export function mountRun(root, id, tab, hooks) {
       ui.replayInfo = st.replay || null;
       if (ui.replayInfo) ui.replaySpeed = ui.replayInfo.speed;
       if (!model.goal) model.goal = st.raw_goal;
+      if (st.title) ui.title = st.title;
     } catch (e) {
       if (e.status === 404) ui.notFound = true;
     }
@@ -251,6 +252,7 @@ export function mountRun(root, id, tab, hooks) {
   }
 
   function renderHead() {
+    if (ui.editingTitle) return tick(); // keep the input while the user types, even mid-run
     const fs = model.finalStep;
     const sig = `${model.status}|${JSON.stringify(model.phase)}|${model.round}|${model.toolCount}|${model.best}|${ui.tab}|${model.running}|${model.resumable}|${model.paperList.length}|${model.candidateIds.length}|${model.log.length}|${fs ? fs.seq + fs.status : ""}|${model.isReplay ? model.events.length + JSON.stringify(ui.replayInfo) + model.ended : ""}`;
     if (sig === lastHeadSig) return tick();
@@ -347,7 +349,7 @@ export function mountRun(root, id, tab, hooks) {
       h(
         "div.run-title-row",
         null,
-        h("div", null, h("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } }, statusPill), h("h1.run-goal", { title: id }, model.goal || (model.state && model.state.raw_goal) || id), h("div.run-meta", null, metaWithSeps)),
+        h("div", null, h("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } }, statusPill), titleEl(), h("div.run-meta", null, metaWithSeps)),
         h("div.run-actions", null, actions),
       ),
       model.isReplay ? replayBar() : null,
@@ -426,6 +428,65 @@ export function mountRun(root, id, tab, hooks) {
             h("a.btn.sm", { href: `#/run/${encodeURIComponent(source)}/${ui.tab}` }, icon("x"), "Close replay"),
           ),
     );
+  }
+
+  // The run's title: the user's edit, else the parser's; the goal itself is in the Spec tab.
+  function runTitle() {
+    const spec = model.spec || (model.state && model.state.spec);
+    return ui.title || (model.state && model.state.title) || (spec && spec.title) || model.goal || id;
+  }
+
+  function titleEl() {
+    if (ui.editingTitle) {
+      const input = h("input.title-input", {
+        value: runTitle(),
+        maxlength: 120,
+        "aria-label": "Run title",
+        onkeydown: (e) => {
+          if (e.key === "Enter") saveTitle(e.target.value);
+          if (e.key === "Escape") {
+            ui.editingTitle = false;
+            lastHeadSig = null;
+            renderHead();
+          }
+        },
+        onblur: (e) => ui.editingTitle && saveTitle(e.target.value),
+      });
+      requestAnimationFrame(() => {
+        input.focus();
+        input.select();
+      });
+      return input;
+    }
+    const editable = !model.isReplay && (model.state || model.events.length);
+    return h(
+      "div.title-row",
+      null,
+      h(`h1.run-goal${editable ? ".editable" : ""}`, { title: editable ? "Click to rename" : model.goal || id, onclick: editable ? startEditTitle : null }, runTitle()),
+      editable ? h("button.btn.ghost.icon.title-edit", { title: "Rename run", "aria-label": "Rename run", onclick: startEditTitle }, icon("edit")) : null,
+    );
+  }
+
+  function startEditTitle() {
+    ui.editingTitle = true;
+    lastHeadSig = null;
+    head.replaceChildren(headContent());
+    tick();
+  }
+
+  async function saveTitle(value) {
+    const clean = value.trim().replace(/\s+/g, " ");
+    ui.editingTitle = false;
+    if (clean && clean !== runTitle()) {
+      try {
+        ui.title = (await api(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", body: { title: clean } })).title;
+        hooks.onChange();
+      } catch (e) {
+        toast(e.message, "critical");
+      }
+    }
+    lastHeadSig = null;
+    renderHead();
   }
 
   function stepper() {
@@ -1499,9 +1560,21 @@ export function mountRun(root, id, tab, hooks) {
           ...CONFIG_GROUPS.map((g) => [g.name, Object.keys(g.fields)]),
         ]
       : [];
+    const goal = model.goal || (model.state && model.state.raw_goal) || "";
     return h(
       "div.grid",
       { style: { gridTemplateColumns: "minmax(0, 1.5fr) minmax(0, 1fr)", alignItems: "start" } },
+      h(
+        "div.grid",
+        null,
+        goal
+          ? h(
+              "section.card.goal-card",
+              null,
+              h("div.card-head", null, h("div.card-title", null, "Your goal"), spec && spec.title ? h("span.card-sub", null, "Titled by the parser") : null),
+              h("div.card-body", null, h("blockquote.goal-quote", null, goal)),
+            )
+          : null,
       h(
         "section.card",
         { style: { overflow: "hidden" } },
@@ -1510,6 +1583,7 @@ export function mountRun(root, id, tab, hooks) {
         spec && spec.reference_value
           ? h("div.card-body", null, h("div.callout.info", null, icon("info"), h("div", null, "Reference value ", h("strong", null, pm(spec.reference_value.value, spec.reference_value.uncertainty, spec.reference_value.units)), ` from ${spec.reference_value.source}: computed with the same model as every candidate, not quoted.`)))
           : null,
+      ),
       ),
       h(
         "section.card",
