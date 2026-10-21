@@ -46,6 +46,38 @@ from hephaestus.interfaces.python import Experiment
 state = Experiment("a lead-free perovskite with a smaller band gap than SrTiO3").run()
 ```
 
+### Command line
+
+`python -m hephaestus` (or `hephaestus`) opens an interactive session: the logo, then a goal prompt.
+Type a goal, answer any clarifying questions, and watch the reasoning, the tool calls and each
+review stream past, ending with the brief. Commands start with `/` and Tab completes them:
+
+| Command | Does |
+| --- | --- |
+| `/model`, `/backend`, `/novel`, `/config` | Choose the model, the model access, novelty and other run options |
+| `/runs`, `/show <id>`, `/brief [id]` | List runs; show a run's rounds and candidates; print its brief |
+| `/resume <id>`, `/replay <id> [speed]` | Continue an interrupted run; replay a stored one offline |
+| `/backends`, `/login`, `/signin` | Readiness; Claude Code and Valency sign-in |
+| `/help`, `/exit` | |
+
+While a campaign runs, **Ctrl+C** asks it to stop: it submits its best candidate and still writes
+the brief. A second Ctrl+C detaches; resume the run later with `hephaestus resume <id>`.
+
+The subcommands do the same without the session:
+
+```bash
+hephaestus run "<goal>" [--backend claude-code] [--model claude-sonnet-5-5] [--novel] [--yes] [--json]
+hephaestus parse "<goal>" [--json]
+hephaestus runs | show <id> | brief <id> [--pdf]
+hephaestus resume <id>
+hephaestus replay <id or run folder> [--speed 4]
+hephaestus backends | login | signin | serve
+```
+
+`--yes` never asks: a goal that needs answers exits with code 3. `--json` prints events as JSON
+lines. The exit codes are 0 (done), 1 (failed or refused), 2 (usage), 3 (needs input) and 130
+(detached).
+
 ## Test
 
 ```bash
