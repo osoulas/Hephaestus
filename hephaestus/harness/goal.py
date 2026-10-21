@@ -14,13 +14,6 @@ from hephaestus.core.config import RunConfig
 from hephaestus.core.types import Conditions, ErrorRecord, SearchSpec, StabilityThresholds
 from hephaestus.llm.base import LLM, LLMError
 
-FALLBACK_REGISTRY = {
-    "band_gap": "eV",
-    "bulk_modulus": "GPa",
-    "shear_modulus": "GPa",
-    "formation_energy": "eV/atom",
-    "density": "g/cm3",
-}
 TOXIC = {"lead": "Pb", "cadmium": "Cd", "mercury": "Hg", "arsenic": "As", "thallium": "Tl"}
 STABILITY_CONSTRAINTS = ("thermodynamically stable", "dynamically stable")
 NOVELTY_CONSTRAINT = "novel: not an experimentally known compound and not previously reported"
@@ -37,7 +30,7 @@ direction) is missing or ambiguous."""
 
 
 def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
-    """Return the property registry, from C's module when available (PP-1).
+    """Return the property registry (PP-1).
 
     Parameters
     ----------
@@ -47,17 +40,11 @@ def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
     Returns
     -------
     dict
-        Property key to a dict with at least ``units``.
+        Property key to ``{units, published_error, ...}``.
     """
-    try:
-        from hephaestus.tools import properties
+    from hephaestus.tools.simulation import property_registry as registry
 
-        fn = getattr(properties, "property_registry", None)
-        if fn is not None:
-            return dict(fn(fidelity))
-    except Exception:
-        pass
-    return {k: {"units": u} for k, u in FALLBACK_REGISTRY.items()}
+    return registry(fidelity)
 
 
 def goal_schema(keys: list[str]) -> dict[str, Any]:

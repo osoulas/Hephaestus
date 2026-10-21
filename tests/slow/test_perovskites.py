@@ -5,6 +5,7 @@ Needs the ``sim`` extra and the MACE model in ``~/.cache/mace`` (downloaded on f
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from hephaestus.tools import simulation as S
@@ -84,3 +85,19 @@ def test_se14_cubic_perovskites_match_stability_doc(calc, a, b, lat, verdict, dE
     print(a + b + "O3", res["verdict"], res["rounds"], f"total {total:.2f} meV/atom")
     assert res["verdict"] == verdict
     assert dE_range[0] <= total <= dE_range[1]
+
+
+def test_pp3_srtio3_bulk_modulus(calc) -> None:  # type: ignore[no-untyped-def]
+    """Cubic SrTiO3 with MACE-MP-0 small: bulk modulus near experiment (about 180 GPa) and DFT (about 170).
+
+    Parameters
+    ----------
+    calc : MACECalculator
+        Potential.
+    """
+    atoms, _, _, _ = S.relax_atoms(cubic("Sr", "Ti", 3.905), calc, fmax=0.005, fix_symmetry=True)
+    C = S.elastic_tensor(atoms, calc)
+    p = S.elastic_properties(C, float(S.to_pmg(atoms).density), 5 / atoms.get_volume())
+    print("SrTiO3 C (GPa)", np.round(C[:4, :4]), {k: round(v, 2) for k, v in p["values"].items()})
+    assert 140 <= p["values"]["bulk_modulus"] <= 210
+    assert p["born_stable"]
