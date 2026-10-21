@@ -31,7 +31,25 @@ from hephaestus.core.types import (
 
 Handler = Callable[..., dict[str, Any]]
 HANDLERS: dict[str, Handler] = {}
-TOOL_MODULES = ["literature", "materials_project", "structures", "simulation", "properties"]
+TOOL_MODULES = ["literature", "materials_project", "structures", "simulation"]
+PROPERTY_KEYS = [
+    "band_gap",
+    "bulk_modulus",
+    "shear_modulus",
+    "youngs_modulus",
+    "poisson_ratio",
+    "pugh_ratio",
+    "cauchy_pressure",
+    "anisotropy_index",
+    "zener_ratio",
+    "sound_velocity_longitudinal",
+    "sound_velocity_transverse",
+    "sound_velocity_mean",
+    "debye_temperature",
+    "formation_energy",
+    "density",
+]
+"""Properties ``predict_property`` accepts; units and errors are in ``simulation.PROPERTY_REGISTRY``."""
 
 
 class ToolError(Exception):
@@ -101,6 +119,7 @@ class CandidateState(BaseModel):
     density_g_cm3: float | None = None
     domain_note: str = ""
     potential_in_domain: bool | None = None
+    elastic: dict[str, Any] | None = None  # tensor (GPa), Born stability, derived properties
     e_hull: float | None = None
     e_form: float | None = None
     decomposes_to: list[str] = Field(default_factory=list)
@@ -405,14 +424,14 @@ TOOLS: list[dict[str, Any]] = [
         "Short NVT MD at the operating temperature; stable if no atom drifts more than 1 Å.",
         {"candidate_id": CID, "duration_ps": {"type": "number"}},
     ),
-    # Properties (C)
+    # Properties
     _tool(
         "predict_property",
-        "Predict a property on the current structure with its uncertainty and a domain flag.",
-        {
-            "candidate_id": CID,
-            "property": _enum("band_gap", "bulk_modulus", "shear_modulus", "formation_energy", "density"),
-        },
+        "Predict a property on the current structure with its uncertainty and a domain flag. Mechanical "
+        "properties (moduli, Poisson and Pugh ratios, Cauchy pressure, anisotropy, sound velocities, Debye "
+        "temperature) come from one elastic-tensor calculation with the candidate's potential; any of them "
+        "returns all the others under 'related', plus the Born mechanical-stability check.",
+        {"candidate_id": CID, "property": _enum(*PROPERTY_KEYS)},
     ),
     # Run control (A)
     _tool(

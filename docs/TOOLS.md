@@ -57,7 +57,7 @@ checks: the target check and both stability verdicts, as used by the gate, the r
 
 ## Tool catalogue
 
-Each section below gives the tool's owner and module.
+Each section below gives the tool's module; owners are listed in `CLAUDE.md`.
 
 ### Literature: owner C, `tools/literature.py`
 
@@ -227,24 +227,30 @@ more than 1 Å after removing the centre-of-mass motion.
 **Input:** `candidate_id`, `duration_ps` (clamped to [0.5, 10]).
 **Returns:** `{candidate_id, stable, max_displacement_A, temperature_K}`.
 
-### Properties: owner C, `tools/properties.py`
+### Properties: `tools/simulation.py`
 
 #### `predict_property`
 Predict a property on the current (relaxed or distorted) structure, with its uncertainty (PP-4) and a
-domain flag (PP-5).
+domain flag (PP-5). The registry (`simulation.property_registry`) lists every key with its units and error.
 
 | Property | Model | Units | Uncertainty |
 | --- | --- | --- | --- |
 | `band_gap` | MEGNet-BandGap-mfi-MP-2019.4.1, fidelity from `RunConfig.band_gap_fidelity` (`hse` default, or `pbe`) | eV | HSE ±0.65 (MAE vs 15 measured perovskite gaps); PBE ±0.57 vs MP PBE gaps, about 1.6 eV below experiment |
-| `bulk_modulus`, `shear_modulus` | strain-stress with the run's potential (±0.5 % strains, Voigt-Reuss-Hill) | GPa | 15 / 20 (typical MLIP MAE) |
+| `bulk_modulus`, `shear_modulus` | elastic tensor from strain-stress with the run's potential (±0.25 and ±0.5 % strains, ions relaxed at each strain), Voigt-Reuss-Hill | GPa | 15 / 20 (typical MLIP MAE) |
+| `youngs_modulus`, `poisson_ratio`, `pugh_ratio` | from K and G | GPa, –, – | propagated from K and G |
+| `sound_velocity_longitudinal`, `sound_velocity_transverse`, `sound_velocity_mean`, `debye_temperature` | from K, G and the density | km/s, K | propagated from K and G |
+| `cauchy_pressure`, `anisotropy_index`, `zener_ratio` | from individual elastic constants (C12 − C44; universal A^U; 2C44/(C11 − C12)) | GPa, –, – | none available (stated) |
 | `formation_energy` | from `energy_above_hull`'s references | eV/atom | 0.05 |
 | `density` | relaxed structure | g/cm³ | 0.1 |
 
-Out-of-domain chemistry widens the uncertainty: ×2 for elements absent from the ABO3 reference set, ×1.5
-for mixed anions. **Input:** `candidate_id`, `property`.
+Out-of-domain chemistry widens the uncertainty: ×2 outside the potential's training set, ×1.5 for mixed
+anions. **Input:** `candidate_id`, `property`.
 
 **Returns:** `{candidate_id, property, value, uncertainty, units, model, in_domain, scale_note}`. For the
-target property it also returns `target: {direction, value, reference}`.
+target property it also returns `target: {direction, value, reference}`. Every mechanical property comes from
+one elastic-tensor calculation (cached), so any of them also returns `related` (all the others, with
+uncertainties), `mechanically_stable` (Born criteria: the tensor is positive definite) and
+`elastic_tensor_GPa`. All mechanical predictions are stored on the candidate at once.
 
 ### Run control: owner A, `harness/`
 

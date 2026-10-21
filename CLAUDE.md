@@ -30,7 +30,8 @@ structures to try, and which calculations each candidate needs. It acts only thr
 - **Database:** look up Materials Project entries and polymorphs.
 - **Structures:** propose a candidate, then build its structure from an MP entry or a prototype template.
 - **Simulation:** relax with MACE, compute energy above the convex hull, run phonons with mode mapping, run MD.
-- **Properties:** predict the band gap with MEGNet, or elastic moduli from the potential.
+- **Properties:** predict the band gap with MEGNet, or the elastic tensor from the potential and what
+  follows from it (moduli, Poisson and Pugh ratios, anisotropy, sound velocities, Debye temperature).
 - **Review and submit:** ask for an independent review, or submit a final answer.
 
 An **independent reviewer LLM** critiques each round. After submission, a higher-fidelity re-check runs,
@@ -101,7 +102,7 @@ Before the rounds, the whole team spends **hour 0 to 1 together on the contracts
 | --- | --- | --- |
 | **A: Harness** | `harness/`, `core/events.py`, `llm/` | A scripted model drives a full campaign through stub tools: proposals, a review, gates refusing a bad submission, stop rules, final check and brief. A killed run resumes. |
 | **B: Science tools** | `tools/structures.py`, `tools/simulation.py`, `harness/final_check.py` | Build, relax, hull, phonons with mode mapping and MD work on cached tiny cases. SrTiO3, BaSnO3, LaFeO3 and a 12.5 % solid solution give the expected verdicts. |
-| **C: Data tools** | `tools/literature.py`, `tools/materials_project.py`, `tools/properties.py`, `core/store.py` | Valency search, similar/citing, trends and evidence notes work and are cached. MP lookup and polymorphs work. MEGNet HSE predictions match the registry error bar. A second identical call makes zero network requests. |
+| **C: Data tools** | `tools/literature.py`, `tools/materials_project.py`, MEGNet band gap in `tools/simulation.py`, `core/store.py` | Valency search, similar/citing, trends and evidence notes work and are cached. MP lookup and polymorphs work. MEGNet HSE predictions match the registry error bar. A second identical call makes zero network requests. |
 
 Tooling is split along its dependencies: B needs structures and potentials, C needs network services and
 models. Neither waits for the other: both meet only at the shared types.
@@ -131,7 +132,7 @@ their files.
 | `core/types.py`, `core/config.py`, `tools/registry.py`, `docs/TOOLS.md` | All three: contracts, changed only by agreement |
 | `harness/` (except `final_check.py`), `core/events.py`, `llm/`, `tools/stubs.py`, `interfaces/python.py`, `interfaces/http.py` | A |
 | `tools/structures.py`, `tools/simulation.py`, `harness/final_check.py`, `interfaces/cli/` | B |
-| `tools/literature.py`, `tools/materials_project.py`, `tools/properties.py`, `core/store.py`, `interfaces/web/` | C |
+| `tools/literature.py`, `tools/materials_project.py`, `core/store.py`, `interfaces/web/` | C |
 
 ### Hours 20–24: everyone
 
@@ -182,8 +183,8 @@ hephaestus/
     literature.py       # Valency client, evidence notes, novelty search
     materials_project.py
     structures.py       # templates, site assignment, polymorphs, supercells
-    simulation.py       # relax, hull, phonons + mode mapping, MD
-    properties.py       # MEGNet band gap (HSE), elastic, property registry
+    simulation.py       # relax, hull, phonons + mode mapping, MD; property registry, elastic
+                        # tensor and derived properties, MEGNet band gap (HSE)
   harness/
     agent.py            # orchestrator loop (API and Claude Code backends)
     reviewer.py         # independent critique + LLM confidence
