@@ -1582,7 +1582,7 @@ table.data tr.best td:first-child {
   background: var(--ember-soft);
   color: var(--ember);
 }
-.log-icon.review {
+.log-icon.decision {
   background: var(--good-wash);
   color: var(--good-ink);
 }
