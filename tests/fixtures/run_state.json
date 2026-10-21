@@ -1,0 +1,361 @@
+{
+  "run_id": "r-fixture",
+  "raw_goal": "a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable (<= 0.05 eV/atom above hull) and dynamically stable",
+  "status": "finished",
+  "created_at": "2026-10-21T09:00:00Z",
+  "config": {
+    "max_iterations": 3,
+    "confidence_threshold": 72,
+    "max_tool_calls": 90,
+    "time_budget_s": 900.0,
+    "llm_backend": "auto",
+    "llm_model": "claude-opus-5-5",
+    "band_gap_fidelity": "hse",
+    "require_novel": false,
+    "potential": "mace-mp-0-small",
+    "final_potential": "mace-mp-0-medium",
+    "cross_check_potential": null,
+    "phonon_mode": "fast",
+    "phonon_gate": "mode_map",
+    "distortion_threshold_meV": 2.0,
+    "run_phonons": true,
+    "device": "auto",
+    "dtype": "float32",
+    "final_dtype": "float64",
+    "max_atoms": 80,
+    "run_final": true,
+    "final_time_budget_s": 600.0,
+    "seed": 0,
+    "offline": false
+  },
+  "spec": {
+    "raw_goal": "a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable (<= 0.05 eV/atom above hull) and dynamically stable",
+    "material_family": "oxide perovskite",
+    "elements": [],
+    "excluded_elements": [
+      "Pb"
+    ],
+    "target_property": "band_gap",
+    "target_value": 3.12,
+    "target_units": "eV",
+    "direction": "minimise",
+    "target_tolerance": null,
+    "reference_material": "SrTiO3",
+    "reference_value": {
+      "value": 3.12,
+      "uncertainty": 0.65,
+      "units": "eV",
+      "source": "MEGNet-BandGap-mfi-MP-2019.4.1 (hse) on mp-5229"
+    },
+    "conditions": {
+      "temperature_K": 300.0,
+      "pressure_GPa": 0.0001
+    },
+    "hard_constraints": [
+      "no Pb",
+      "thermodynamically stable: E_hull <= 0.05 eV/atom",
+      "dynamically stable"
+    ],
+    "soft_preferences": [],
+    "stability_thresholds": {
+      "e_hull_max_eV_per_atom": 0.05,
+      "phonon_min_THz": -0.1
+    },
+    "assumptions": [
+      "Operating conditions default to 300 K and ambient pressure."
+    ]
+  },
+  "literature": {
+    "papers": [
+      {
+        "paper_id": "arxiv:2101.00001",
+        "title": "Band gap engineering in SrTiO3 by B-site substitution",
+        "authors": [
+          "A. Author"
+        ],
+        "year": 2021,
+        "doi": "10.1000/xyz",
+        "url": "https://valency.io/paper/arxiv:2101.00001",
+        "source": "arxiv",
+        "abstract": "We report ... band gap of 3.25 eV ...",
+        "citation_count": 42,
+        "relevance": 0.83,
+        "found_via": "semantic"
+      }
+    ],
+    "insights": [
+      {
+        "composition": "SrTiO3",
+        "property": "band_gap",
+        "value": {
+          "value": 3.25,
+          "uncertainty": null,
+          "units": "eV",
+          "source": "arxiv:2101.00001"
+        },
+        "conditions": "300 K, optical absorption",
+        "finding_type": "positive",
+        "summary": "SrTiO3 indirect gap measured at 3.25 eV.",
+        "paper_id": "arxiv:2101.00001"
+      }
+    ],
+    "property_map": {
+      "SrTiO3": {
+        "value": 3.25,
+        "uncertainty": null,
+        "units": "eV",
+        "source": "arxiv:2101.00001"
+      }
+    },
+    "failed_approaches": [
+      "Sn solubility in SrTiO3 above 30 % gives SnO2 secondary phase"
+    ],
+    "mechanisms": [],
+    "synthesis_routes": [],
+    "open_questions": [],
+    "field_trend": {
+      "2020": 10,
+      "2021": 12
+    },
+    "coverage_note": "Valency indexes arXiv, bioRxiv, medRxiv and PubMed; journal-only papers are missing."
+  },
+  "iterations": [
+    {
+      "candidates": [
+        {
+          "candidate_id": "c1-1",
+          "iteration": 1,
+          "composition": "SrTi0.875Fe0.125O3",
+          "structure_type": "perovskite_cubic",
+          "rationale": "Fe 3d states inside the gap lower it; reported by arxiv:2101.00001.",
+          "evidence_ids": [
+            "arxiv:2101.00001",
+            "mp:5229"
+          ],
+          "prior_estimate": {
+            "value": 2.5,
+            "uncertainty": null,
+            "units": "eV",
+            "source": "orchestrator prior"
+          },
+          "novelty": "variant",
+          "synthesis_feasibility": "easy",
+          "risks": [
+            "oxygen vacancies"
+          ]
+        }
+      ],
+      "structures": [
+        {
+          "candidate_id": "c1-1",
+          "cif": "data_SrTiO3\n_cell_length_a 3.905\n",
+          "pmg_dict": {
+            "@module": "pymatgen.core.structure",
+            "@class": "Structure",
+            "lattice": {
+              "matrix": [
+                [
+                  3.905,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  3.905,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  3.905
+                ]
+              ]
+            },
+            "sites": []
+          },
+          "source": "template:perovskite_cubic",
+          "supercell": [
+            2,
+            2,
+            2
+          ],
+          "n_atoms": 40,
+          "disorder_seed": 0,
+          "composition_error": 0.0
+        }
+      ],
+      "sims": [
+        {
+          "candidate_id": "c1-1",
+          "potential": "mace-mp-0-small",
+          "converged": true,
+          "relaxed": {
+            "candidate_id": "c1-1",
+            "cif": "data_SrTiO3\n_cell_length_a 3.905\n",
+            "pmg_dict": {
+              "@module": "pymatgen.core.structure",
+              "@class": "Structure",
+              "lattice": {
+                "matrix": [
+                  [
+                    3.905,
+                    0,
+                    0
+                  ],
+                  [
+                    0,
+                    3.905,
+                    0
+                  ],
+                  [
+                    0,
+                    0,
+                    3.905
+                  ]
+                ]
+              },
+              "sites": []
+            },
+            "source": "template:perovskite_cubic",
+            "supercell": [
+              2,
+              2,
+              2
+            ],
+            "n_atoms": 40,
+            "disorder_seed": 0,
+            "composition_error": 0.0
+          },
+          "space_group": "Pm-3m",
+          "lattice": {
+            "a": 7.81,
+            "b": 7.81,
+            "c": 7.81,
+            "alpha": 90.0,
+            "beta": 90.0,
+            "gamma": 90.0
+          },
+          "density_g_cm3": 5.1,
+          "energy_eV_per_atom": -7.9,
+          "formation_energy_eV_per_atom": -3.4,
+          "energy_above_hull_eV_per_atom": 0.021,
+          "thermo_stable": true,
+          "phonons": {
+            "mode": "fast",
+            "stable": true,
+            "min_frequency_THz": -0.3,
+            "instability_at": "R",
+            "supercell": [
+              2,
+              2,
+              2
+            ]
+          },
+          "md_stable": null,
+          "domain_note": "All elements in MPtrj.",
+          "wall_time_s": 12.5,
+          "errors": []
+        }
+      ],
+      "predictions": [
+        {
+          "candidate_id": "c1-1",
+          "property": "band_gap",
+          "value": {
+            "value": 2.81,
+            "uncertainty": 0.65,
+            "units": "eV",
+            "source": "MEGNet-BandGap-mfi-MP-2019.4.1 (hse)"
+          },
+          "model": "MEGNet-BandGap-mfi-MP-2019.4.1 (hse)",
+          "in_domain": true,
+          "literature_value": null
+        }
+      ],
+      "critique": {
+        "iteration": 1,
+        "candidate_id": "c1-1",
+        "target_met_central": true,
+        "target_met_conservative": false,
+        "thermo_stable": true,
+        "dyn_stable": true,
+        "score": 72,
+        "score_breakdown": {
+          "property": 15,
+          "thermo": 20,
+          "dynamic": 20,
+          "reliability": 10,
+          "novelty_synthesis": 7
+        },
+        "findings": [
+          {
+            "severity": "major",
+            "category": "reliability",
+            "text": "MEGNet error bar (0.65 eV) exceeds the predicted gap reduction.",
+            "suggestion": "Try a larger Fe fraction.",
+            "paper_ids": []
+          },
+          {
+            "severity": "minor",
+            "category": "synthesis",
+            "text": "Fe-doped SrTiO3 is routinely made by solid-state reaction.",
+            "suggestion": "",
+            "paper_ids": [
+              "arxiv:2101.00001"
+            ]
+          }
+        ],
+        "next_composition": "SrTi0.75Fe0.25O3",
+        "next_rationale": "Larger gap reduction while staying on the hull.",
+        "stop_recommended": false,
+        "stop_reason": null,
+        "llm_confidence": 60,
+        "llm_confidence_reason": "Model-scale win is within the error bar."
+      }
+    }
+  ],
+  "best": "c1-1",
+  "submission": {
+    "candidate_id": "c1-1",
+    "runner_up_id": null,
+    "justification": "Best checks.",
+    "gate_passed": true,
+    "accept_not_met": false,
+    "picked_by": "orchestrator"
+  },
+  "stop_reason": "max_rounds",
+  "validation": [
+    {
+      "candidate_id": "c1-1",
+      "checks": [
+        {
+          "name": "e_hull_eV_per_atom",
+          "screening_value": 0.021,
+          "final_value": 0.025,
+          "delta": 0.004
+        },
+        {
+          "name": "dyn_stable",
+          "screening_value": true,
+          "final_value": true,
+          "delta": null
+        }
+      ],
+      "verdict": "confirmed",
+      "notes": [
+        "Re-relaxed with mace-mp-0-medium, fmax 0.005."
+      ]
+    }
+  ],
+  "brief": {
+    "run_id": "r-fixture",
+    "markdown": "# Experimental brief\n...",
+    "pdf_path": null,
+    "cited_paper_ids": [
+      "arxiv:2101.00001"
+    ]
+  },
+  "errors": [],
+  "usage": {},
+  "versions": {}
+}

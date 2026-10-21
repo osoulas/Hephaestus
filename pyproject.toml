@@ -27,12 +27,14 @@ classifiers = [
 # Core: everything the default test suite needs (no GPU, no network).
 dependencies = [
   "anthropic>=0.40",
+  "ase>=3.23",
   "claude-agent-sdk>=0.1",
   "fastapi>=0.115",
   "httpx>=0.27",
   "mcp>=2.0",
   "mp-api>=0.45",
   "numpy>=1.26",
+  "phonopy>=2.26",
   "pydantic>=2.7",
   "pymatgen>=2024.6.10",
   "rich>=13.7",
@@ -43,10 +45,8 @@ dependencies = [
 # Simulation and property models (MACE, MEGNet, phonons). On Windows with CUDA 12.2,
 # install torch first: pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 sim = [
-  "ase>=3.23",
   "mace-torch>=0.3.10",
   "matgl>=1.1",
-  "phonopy>=2.26",
   "torch>=2.5",
 ]
 dev = [
@@ -78,6 +78,7 @@ hephaestus = ["py.typed", "interfaces/web/**/*"]
 # command line overrides this one: `pytest -m slow`, `pytest -m live`.
 addopts = "-ra --strict-config --strict-markers -m 'not slow and not live'"
 testpaths = ["tests"]
+pythonpath = ["tests"]
 markers = [
   "slow: real MACE / MEGNet on cached tiny cases (pytest -m slow)",
   "live: real LLM, Valency or Materials Project calls (pytest -m live)",
