@@ -6,6 +6,7 @@ API or the sign-in helpers; nothing here computes a result.
 
 from __future__ import annotations
 
+import getpass
 import subprocess
 from pathlib import Path
 
@@ -16,7 +17,15 @@ from rich.text import Text
 from hephaestus.interfaces.cli.render import brief_panel, result_line, spec_panel
 from hephaestus.interfaces.cli.stream import EXIT_FAILED, EXIT_OK, history_renderer
 from hephaestus.interfaces.cli.theme import DASH, GLYPH, mark
-from hephaestus.interfaces.python import ExperimentError, backend_status, device_status, list_runs, models
+from hephaestus.interfaces.python import (
+    ExperimentError,
+    backend_status,
+    device_status,
+    list_runs,
+    models,
+    run_blockers,
+    simulation_status,
+)
 
 
 def runs_view(console: Console, root: Path | None = None, limit: int = 20) -> int:
@@ -140,8 +149,35 @@ def brief_view(console: Console, run_id: str, root: Path | None = None, pdf: boo
     return EXIT_OK
 
 
+def load_saved_keys() -> None:
+    """Put keys saved under ``~/.hephaestus/`` into the environment, unless already set (DL-7).
+
+    The Anthropic API key and the Materials Project key are saved by ``hephaestus login`` (or the
+    web UI's Connections dialog). The server loads them at start-up, and so does every CLI command.
+    """
+    try:
+        from hephaestus.core import credentials
+        from hephaestus.llm.auth import load_api_key
+
+        load_api_key()
+        credentials.load_secret("materials_project")
+    except Exception:  # an unreadable key file must not stop the CLI; readiness checks report it
+        pass
+
+
+def blockers() -> list[str]:
+    """Reasons a run cannot pass its first step, one sentence each (empty when runs can start).
+
+    Returns
+    -------
+    list of str
+        From ``run_blockers(simulation_status())``: MACE missing, or no Materials Project key.
+    """
+    return list(run_blockers(simulation_status()))
+
+
 def backends_view(console: Console) -> int:
-    """Readiness of each model-access backend, the models and the device (OR-11, UI-12).
+    """Show readiness: model access, simulation packages, the Materials Project key and blockers (OR-11, UI-12).
 
     Parameters
     ----------
@@ -151,7 +187,7 @@ def backends_view(console: Console) -> int:
     Returns
     -------
     int
-        Exit code: 0 when the ``auto`` choice is ready.
+        Exit code: 0 when the ``auto`` choice is ready and nothing blocks a run.
     """
     st = backend_status()
     t = Table(box=None, header_style="muted", pad_edge=False, padding=(0, 2))
@@ -164,23 +200,94 @@ def backends_view(console: Console) -> int:
     auto = st["auto"]
     t.add_row("auto", mark(auto["ready"]), f"uses {auto['resolves_to']}")
     console.print(t)
+    sim = simulation_status()
+    s = Table(box=None, header_style="muted", pad_edge=False, padding=(0, 2))
+    for col in ("simulation", "ready", "detail"):
+        s.add_column(col)
+    s.add_row(
+        "mace",
+        mark(sim.get("mace")),
+        "screening and final potentials" if sim.get("mace") else 'pip install -e ".[sim]"',
+    )
+    s.add_row(
+        "matgl", mark(sim.get("matgl")), "MEGNet band gap" if sim.get("matgl") else 'pip install -e ".[sim]"'
+    )
+    s.add_row(
+        "torch", mark(sim.get("torch")), device_status()["device"] if sim.get("torch") else "not installed"
+    )
+    mp = _mp_key_status()
+    s.add_row("mp key", mark(sim.get("mp_key")), mp)
+    console.print(s)
     m = models()
-    dev = device_status()
     console.print(
         Text(
             f"  models {GLYPH['dot']} " + ", ".join(m["models"]) + f" (default {m['default']})", style="muted"
         )
     )
-    console.print(
-        Text(
-            f"  device {GLYPH['dot']} {dev['device']}" + ("" if dev["torch"] else " (torch not installed)"),
-            style="muted",
-        )
-    )
-    return EXIT_OK if auto["ready"] else EXIT_FAILED
+    found = blockers()
+    for reason in found:
+        console.print(result_line(f"[bad]blocked:[/] {reason}"))
+    return EXIT_OK if auto["ready"] and not found else EXIT_FAILED
 
 
-def login(console: Console) -> int:
+def _mp_key_status() -> str:
+    """Describe where the Materials Project key comes from, without showing it.
+
+    Returns
+    -------
+    str
+        E.g. ``"saved (…a1B2)"``, ``"from the environment (…a1B2)"`` or a hint to add one.
+    """
+    from hephaestus.core import credentials
+
+    st = credentials.secret_status("materials_project")
+    if not st.get("present"):
+        return "missing: hephaestus login --mp-api-key"
+    where = "saved" if st.get("source") == "saved" else "from the environment"
+    return f"{where} ({st.get('hint')})"
+
+
+LOGIN_MODES = ("claude", "api-key", "forget-api-key", "mp-api-key", "forget-mp-api-key")
+
+
+def login(console: Console, mode: str = "claude") -> int:
+    """Sign in to Claude, or save or remove an API key (OR-11, DL-7).
+
+    Parameters
+    ----------
+    console : rich.console.Console
+        Output console.
+    mode : str
+        One of ``LOGIN_MODES``: ``claude`` signs in to Claude Code in this terminal
+        (``claude auth login --claudeai``); ``api-key`` and ``mp-api-key`` ask for a key with
+        input hidden, check it with one request and save it owner-only; the ``forget-`` modes
+        delete the saved key.
+
+    Returns
+    -------
+    int
+        Exit code: 0 when signed in, saved or removed.
+    """
+    if mode == "api-key":
+        return _save_anthropic_key(console)
+    if mode == "forget-api-key":
+        from hephaestus.llm import auth
+
+        auth.forget_api_key()
+        console.print(result_line("Saved Anthropic API key removed."))
+        return EXIT_OK
+    if mode == "mp-api-key":
+        return _save_mp_key(console)
+    if mode == "forget-mp-api-key":
+        from hephaestus.core import credentials
+
+        credentials.delete_secret("materials_project")
+        console.print(result_line("Saved Materials Project key removed."))
+        return EXIT_OK
+    return _claude_code_login(console)
+
+
+def _claude_code_login(console: Console) -> int:
     """Sign in to Claude Code in the terminal (``claude auth login --claudeai``), then re-check.
 
     Parameters
@@ -216,6 +323,63 @@ def login(console: Console) -> int:
         return EXIT_OK
     console.print(result_line(f"{mark(False)} Still signed out: {st.get('error') or ''}"))
     return EXIT_FAILED
+
+
+def _save_anthropic_key(console: Console) -> int:
+    """Ask for an Anthropic API key with input hidden, check it and save it owner-only.
+
+    Parameters
+    ----------
+    console : rich.console.Console
+        Output console.
+
+    Returns
+    -------
+    int
+        Exit code: 0 when saved.
+    """
+    from hephaestus.llm import auth
+
+    key = getpass.getpass("Anthropic API key (input hidden): ")
+    try:
+        st = auth.save_api_key(key, check=auth.check_api_key)  # looked up now, so tests can replace it
+    except ValueError as exc:
+        console.print(result_line(f"[bad]Not saved:[/] {exc}"))
+        return EXIT_FAILED
+    console.print(result_line(f"{mark(True)} Saved {st['hint']} to {auth.api_key_path()} (owner-only)."))
+    return EXIT_OK
+
+
+def _save_mp_key(console: Console) -> int:
+    """Ask for a Materials Project API key with input hidden, check it and save it owner-only.
+
+    The format check matches the HTTP API's: letters and digits, at least 16 characters.
+
+    Parameters
+    ----------
+    console : rich.console.Console
+        Output console.
+
+    Returns
+    -------
+    int
+        Exit code: 0 when saved.
+    """
+    from hephaestus.core import credentials
+    from hephaestus.tools import materials_project
+
+    key = getpass.getpass("Materials Project API key (input hidden): ").strip()
+    if not (key.isalnum() and len(key) >= 16):
+        reason: str | None = "That does not look like a Materials Project API key (32 letters and digits)."
+    else:
+        reason = materials_project.check_mp_key(key)
+    if reason:
+        console.print(result_line(f"[bad]Not saved:[/] {reason}"))
+        return EXIT_FAILED
+    credentials.write_secret("materials_project", key)
+    path = credentials.secret_path("materials_project")
+    console.print(result_line(f"{mark(True)} Saved …{key[-4:]} to {path} (owner-only)."))
+    return EXIT_OK
 
 
 def signin(console: Console) -> int:

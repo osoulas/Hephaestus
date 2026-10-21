@@ -72,3 +72,17 @@ def test_cli_entry_point_runs() -> None:
 
     assert main(["--help"]) == 0
     assert {"run", "parse", "replay", "resume", "login", "backends", "signin", "serve"} <= set(SUBCOMMANDS)
+
+
+def test_or11_cli_login_saves_an_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``login --api-key`` stores the key without echoing it; ``--forget-api-key`` removes it."""
+    from hephaestus.llm import auth
+
+    monkeypatch.setenv("HEPHAESTUS_HOME", str(tmp_path))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(auth, "check_api_key", lambda key: None)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "sk-ant-api03-test-WXYZ")
+    assert main(["login", "--api-key"]) == 0
+    assert (tmp_path / "anthropic_api_key").read_text(encoding="utf-8") == "sk-ant-api03-test-WXYZ"
+    assert main(["login", "--forget-api-key"]) == 0
+    assert not (tmp_path / "anthropic_api_key").exists()

@@ -651,21 +651,25 @@ def _replay(s: Session, args: list[str]) -> bool:
 
 
 def _login(s: Session, args: list[str]) -> bool:
-    """``/login``: Claude Code sign-in.
+    """``/login [mode]``: sign in to Claude Code, or save or remove an API key (OR-11, DL-7).
 
     Parameters
     ----------
     s : Session
         Session.
     args : list of str
-        Ignored.
+        Optional mode from ``actions.LOGIN_MODES``; Claude Code sign-in when empty.
 
     Returns
     -------
     bool
         True.
     """
-    actions.login(s.console)
+    mode = args[0] if args else "claude"
+    if mode not in actions.LOGIN_MODES:
+        s.console.print(result_line(f"[warn]Choose one of {', '.join(actions.LOGIN_MODES)}.[/]"))
+        return True
+    actions.login(s.console, mode)
     return True
 
 
@@ -760,7 +764,13 @@ _ALL = [
     Command("resume", "<id>", "Resume an interrupted run", _resume, _run_ids),
     Command("replay", "<id> [speed]", "Replay a stored run, offline", _replay, _run_ids),
     Command("backends", "", "Readiness of each model-access option", lambda s, a: _backend(s, [])),
-    Command("login", "", "Sign in to Claude Code", _login),
+    Command(
+        "login",
+        "[mode]",
+        "Claude sign-in, or save/remove an API or MP key",
+        _login,
+        lambda s: list(actions.LOGIN_MODES),
+    ),
     Command("signin", "", "Sign in to Valency (literature)", _signin),
     Command("clear", "", "Clear the screen", _clear),
     Command("exit", "", "Quit", _exit),

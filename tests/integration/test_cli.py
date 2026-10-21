@@ -207,24 +207,58 @@ def test_runs_show_and_brief(tmp_path: Path) -> None:
     assert code == 1 and "No run nope" in out
 
 
+READY_STATUS = {
+    "api": {"ready": False, "error": "ANTHROPIC_API_KEY is not set."},
+    "claude-code": {"ready": True, "error": None, "auth_method": "claude.ai"},
+    "auto": {"resolves_to": "claude-code", "ready": True},
+}
+
+
 def test_backends_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``backends`` shows each option's readiness without calling out."""
+    monkeypatch.setenv("HEPHAESTUS_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(actions, "backend_status", lambda: READY_STATUS)
     monkeypatch.setattr(
-        actions,
-        "backend_status",
-        lambda: {
-            "api": {"ready": False, "error": "ANTHROPIC_API_KEY is not set."},
-            "claude-code": {"ready": True, "error": None, "auth_method": "claude.ai"},
-            "auto": {"resolves_to": "claude-code", "ready": True},
-        },
+        actions, "simulation_status", lambda: {"mace": True, "matgl": True, "torch": True, "mp_key": True}
     )
     code, out = cli(["backends"], tmp_path)
-    assert (
-        code == 0
-        and "claude-code" in out
-        and "ANTHROPIC_API_KEY is not set." in out
-        and "uses claude-code" in out
+    assert code == 0, out
+    assert "claude-code" in out and "ANTHROPIC_API_KEY is not set." in out and "uses claude-code" in out
+    assert "mace" in out and "blocked" not in out
+
+
+def test_or1_backends_lists_blockers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing MACE or a missing MP key is reported, with the fix, and fails the check."""
+    monkeypatch.setenv("HEPHAESTUS_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("MP_API_KEY", raising=False)
+    monkeypatch.setattr(actions, "backend_status", lambda: READY_STATUS)
+    monkeypatch.setattr(
+        actions, "simulation_status", lambda: {"mace": False, "matgl": True, "torch": True, "mp_key": False}
     )
+    code, out = cli(["backends"], tmp_path)
+    assert code == 1
+    assert "blocked: MACE is not installed" in out and "Materials Project" in out
+    assert "hephaestus login --mp-api-key" in out
+
+
+def test_dl7_login_saves_and_forgets_an_mp_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``login --mp-api-key`` checks and saves the key owner-only; a malformed key is refused."""
+    from hephaestus.tools import materials_project
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HEPHAESTUS_HOME", str(home))
+    monkeypatch.delenv("MP_API_KEY", raising=False)
+    monkeypatch.setattr(materials_project, "check_mp_key", lambda key: None)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "short")
+    code, out = cli(["login", "--mp-api-key"], tmp_path)
+    assert code == 1 and "does not look like" in out and not (home / "mp_api_key").exists()
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "a1B2" * 8)
+    code, out = cli(["login", "--mp-api-key"], tmp_path)
+    assert code == 0 and "…a1B2" in out
+    assert (home / "mp_api_key").read_text(encoding="utf-8") == "a1B2" * 8
+    assert (home / "mp_api_key").stat().st_mode & 0o777 == 0o600
+    code, _ = cli(["login", "--forget-mp-api-key"], tmp_path)
+    assert code == 0 and not (home / "mp_api_key").exists()
 
 
 def test_usage_error_exit_2(tmp_path: Path) -> None:
