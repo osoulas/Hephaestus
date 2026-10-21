@@ -2765,3 +2765,19 @@ details.issues[open] > summary {
   background: var(--good);
   color: #fff;
 }
+
+.doc a.cite {
+  font-size: 0.78em;
+  vertical-align: 0.3em;
+  line-height: 0;
+  text-decoration: none;
+  color: var(--focus);
+  margin-left: 1px;
+}
+.doc a.cite:hover {
+  text-decoration: underline;
+}
+.doc sub {
+  font-size: 0.72em;
+  line-height: 0;
+}
