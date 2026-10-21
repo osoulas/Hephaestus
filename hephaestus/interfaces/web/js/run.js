@@ -96,12 +96,27 @@ export function mountRun(root, id, tab, hooks) {
     store("heph-replay-speed", sp);
     // Update the pickers in place: re-rendering the header would close an open popover.
     for (const b of head.querySelectorAll(".speed-picker button")) b.setAttribute("aria-pressed", String(Number(b.dataset.speed) === sp));
-    if (model.isReplay && model.running) {
+    if (model.isReplay) {
+      // also while stopped, so a resumed replay plays at the chosen speed
       try {
         await api(`/replay/${encodeURIComponent(id)}/speed`, { body: { speed: sp } });
       } catch (e) {
         toast(e.message, "critical");
       }
+    }
+  }
+
+  async function resumeReplay() {
+    try {
+      await api(`/replay/${encodeURIComponent(id)}/resume`, { method: "POST" });
+      model.ended = false;
+      model.running = true;
+      model.replayIncomplete = false;
+      lastHeadSig = null;
+      connect(); // history first (already shown, skipped by seq), then the rest
+      schedule();
+    } catch (e) {
+      toast(e.message, "critical");
     }
   }
 
@@ -133,7 +148,12 @@ export function mountRun(root, id, tab, hooks) {
         model.ended = true;
         model.running = false;
         lastHeadSig = null;
-        if (model.isReplay) loadState();
+        const total = ui.replayInfo && ui.replayInfo.total_events;
+        // A stopped replay shows only what it replayed; a finished one may show the stored state.
+        if (model.isReplay) {
+          model.replayIncomplete = Boolean(total && model.events.length < total);
+          if (!model.replayIncomplete) loadState();
+        }
         else loadStateSoon();
         hooks.onChange();
         schedule();
@@ -259,8 +279,12 @@ export function mountRun(root, id, tab, hooks) {
   function headContent() {
     const cfg = model.config || (model.state && model.state.config) || {};
     const status = model.status;
+    const replayTotal = ui.replayInfo && ui.replayInfo.total_events;
+    const replayStopped = model.isReplay && model.ended && replayTotal && model.events.length < replayTotal;
     const statusPill = model.running
       ? h("span.pill.live", null, h("span.dot.live"), model.isReplay ? "Replaying" : "Running")
+      : replayStopped
+        ? pill("Replay stopped", "warning", "stop")
       : status === "finished"
         ? pill("Finished", "good", "check")
         : status === "needs_input"
@@ -365,6 +389,7 @@ export function mountRun(root, id, tab, hooks) {
     const frac = total ? Math.min(1, seen / total) : model.ended ? 1 : 0;
     const source = info.source || sourceId();
     const live = model.running || (!model.ended && seen < total);
+    const stopped = !live && model.ended && total > 0 && seen < total;
     return h(
       "div.replay-bar",
       null,
@@ -384,7 +409,16 @@ export function mountRun(root, id, tab, hooks) {
       ),
       live
         ? h("div.replay-actions", null, speedPicker(), h("button.btn.sm", { onclick: stopReplay }, icon("stop"), "Stop"))
-        : h(
+        : stopped
+          ? h(
+              "div.replay-actions",
+              null,
+              speedPicker(),
+              h("button.btn.sm.primary", { onclick: resumeReplay }, icon("play"), "Resume"),
+              h("button.btn.sm", { onclick: replay }, icon("replay"), "Restart"),
+              h("a.btn.sm", { href: `#/run/${encodeURIComponent(source)}/${ui.tab}` }, icon("x"), "Close replay"),
+            )
+          : h(
             "div.replay-actions",
             null,
             h("button.btn.sm", { onclick: replay }, icon("replay"), "Replay again"),

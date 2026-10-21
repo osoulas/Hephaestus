@@ -27,6 +27,32 @@ MAX_NUDGES = 3
 STRUCTURED_TIMEOUT_S = 600.0
 
 
+async def only_hephaestus_tools(name: str, args: dict[str, Any], context: Any) -> Any:
+    """Refuse any tool that is not one of ours, should the CLI offer one anyway (OR-11).
+
+    Parameters
+    ----------
+    name : str
+        Tool the model asked for.
+    args : dict
+        Its input.
+    context : ToolPermissionContext
+        Unused.
+
+    Returns
+    -------
+    PermissionResultAllow or PermissionResultDeny
+        Allow for ``mcp__hephaestus__*``; deny with a message otherwise.
+    """
+    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+
+    if name.startswith(f"mcp__{SERVER}__"):
+        return PermissionResultAllow()
+    return PermissionResultDeny(
+        message=f"{name} is not available in Hephaestus; use the Hephaestus tools only."
+    )
+
+
 class ClaudeCodeLLM:
     """LLM backend on a signed-in Claude Code CLI via the Claude Agent SDK."""
 
@@ -114,8 +140,15 @@ class ClaudeCodeLLM:
             system_prompt=system,
             tools=[],
             setting_sources=[],
+            # The signed-in account's claude.ai connectors (Docs, Slack, ...) are not settings, so
+            # setting_sources=[] does not hide them: switch them off and use only our MCP server.
+            strict_mcp_config=True,
+            can_use_tool=only_hephaestus_tools,
             thinking={"type": "adaptive", "display": "summarized"},
-            env={"CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": STREAM_CLOSE_TIMEOUT_MS},
+            env={
+                "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": STREAM_CLOSE_TIMEOUT_MS,
+                "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+            },
             **kw,
         )
 

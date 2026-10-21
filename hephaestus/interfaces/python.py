@@ -592,15 +592,53 @@ class Experiment:
             "speed": float(speed),
             "stop": threading.Event(),
         }
-        ctl = handle.replay_control
+        handle._play()
+        return handle
+
+    def _play(self, start: int = 0) -> None:
+        """Publish the stored run's events under this replay's ID in a thread.
+
+        Parameters
+        ----------
+        start : int
+            Index of the first event.
+        """
+        ctl = self.replay_control
+        assert ctl is not None
+        ctl["stop"] = threading.Event()
 
         def play() -> None:
             """Publish the stored events under the replay ID."""
-            self.deps.bus.replay(self.run_id, rid, lambda: ctl["speed"], stop=ctl["stop"])
+            self.deps.bus.replay(
+                ctl["source"], self.run_id, lambda: ctl["speed"], stop=ctl["stop"], start=start
+            )
 
-        handle._thread = threading.Thread(target=play, daemon=True, name=f"replay-{rid}")
-        handle._thread.start()
-        return handle
+        self._thread = threading.Thread(target=play, daemon=True, name=f"replay-{self.run_id}")
+        self._thread.start()
+
+    def resume_replay(self) -> int:
+        """Continue a stopped replay from the first event it has not shown (UI-9).
+
+        Returns
+        -------
+        int
+            Index of the event it resumes from.
+
+        Raises
+        ------
+        ExperimentError
+            If this is not a replay, it is still playing, or it already showed every event.
+        """
+        ctl = self.replay_control
+        if ctl is None:
+            raise ExperimentError(f"{self.run_id} is not a replay.")
+        if self.running:
+            raise ExperimentError(f"Replay {self.run_id} is still playing.")
+        start = len(self.deps.bus.history(self.run_id))
+        if start >= ctl["total_events"]:
+            raise ExperimentError(f"Replay {self.run_id} already finished.")
+        self._play(start)
+        return start
 
     # ------------------------------------------------------------------ step by step
 

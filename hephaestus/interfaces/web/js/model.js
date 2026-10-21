@@ -370,7 +370,8 @@ export class RunModel {
 
   /** @returns {boolean} Whether the stored state may be shown (not mid-replay). */
   get useState() {
-    return Boolean(this.state) && (!this.isReplay || this.ended);
+    // A replay shows the stored state only once it has replayed everything.
+    return Boolean(this.state) && (!this.isReplay || (this.ended && !this.replayIncomplete));
   }
 
   /** @returns {string[]} Every candidate ID, in order of proposal. */
