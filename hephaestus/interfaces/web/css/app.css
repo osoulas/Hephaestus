@@ -2296,6 +2296,65 @@ table.data tr.best td:first-child {
   gap: 12px;
   padding: 14px 22px 22px;
 }
+.stop-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+.stop-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stop-option:hover:not([disabled]),
+.stop-option:focus-visible {
+  border-color: var(--ink-3);
+  background: var(--surface-2);
+}
+.stop-option[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+.stop-option-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+.stop-option-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.stop-option.danger .stop-option-icon {
+  background: var(--critical-wash);
+  color: var(--critical-ink);
+}
+.stop-option.danger:hover {
+  border-color: var(--critical-ink);
+}
+.stop-option-text {
+  display: grid;
+  gap: 2px;
+}
+.stop-option-text span {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.stop-foot {
+  display: flex;
+  justify-content: flex-end;
+}
 .connect-panel {
   border: 1px solid var(--hairline);
   border-radius: 12px;

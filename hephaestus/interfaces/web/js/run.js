@@ -172,13 +172,74 @@ export function mountRun(root, id, tab, hooks) {
 
   // ------------------------------------------------------------------ actions
 
-  async function stop() {
+  async function sendStop(mode) {
     try {
-      const r = await api(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST" });
-      toast(r.stopping ? "Stopping: the campaign will submit its best candidate and write a brief." : "The run is not executing in this server.");
+      const r = await api(`/runs/${encodeURIComponent(id)}/stop?mode=${mode}`, { method: "POST" });
+      if (!r.stopping) toast("The run is not executing in this server.", "warning");
+      else if (mode === "all") toast("Stopping the run once the current calculation returns. You can resume it later.");
+      else toast("Stopping the search: the best candidate goes to the final re-check, then the brief.");
     } catch (e) {
       toast(e.message, "critical");
     }
+  }
+
+  // Stop asks what to stop: just the search (re-check and brief still run) or the whole run.
+  function stop() {
+    const searching = model.phase.campaign !== "done";
+    const dlg = h("dialog.modal.stop-dialog", { "aria-labelledby": "stop-title" });
+    const close = () => {
+      dlg.close();
+      dlg.remove();
+    };
+    dlg.addEventListener("cancel", (e) => {
+      e.preventDefault();
+      close();
+    });
+    dlg.addEventListener("click", (e) => {
+      if (e.target === dlg) close(); // backdrop
+    });
+    const option = (mode, ic, title, text, cls, disabled) =>
+      h(
+        `button.stop-option${cls}`,
+        {
+          type: "button",
+          disabled,
+          onclick: () => {
+            close();
+            sendStop(mode);
+          },
+        },
+        h("span.stop-option-icon", null, icon(ic)),
+        h("span.stop-option-text", null, h("strong", null, title), h("span", null, text)),
+      );
+    dlg.append(
+      h(
+        "div.modal-head",
+        null,
+        h("div", null, h("h2", { id: "stop-title" }, "Stop this run?"), h("div.muted", null, "A calculation already running finishes first; nothing new starts.")),
+        h("button.btn.ghost.icon", { onclick: close, "aria-label": "Close" }, icon("x")),
+      ),
+      h(
+        "div.modal-body",
+        null,
+        option(
+          "campaign",
+          "gate",
+          "Stop the search",
+          searching
+            ? "Submit the best candidate so far. It still gets the final re-check and a lab brief."
+            : "The search has already finished; the re-check and brief are running.",
+          "",
+          !searching,
+        ),
+        option("all", "stop", "Stop everything", "End the run now, with no re-check and no brief. You can resume it later.", ".danger", false),
+        h("div.stop-foot", null, h("button.btn", { onclick: close }, "Keep running")),
+      ),
+    );
+    document.body.append(dlg);
+    dlg.showModal();
+    const first = dlg.querySelector(".stop-option:not([disabled])");
+    if (first) first.focus();
   }
 
   async function resume() {
@@ -290,6 +351,8 @@ export function mountRun(root, id, tab, hooks) {
         ? pill("Replay stopped", "warning", "stop")
       : status === "finished"
         ? pill("Finished", "good", "check")
+      : status === "stopped"
+        ? pill("Stopped", "warning", "stop")
         : status === "needs_input"
           ? pill("Needs input", "warning", "message")
           : status === "failed"

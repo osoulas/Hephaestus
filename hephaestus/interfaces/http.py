@@ -590,20 +590,23 @@ def create_app(
         )
 
     @app.post("/runs/{run_id}/stop")
-    def stop(run_id: str) -> dict[str, Any]:
-        """Ask a run to stop and submit; it still ends with a brief (OR-8, UI-10).
+    def stop(run_id: str, mode: str = Query("campaign", pattern="^(campaign|all)$")) -> dict[str, Any]:
+        """Stop a run (OR-8, UI-10).
 
         Parameters
         ----------
         run_id : str
             Run ID.
+        mode : {"campaign", "all"}
+            ``campaign`` ends the search and still runs the final re-check and the brief; ``all``
+            ends the run after the current calculation, with neither.
 
         Returns
         -------
         dict
-            ``{stopping}``: False when the run is not executing here.
+            ``{stopping, mode}``: ``stopping`` is False when the run is not executing here.
         """
-        return {"stopping": get_experiment(run_id).stop()}
+        return {"stopping": get_experiment(run_id).stop(mode), "mode": mode}
 
     @app.post("/runs/{run_id}/resume")
     def resume(run_id: str) -> dict[str, Any]:
