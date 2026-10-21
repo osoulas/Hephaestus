@@ -26,7 +26,10 @@ null: code computes the reference with the same model as the candidates. Map the
 one of the supported keys, or to "unsupported" if none fits. Separate hard constraints (must \
 hold) from soft preferences. Record every assumption in plain words. Ask at most three \
 clarifying questions, only when a required field (target property, value or reference, \
-direction) is missing or ambiguous."""
+direction) is missing or ambiguous. Give the run a short title (at most eight words, sentence \
+case, no full stop) that names the material family and the target, e.g. "Lead-free perovskite \
+with a smaller gap than SrTiO3"."""
+TITLE_MAX = 70
 
 
 def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
@@ -63,6 +66,7 @@ def goal_schema(keys: list[str]) -> dict[str, Any]:
     s, sn, nn = {"type": "string"}, {"type": ["string", "null"]}, {"type": ["number", "null"]}
     sa = {"type": "array", "items": {"type": "string"}}
     props = {
+        "title": s,
         "material_family": s,
         "elements": sa,
         "excluded_elements": sa,
@@ -127,6 +131,7 @@ def parse_goal(
     )
     spec = SearchSpec(
         raw_goal=raw_goal,
+        title=run_title(raw.get("title"), raw_goal),
         material_family=raw.get("material_family") or "",
         elements=list(raw.get("elements") or []),
         excluded_elements=list(raw.get("excluded_elements") or []),
@@ -154,6 +159,33 @@ def parse_goal(
     return spec, questions, errors
 
 
+def run_title(proposed: str | None, raw_goal: str) -> str:
+    """Return the run's title: the parser's proposal, tidied, else the start of the goal.
+
+    Parameters
+    ----------
+    proposed : str or None
+        Title from the LLM.
+    raw_goal : str
+        The goal, as typed.
+
+    Returns
+    -------
+    str
+        A title of at most ``TITLE_MAX`` characters.
+    """
+    title = " ".join((proposed or "").split()).strip(" .\"'")
+    if not title:
+        words = raw_goal.split()
+        title = " ".join(words[:10])
+        title = title[0].upper() + title[1:] if title else "Untitled run"
+        if len(words) > 10:
+            title += "…"
+    if len(title) > TITLE_MAX:
+        title = title[: TITLE_MAX - 1].rsplit(" ", 1)[0] + "…"
+    return title
+
+
 def expand_constraints(spec: SearchSpec, cfg: RunConfig) -> SearchSpec:
     """Turn wording into explicit fields (GP-4, GP-12, GP-13).
 
@@ -178,16 +210,63 @@ def expand_constraints(spec: SearchSpec, cfg: RunConfig) -> SearchSpec:
             and symbol not in spec.excluded_elements
         ):
             spec.excluded_elements.append(symbol)
-    thr = spec.stability_thresholds
-    wanted = [
-        f"thermodynamically stable: E_hull ≤ {thr.e_hull_max_eV_per_atom} eV/atom",
-        "dynamically stable: no imaginary mode that lowers the energy when frozen in",
-    ]
-    for c in wanted:
-        if not any(h.lower().startswith(c.split(":")[0]) for h in spec.hard_constraints):
-            spec.hard_constraints.append(c)
+    spec = apply_stability_options(spec, cfg)
     if cfg.require_novel and NOVELTY_CONSTRAINT not in spec.hard_constraints:
         spec.hard_constraints.append(NOVELTY_CONSTRAINT)
+    return spec
+
+
+def apply_stability_options(spec: SearchSpec, cfg: RunConfig) -> SearchSpec:
+    """Apply the run's stability options to a spec (SE-13, GP-12).
+
+    The run's E_hull threshold, when set, replaces the goal's; a check turned off for the run is
+    not required by the gate, and its hard constraint is replaced by an assumption.
+
+    Parameters
+    ----------
+    spec : SearchSpec
+        Spec from the parser, or one given by the caller.
+    cfg : RunConfig
+        ``run_hull``, ``e_hull_max_eV_per_atom`` and ``run_phonons``.
+
+    Returns
+    -------
+    SearchSpec
+        A copy with the thresholds, the stability hard constraints and assumptions updated.
+    """
+    spec = spec.model_copy(deep=True)
+    thr = spec.stability_thresholds
+    if cfg.e_hull_max_eV_per_atom is not None:
+        thr.e_hull_max_eV_per_atom = cfg.e_hull_max_eV_per_atom
+    thr.thermodynamic, thr.dynamic = cfg.run_hull, cfg.run_phonons
+    checks = [
+        (
+            thr.thermodynamic,
+            "thermodynamically stable",
+            f"E_hull ≤ {thr.e_hull_max_eV_per_atom} eV/atom",
+            "Thermodynamic stability (energy above hull) is not checked in this run.",
+        ),
+        (
+            thr.dynamic,
+            "dynamically stable",
+            "no imaginary mode that lowers the energy when frozen in",
+            "Dynamic stability (phonons) is not checked in this run.",
+        ),
+    ]
+    for on, name, rule, skipped in checks:
+        hc = spec.hard_constraints
+        at = next((i for i, h in enumerate(hc) if h.lower().startswith(name)), None)
+        if on:
+            # Keep the goal's own wording in place unless the run changed the threshold
+            if at is None:
+                hc.append(f"{name}: {rule}")
+            elif name.startswith("thermo") and cfg.e_hull_max_eV_per_atom is not None:
+                hc[at] = f"{name}: {rule}"
+            spec.assumptions = [a for a in spec.assumptions if a != skipped]
+        else:
+            spec.hard_constraints = [h for h in hc if not h.lower().startswith(name)]
+            if skipped not in spec.assumptions:
+                spec.assumptions.append(skipped)
     return spec
 
 

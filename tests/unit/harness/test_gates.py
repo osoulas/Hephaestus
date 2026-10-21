@@ -4,7 +4,7 @@ import pytest
 from factories import candidate_state, demo_spec, workspace
 
 from hephaestus.core.config import RunConfig
-from hephaestus.core.types import Critique, Finding, Insight
+from hephaestus.core.types import Critique, Finding, Insight, SearchSpec
 from hephaestus.harness import gates as G
 
 
@@ -178,3 +178,62 @@ def test_gp13_submit_gate_novelty() -> None:
     assert G.submission_gate(ws, "c1-1", novelty_hits=0) == (True, [])
     assert not G.submission_gate(ws, "c1-1", novelty_hits=3)[0]
     assert not G.submission_gate(ws, "c1-1", novelty_hits=None)[0]
+
+
+def off(spec: SearchSpec, thermo: bool = True, dyn: bool = True) -> SearchSpec:
+    """Return a copy of ``spec`` with stability checks turned off.
+
+    Parameters
+    ----------
+    spec : SearchSpec
+        Spec to copy.
+    thermo : bool
+        Keep the thermodynamic check.
+    dyn : bool
+        Keep the dynamic check.
+
+    Returns
+    -------
+    SearchSpec
+        The copy.
+    """
+    spec = spec.model_copy(deep=True)
+    spec.stability_thresholds.thermodynamic = thermo
+    spec.stability_thresholds.dynamic = dyn
+    return spec
+
+
+def test_se13_check_turned_off_is_not_required() -> None:
+    """With the hull off, a missing E_hull neither fails the check nor blocks the gate."""
+    spec = off(demo_spec(), thermo=False)
+    c = G.check_target(candidate_state(e_hull=None), spec)
+    assert c["thermo_stable"] is None and c["all_passed"]
+    assert "energy_above_hull" not in G.missing_steps(candidate_state(e_hull=None), spec)
+    ws = workspace()
+    ws.spec = spec
+    ws.candidates["c1-1"] = candidate_state(e_hull=None)
+    assert G.submission_gate(ws, "c1-1") == (True, [])
+
+
+def test_sc8_rubric_rescaled_without_a_check() -> None:
+    """A check turned off is left out of the rubric, and the rest is scaled back to 100."""
+    score, b = G.score_rubric(candidate_state(gap=2.0, e_hull=None), off(demo_spec(), thermo=False), 0, True)
+    assert "thermo" not in b and score == 100
+    score, b = G.score_rubric(candidate_state(gap=2.8, dyn=None), off(demo_spec(), dyn=False), None, False)
+    assert b == {"property": 15, "thermo": 20, "reliability": 15, "novelty_synthesis": 0}
+    assert score == 62  # 50 of 80
+
+
+def test_or9_or10_zero_budget_means_no_limit() -> None:
+    """Rounds and wall time of 0 never fire their stop rules."""
+    cfg = RunConfig(max_iterations=0, time_budget_s=0)
+    many = [critique(score=s) for s in (10, 30, 60)]
+    assert G.should_stop(many, [FAIL_DYN | {"dyn_stable": True}] * 3, cfg, 10**6).rule is None
+
+
+def test_persistent_instability_ignores_phonons_turned_off() -> None:
+    """With phonons off, dyn_stable is None and never counts as an instability."""
+    cfg = RunConfig(max_iterations=10)
+    two = [critique(score=s) for s in (20, 50)]
+    skipped = {"all_passed": False, "dyn_stable": None}
+    assert G.should_stop(two, [skipped, skipped], cfg, 0).rule is None

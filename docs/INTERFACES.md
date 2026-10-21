@@ -66,7 +66,7 @@ Everything the UI and CLI show comes from `ProgressEvent`s:
 | `orchestrator` | finished, per round | `{round, best, stop, rule, gate_note, scores, llm_scores}` | Rounds table, confidence chart (UI-5, UI-15) |
 | `orchestrator` | finished, at the end | `{submitted, rule, usage}` | Submission |
 | `final_calculation` | started / finished / failed | `{candidates}` / `{verdict, checks, notes}` | Validation panel |
-| `brief_generator` | started / finished | `{}` / `{pdf, cited}` | "Brief ready": fetch `/runs/{id}/brief` |
+| `brief_generator` | started / finished | `{}` / `{pdf, cited, compute}` | "Brief ready": fetch `/runs/{id}/brief` (and `?kind=compute`) |
 | `run` | finished / failed | `{status, stop_reason, best, errors}` | End of run |
 
 **Tool events.** These have one `started` and one `finished` (or `failed`) per call. Calls can run
@@ -113,14 +113,14 @@ Base URL `http://127.0.0.1:8000`; interactive docs at `/docs`. Bodies are JSON i
 
 | Endpoint | Body / query | Response |
 | --- | --- | --- |
-| `POST /parse` | `{raw_goal, answers?, llm_backend?, llm_model?, require_novel?, band_gap_fidelity?}` | `{spec, questions, errors, parser}` |
+| `POST /parse` | `{raw_goal, answers?, llm_backend?, llm_model?, require_novel?, band_gap_model?, run_hull?, e_hull_max_eV_per_atom?, run_phonons?}` | `{spec, questions, errors, parser}` |
 | `POST /runs` | `{spec, config}` or `{raw_goal, answers?, config}` | `201 {run_id}`; 409 busy; 503 backend not ready |
 | `GET /runs` | | `[{run_id, raw_goal, status, best, stop_reason, created_at, running}]` newest first |
 | `GET /runs/{id}` | | `RunState` + `running` |
 | `GET /runs/{id}/events` | `?history=true` | SSE stream (below) |
 | `GET /runs/{id}/structure/{candidate_id}` | | CIF text (3D viewer, UI-7) |
-| `GET /runs/{id}/brief` | `?format=md\|pdf` | Markdown or PDF; 404 until written |
-| `POST /runs/{id}/stop` | | `{stopping}` |
+| `GET /runs/{id}/brief` | `?format=md\|pdf&kind=lab\|compute` | Markdown or PDF of the lab brief, or of the computational brief (DFT settings, workflow, starting POSCAR; built on demand for older runs); 404 until written |
+| `POST /runs/{id}/stop?mode=campaign\|all` | | `{stopping, mode}`: `campaign` ends the search (re-check and brief still run); `all` ends the run after the current calculation |
 | `POST /runs/{id}/resume` | | `{run_id, resumed}`; 409 if finished or running |
 | `POST /replay/{id}` | `{speed}` (0 = no pauses) | `{replay_id}` |
 | `GET /health` | | `{ok, backends, device, valency, running}`; never blocks (`backends` is `null` until the first background check ends) |
@@ -200,10 +200,33 @@ signed-out Claude Code CLI hangs instead of failing. If it's not ready, tell the
 does: `Experiment(goal, root=tmp_path, deps=runner.Deps(llm=ScriptedLLM(...), handlers=stub_handlers(), …))`.
 Or render `events.jsonl` from the fixture directly with `ProgressEvent.model_validate_json(line)`.
 
-## Not built yet (ask A)
+## Signing in to Claude
 
-- Browser sign-in to Claude Code: `POST /auth/claude/start|code|cancel` return 501. Meanwhile, sign
-  in from a terminal with `python -m hephaestus login`.
-- `interfaces/cli/app.py` doesn't call `serve` yet. Wiring it up is B's.
-- The web UI is served from `interfaces/web/index.html` once that file exists. Until then, `/`
-  shows a placeholder.
+| Endpoint | Body | Response |
+| --- | --- | --- |
+| `GET /auth/claude` | | `{status, signed_in, url, code_prompt, error}`; `status` is `checking`, `signed_in`, `signed_out`, or a running sign-in's `starting`, `waiting`, `verifying`, `failed`, `cancelled` |
+| `POST /auth/claude/start` | | Runs `claude auth login --claudeai`, which opens the Claude page and finishes by itself after authorising. `url` is the fallback page |
+| `POST /auth/claude/code` | `{code}` | Passes the code the fallback page shows; 409 when no sign-in is waiting |
+| `POST /auth/claude/cancel` | | Stops a running sign-in |
+| `GET /auth/anthropic` | | `{present, source: saved\|environment\|null, hint: "sk-…WXYZ"}`; never the key |
+| `POST /auth/anthropic` | `{api_key}` | Checks the key with one request, saves it owner-only in `~/.hephaestus/anthropic_api_key` and uses it at once; 422 if malformed or rejected |
+| `DELETE /auth/anthropic` | | Deletes the saved key (a key from the environment stays) |
+
+From a terminal: `python -m hephaestus login` (Claude subscription), `login --api-key` (prompts, hidden),
+`login --forget-api-key`, and `python -m hephaestus backends` to check readiness. A saved key is loaded at
+start-up by the server and the CLI unless `ANTHROPIC_API_KEY` is already set.
+
+## The web UI as built
+
+`interfaces/web/` is plain HTML, CSS and ES modules: no build step, no CDN, no web fonts, so it works
+with Wi-Fi off. `python -m hephaestus serve` (or `uvicorn hephaestus.interfaces.http:app`) serves it at `/`.
+
+| File | What it does |
+| --- | --- |
+| `js/app.js` | Hash router (`#/new`, `#/run/<id>/<tab>`), sidebar (runs, Claude/Valency/compute status, theme), goal composer |
+| `js/run.js` | Run header (status, stop/resume/replay, phase stepper) and the tabs: Overview, Activity, Literature, Candidates, Structure, Validation, Brief, Spec |
+| `js/model.js` | Folds `ProgressEvent`s and `RunState` into what the tabs show; decides nothing |
+| `js/chart.js` | Confidence chart (code rubric and reviewer, threshold line, tooltip, table view) and the publications-per-year columns |
+| `js/viewer.js` | Canvas 3D crystal viewer: CIF parsing with symmetry, shaded atoms, B–X bonds, unit cell |
+| `js/markdown.js` | Escaping Markdown renderer for the brief |
+| `css/app.css` | Design tokens (light and dark), layout, components |

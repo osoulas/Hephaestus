@@ -1,5 +1,6 @@
 """Final re-check: the verdict rule and the finalist pipeline through stub tools (Section 9)."""
 
+import itertools
 from typing import Any
 
 from factories import candidate_state, workspace
@@ -174,7 +175,7 @@ def test_fc7_overturn_detected_through_tools() -> None:
 def test_fc9_short_budget_keeps_must_steps_and_drops_optional_items() -> None:
     """With no time left after the winner's Must steps, the Should and Could items are skipped and named."""
     ws = _campaign_ws()
-    ticks = iter(range(0, 1000, 100))
+    ticks = itertools.count(0, 100)
     reports = validate_finalists(
         ws,
         Submission(candidate_id="c1-1", runner_up_id="c1-2", gate_passed=True),
@@ -270,3 +271,77 @@ def test_gp11_relative_target_recomputed_with_final_potential(monkeypatch: Any) 
     assert used == ["mace-mp-0-medium@0.005"]
     assert any(n.startswith("Reference SrTiO3 recomputed with mace-mp-0-medium") for n in report.notes)
     assert final_check.FINAL_FMAX == 0.005
+
+
+def _slow(handlers: dict[str, Any], t: dict[str, float], seconds: float = 10.0) -> None:
+    """Make relaxations advance a fake clock.
+
+    Parameters
+    ----------
+    handlers : dict
+        Handlers, changed in place.
+    t : dict
+        Fake clock ``{"now": s}``.
+    seconds : float
+        Time per relaxation, in s.
+    """
+    relax = handlers["relax"]
+
+    def slow_relax(ws: Workspace, candidate_id: str, potential: str, fmax: float) -> dict[str, Any]:
+        """Advance the clock, then relax.
+
+        Parameters
+        ----------
+        ws : Workspace
+            Workspace.
+        candidate_id : str
+            Candidate.
+        potential : str
+            Potential.
+        fmax : float
+            Force threshold, eV/Å.
+
+        Returns
+        -------
+        dict
+            Stub result.
+        """
+        t["now"] += seconds
+        return relax(ws, candidate_id, potential, fmax)
+
+    handlers["relax"] = slow_relax
+
+
+def test_fc9_optional_item_needs_its_estimated_time_not_just_some_time() -> None:
+    """MD (about ten relaxations) is skipped when only part of its estimated cost remains."""
+    ws = _campaign_ws()
+    t = {"now": 0.0}
+    handlers = stubs.stub_handlers()
+    _slow(handlers, t)
+    reports = validate_finalists(
+        ws,
+        Submission(candidate_id="c1-1", gate_passed=True),
+        handlers,
+        time_budget_s=60,
+        clock=lambda: t["now"],
+    )
+    skipped = next(n for n in reports[0].notes if n.startswith("Skipped"))
+    assert "MD (FC-5) (needs about 100 s, 30 s left)" in skipped
+    assert t["now"] == 30.0  # winner 10 s + two disorder seeds 20 s; MD never started
+
+
+def test_or8_stop_skips_optional_items_and_steps_are_reported() -> None:
+    """A stop request skips the optional items; every tool call is reported started and finished."""
+    ws = _campaign_ws()
+    steps: list[tuple[str, str, Any]] = []
+    reports = validate_finalists(
+        ws,
+        Submission(candidate_id="c1-1", runner_up_id="c1-2", gate_passed=True),
+        stubs.stub_handlers(),
+        on_step=lambda status, tool, info: steps.append((status, tool, info.get("candidate_id"))),
+        should_stop=lambda: True,
+    )
+    assert [r.candidate_id for r in reports] == ["c1-1"]
+    assert "as the run was stopped" in next(n for n in reports[0].notes if n.startswith("Skipped"))
+    assert ("started", "relax", "c1-1") in steps and ("finished", "phonons", "c1-1") in steps
+    assert sum(1 for s in steps if s[0] == "started") == sum(1 for s in steps if s[0] == "finished")

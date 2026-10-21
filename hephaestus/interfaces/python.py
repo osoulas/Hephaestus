@@ -18,15 +18,16 @@ Examples
 from __future__ import annotations
 
 import importlib.util
+import os
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hephaestus.core.config import MODELS, RunConfig, runs_root
+from hephaestus.core.config import BAND_GAP_MODELS, MODELS, RunConfig, runs_root
 from hephaestus.core.events import BUS, EventBus
-from hephaestus.core.store import load_model, new_run_id
+from hephaestus.core.store import atomic_write_text, load_model, new_run_id
 from hephaestus.core.types import ProgressEvent, RunState, SearchSpec
 from hephaestus.harness import runner
 from hephaestus.harness.agent import Campaign
@@ -155,6 +156,7 @@ class Experiment:
         self._error: BaseException | None = None
         self._campaign: Campaign | None = None
         self._source: str | None = None  # stored run behind a replay
+        self.replay_control: dict[str, Any] | None = None  # speed and stop of a replay handle
 
     # ------------------------------------------------------------------ loading
 
@@ -247,15 +249,107 @@ class Experiment:
 
     @property
     def brief_pdf(self) -> Path | None:
-        """The brief's PDF, when one was rendered.
+        """The brief's PDF, rendered now if the run has a brief but no PDF yet (EB-10).
 
         Returns
         -------
         pathlib.Path or None
-            ``brief.pdf``, or ``None``.
+            ``brief.pdf``, or ``None`` before the brief exists.
         """
-        path = self.files.brief_pdf
+        return self._pdf(self.files.brief_md, self.files.brief_pdf)
+
+    @property
+    def compute_brief(self) -> str | None:
+        """The computational brief's Markdown: DFT settings and workflow for the winner.
+
+        Runs finished before it existed get one built now from their stored results.
+
+        Returns
+        -------
+        str or None
+            ``compute_brief.md``, or ``None`` before the lab brief exists.
+        """
+        path = self.files.compute_brief_md
+        if not path.exists() and self.files.brief_md.exists() and not self.running:
+            state, ws, _ = load_for_resume(self.files)
+            runner.write_compute_brief(state, ws, self.files)
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
+    @property
+    def compute_brief_pdf(self) -> Path | None:
+        """The computational brief's PDF, rendered now if missing or stale.
+
+        Returns
+        -------
+        pathlib.Path or None
+            ``compute_brief.pdf``, or ``None`` before the brief exists.
+        """
+        if self.compute_brief is None:
+            return None
+        return self._pdf(self.files.compute_brief_md, self.files.compute_brief_pdf)
+
+    def _pdf(self, md: Path, path: Path) -> Path | None:
+        """Render a brief's PDF if it is missing or older than its Markdown.
+
+        Parameters
+        ----------
+        md : pathlib.Path
+            The brief's Markdown.
+        path : pathlib.Path
+            Its PDF.
+
+        Returns
+        -------
+        pathlib.Path or None
+            The PDF, or ``None`` when there is no Markdown.
+        """
+        if md.exists() and (not path.exists() or path.stat().st_mtime < md.stat().st_mtime):
+            from hephaestus.harness.brief_pdf import export_pdf
+
+            state = self.state
+            export_pdf(md.read_text(encoding="utf-8"), path, state.run_id, state.raw_goal)
         return path if path.exists() else None
+
+    @property
+    def title(self) -> str:
+        """The run's title: the user's edit if any, else the parser's, else the start of the goal.
+
+        Returns
+        -------
+        str
+            Title.
+        """
+        return run_title_of(self.root or runs_root(), self._source or self.run_id, self.state)
+
+    def set_title(self, title: str) -> str:
+        """Rename the run; safe while it runs, as the title lives in its own file.
+
+        Parameters
+        ----------
+        title : str
+            New title.
+
+        Returns
+        -------
+        str
+            The stored title.
+
+        Raises
+        ------
+        ExperimentError
+            If the run does not exist, is a replay, or the title is empty or too long.
+        """
+        if self._source is not None:
+            raise ExperimentError("A replay takes its title from the recorded run.")
+        if not self.exists:
+            raise ExperimentError(f"No run {self.run_id}.")
+        clean = " ".join(title.split())
+        if not clean:
+            raise ExperimentError("The title cannot be empty.")
+        if len(clean) > TITLE_MAX_EDIT:
+            raise ExperimentError(f"Keep the title under {TITLE_MAX_EDIT} characters.")
+        atomic_write_text(self.files.root / TITLE_FILE, clean)
+        return clean
 
     def structure(self, candidate_id: str) -> str | None:
         """CIF of a candidate's current structure, relaxed when available (UI-7).
@@ -270,20 +364,24 @@ class Experiment:
         str or None
             CIF text, or ``None`` when the run has no structure for that candidate.
         """
-        if not self.files.workspace.exists():
+        if self.files.workspace.exists():
+            cs = load_model(self.files.workspace, Workspace).candidates.get(candidate_id)
+            if cs is not None:
+                cif = _to_cif(cs.structure) or (cs.record.cif if cs.record is not None else None)
+                if _has_atoms(cif):
+                    return cif
+        if not self.exists:
             return None
-        ws = load_model(self.files.workspace, Workspace)
-        cs = ws.candidates.get(candidate_id)
-        if cs is None:
-            return None
-        if cs.structure is not None:
-            try:
-                from pymatgen.core import Structure
-
-                return str(Structure.from_dict(cs.structure).to(fmt="cif"))
-            except Exception:
-                pass
-        return cs.record.cif if cs.record is not None else None
+        for it in reversed(self.state.iterations):  # runs stored without workspace.json
+            for sim in it.sims:
+                if sim.candidate_id == candidate_id and sim.relaxed is not None:
+                    cif = _to_cif(sim.relaxed.pmg_dict) or sim.relaxed.cif
+                    if _has_atoms(cif):
+                        return cif
+            for rec in it.structures:
+                if rec.candidate_id == candidate_id and _has_atoms(rec.cif):
+                    return rec.cif
+        return None
 
     # ------------------------------------------------------------------ parsing
 
@@ -489,17 +587,48 @@ class Experiment:
             raise self._error
         return self._result if self._result is not None else (self.state if self.exists else None)
 
-    def stop(self) -> bool:
-        """Ask the campaign to stop and submit; the run still ends with a brief (OR-8, UI-10).
+    def set_replay_speed(self, speed: float) -> None:
+        """Change a running replay's speed (UI-9).
+
+        Parameters
+        ----------
+        speed : float
+            New speed; 0 plays the rest with no pauses.
+
+        Raises
+        ------
+        ExperimentError
+            If this is not a replay.
+        """
+        if self.replay_control is None:
+            raise ExperimentError(f"{self.run_id} is not a replay.")
+        self.replay_control["speed"] = float(speed)
+
+    def stop(self, mode: str = "campaign") -> bool:
+        """Stop the run (OR-8, UI-10).
+
+        For a replay handle, ends the replay instead.
+
+        Parameters
+        ----------
+        mode : {"campaign", "all"}
+            ``"campaign"``: end the search; the best candidate still gets the final re-check and
+            the brief. ``"all"``: end the run after the current calculation, with no re-check and
+            no brief; ``resume()`` continues it later.
 
         Returns
         -------
         bool
             True if the run is active in this process.
         """
+        if mode not in ("campaign", "all"):
+            raise ValueError(f"mode must be 'campaign' or 'all', not {mode!r}")
+        if self.replay_control is not None:
+            self.replay_control["stop"].set()
+            return self.running
         if self._campaign is not None:
-            self._campaign.request_stop()
-        return runner.request_stop(self.run_id)
+            self._campaign.request_stop(abort=mode == "all")
+        return runner.request_stop(self.run_id, mode)
 
     # ------------------------------------------------------------------ events
 
@@ -558,14 +687,59 @@ class Experiment:
         handle = Experiment(self.goal, self.config, spec=self.spec, run_id=rid, root=self.root)
         handle.deps.bus = self.deps.bus
         handle._source = self.run_id
+        handle.replay_control = {
+            "source": self.run_id,
+            "total_events": len(self.deps.bus.history(self.run_id)),
+            "speed": float(speed),
+            "stop": threading.Event(),
+        }
+        handle._play()
+        return handle
+
+    def _play(self, start: int = 0) -> None:
+        """Publish the stored run's events under this replay's ID in a thread.
+
+        Parameters
+        ----------
+        start : int
+            Index of the first event.
+        """
+        ctl = self.replay_control
+        assert ctl is not None
+        ctl["stop"] = threading.Event()
 
         def play() -> None:
             """Publish the stored events under the replay ID."""
-            self.deps.bus.replay(self.run_id, rid, speed)
+            self.deps.bus.replay(
+                ctl["source"], self.run_id, lambda: ctl["speed"], stop=ctl["stop"], start=start
+            )
 
-        handle._thread = threading.Thread(target=play, daemon=True, name=f"replay-{rid}")
-        handle._thread.start()
-        return handle
+        self._thread = threading.Thread(target=play, daemon=True, name=f"replay-{self.run_id}")
+        self._thread.start()
+
+    def resume_replay(self) -> int:
+        """Continue a stopped replay from the first event it has not shown (UI-9).
+
+        Returns
+        -------
+        int
+            Index of the event it resumes from.
+
+        Raises
+        ------
+        ExperimentError
+            If this is not a replay, it is still playing, or it already showed every event.
+        """
+        ctl = self.replay_control
+        if ctl is None:
+            raise ExperimentError(f"{self.run_id} is not a replay.")
+        if self.running:
+            raise ExperimentError(f"Replay {self.run_id} is still playing.")
+        start = len(self.deps.bus.history(self.run_id))
+        if start >= ctl["total_events"]:
+            raise ExperimentError(f"Replay {self.run_id} already finished.")
+        self._play(start)
+        return start
 
     # ------------------------------------------------------------------ step by step
 
@@ -667,6 +841,78 @@ class Experiment:
 
 # ---------------------------------------------------------------------- module helpers
 
+TITLE_FILE = "title.txt"
+TITLE_MAX_EDIT = 120
+
+
+def run_title_of(root: Path, run_id: str, state: RunState | None = None) -> str:
+    """Return a run's title: ``title.txt`` (the user's edit), else the parser's, else the goal's start.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Runs folder.
+    run_id : str
+        Run ID.
+    state : RunState, optional
+        The run's state, when already loaded.
+
+    Returns
+    -------
+    str
+        Title.
+    """
+    try:
+        edited = (Path(root) / run_id / TITLE_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        edited = ""
+    if edited:
+        return edited
+    if state is not None and state.spec is not None and state.spec.title:
+        return state.spec.title
+    from hephaestus.harness.goal import run_title
+
+    return run_title(None, state.raw_goal if state is not None else run_id)
+
+
+def _to_cif(pmg_dict: dict[str, Any] | None) -> str | None:
+    """Render a pymatgen structure dict as CIF.
+
+    Parameters
+    ----------
+    pmg_dict : dict or None
+        ``Structure.as_dict()`` output.
+
+    Returns
+    -------
+    str or None
+        CIF text, or ``None`` when the dict is empty or unreadable.
+    """
+    if not pmg_dict:
+        return None
+    try:
+        from pymatgen.core import Structure
+
+        return str(Structure.from_dict(pmg_dict).to(fmt="cif"))
+    except Exception:
+        return None
+
+
+def _has_atoms(cif: str | None) -> bool:
+    """Whether a CIF lists atom sites (stub records hold only a ``data_`` line).
+
+    Parameters
+    ----------
+    cif : str or None
+        CIF text.
+
+    Returns
+    -------
+    bool
+        True when the CIF has an ``_atom_site_`` loop.
+    """
+    return bool(cif) and "_atom_site_" in cif  # type: ignore[operator]
+
 
 def list_runs(root: Path | None = None) -> list[dict[str, Any]]:
     """Summaries of the stored runs, newest first (UI-9, UI-16).
@@ -679,7 +925,7 @@ def list_runs(root: Path | None = None) -> list[dict[str, Any]]:
     Returns
     -------
     list of dict
-        ``{run_id, raw_goal, status, best, stop_reason, created_at, running}`` per run.
+        ``{run_id, raw_goal, title, status, best, stop_reason, created_at, running}`` per run.
     """
     base = Path(root) if root else runs_root()
     out = []
@@ -692,6 +938,7 @@ def list_runs(root: Path | None = None) -> list[dict[str, Any]]:
             {
                 "run_id": s.run_id,
                 "raw_goal": s.raw_goal,
+                "title": run_title_of(base, s.run_id, s),
                 "status": s.status,
                 "best": s.best,
                 "stop_reason": s.stop_reason,
@@ -731,6 +978,48 @@ def backend_status(check_claude_code: bool = True) -> dict[str, Any]:
     return {"api": api, "claude-code": claude, "auto": {"resolves_to": auto, "ready": ready}}
 
 
+def simulation_status() -> dict[str, Any]:
+    """Whether the simulation stack and Materials Project access are available, without importing them.
+
+    Returns
+    -------
+    dict
+        ``{mace, matgl, torch, mp_key}`` booleans.
+    """
+    have = lambda mod: importlib.util.find_spec(mod) is not None  # noqa: E731
+    return {
+        "mace": have("mace"),
+        "matgl": have("matgl"),
+        "torch": have("torch"),
+        "mp_key": bool(os.environ.get("MP_API_KEY")),
+    }
+
+
+def run_blockers(sim: dict[str, Any] | None = None) -> list[str]:
+    """List what stops any run from working: missing MACE or Materials Project key.
+
+    Every run builds and relaxes its reference and candidates with MACE, and fetches competing
+    phases for the hull from Materials Project, so without either it fails at the first step.
+
+    Parameters
+    ----------
+    sim : dict, optional
+        A ``simulation_status()`` result; computed when omitted.
+
+    Returns
+    -------
+    list of str
+        One sentence per problem, with the fix; empty when runs can start.
+    """
+    sim = sim or simulation_status()
+    out = []
+    if not sim["mace"]:
+        out.append('MACE is not installed in the server\'s Python: pip install -e ".[sim]".')
+    if not sim["mp_key"]:
+        out.append("No Materials Project API key: add one under Connections, or set MP_API_KEY.")
+    return out
+
+
 def backend_ready(backend: str, status: dict[str, Any] | None = None) -> tuple[bool, str | None]:
     """Whether a run on ``backend`` can start now (``POST /runs`` answers 503 otherwise).
 
@@ -757,14 +1046,23 @@ def backend_ready(backend: str, status: dict[str, Any] | None = None) -> tuple[b
 
 
 def models() -> dict[str, Any]:
-    """List the selectable Claude models and the default (OR-11, UI-12).
+    """List the selectable Claude models and band gap models, with defaults (OR-11, UI-12).
 
     Returns
     -------
     dict
-        ``{models, default}``.
+        ``{models, default, band_gap_models, band_gap_default}``; each band gap model has
+        ``id``, ``label`` and ``description``.
     """
-    return {"models": list(MODELS), "default": RunConfig().llm_model}
+    return {
+        "models": list(MODELS),
+        "default": RunConfig().llm_model,
+        "band_gap_models": [
+            {"id": k, "label": v["label"], "description": v["description"]}
+            for k, v in BAND_GAP_MODELS.items()
+        ],
+        "band_gap_default": RunConfig().band_gap_model,
+    }
 
 
 def device_status() -> dict[str, Any]:
@@ -855,4 +1153,6 @@ __all__ = [
     "models",
     "resume",
     "run",
+    "run_blockers",
+    "simulation_status",
 ]

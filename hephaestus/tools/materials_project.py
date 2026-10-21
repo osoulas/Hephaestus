@@ -562,3 +562,34 @@ def lookup_materials_project(ws: Workspace, composition: str) -> dict[str, Any]:
         "note": NOTE if entries else "Not in Materials Project.",
         "entries": out,
     }
+
+
+def check_mp_key(key: str, timeout_s: float = 15.0) -> str | None:
+    """Ask Materials Project whether an API key works (one small request).
+
+    Parameters
+    ----------
+    key : str
+        Materials Project API key.
+    timeout_s : float
+        Request timeout, s.
+
+    Returns
+    -------
+    str or None
+        Why the key was rejected, or ``None`` when it works or MP could not be reached.
+    """
+    import httpx
+
+    try:
+        r = httpx.get(
+            "https://api.materialsproject.org/materials/summary/",
+            params={"material_ids": "mp-149", "_fields": "material_id", "_limit": 1},
+            headers={"X-API-KEY": key},
+            timeout=timeout_s,
+        )
+    except Exception:
+        return None  # offline: keep the key, a run will report problems
+    if r.status_code in (401, 403):
+        return "Materials Project rejected this key."
+    return None

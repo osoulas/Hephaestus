@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_MODEL = "claude-opus-5-5"
 MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
@@ -21,6 +22,22 @@ def default_model() -> str:
         A model ID such as ``"claude-opus-5-5"``.
     """
     return os.environ.get("HEPHAESTUS_LLM_MODEL") or DEFAULT_MODEL
+
+
+def budget_limit(value: float) -> float:
+    """Return a budget as a limit, where 0 (or less) means no limit (OR-9, OR-10).
+
+    Parameters
+    ----------
+    value : float
+        A budget from ``RunConfig``: rounds, tool calls or seconds.
+
+    Returns
+    -------
+    float
+        ``value``, or ``math.inf`` when it is 0.
+    """
+    return value if value > 0 else math.inf
 
 
 def runs_root() -> Path:
@@ -56,22 +73,47 @@ def user_dir() -> Path:
     return Path(os.environ.get("HEPHAESTUS_HOME", Path.home() / ".hephaestus"))
 
 
+BAND_GAP_MODELS: dict[str, dict[str, Any]] = {
+    "megnet-hse": {
+        "label": "MEGNet multi-fidelity · HSE",
+        "fidelity": "hse",
+        "description": "Hybrid-functional scale; closest to measured gaps (±0.65 eV on 15 perovskites).",
+    },
+    "megnet-pbe": {
+        "label": "MEGNet multi-fidelity · PBE",
+        "fidelity": "pbe",
+        "description": "Materials Project PBE scale; runs about 1.6 eV below experiment (±0.57 eV vs PBE).",
+    },
+    "megnet-gllb-sc": {
+        "label": "MEGNet multi-fidelity · GLLB-SC",
+        "fidelity": "gllb-sc",
+        "description": "GLLB-SC scale; not benchmarked against measured gaps here, so no uncertainty is claimed.",
+    },
+    "megnet-scan": {
+        "label": "MEGNet multi-fidelity · SCAN",
+        "fidelity": "scan",
+        "description": "SCAN meta-GGA scale; not benchmarked against measured gaps here, so no uncertainty is claimed.",
+    },
+}
+"""Band gap models a run can choose: one pretrained MEGNet model with four output fidelities."""
+
+
 class RunConfig(BaseModel):
     """Every per-run option (OR-4). Stored in ``progress.json`` and inside ``RunState``."""
 
     model_config = ConfigDict(extra="forbid")
 
-    # Campaign limits and thresholds (OR-2, OR-9, OR-10)
-    max_iterations: int = 3
+    # Campaign limits and thresholds (OR-2, OR-9, OR-10); a budget of 0 means no limit
+    max_iterations: int = Field(default=3, ge=0)
     confidence_threshold: int = 72
-    max_tool_calls: int = 90
-    time_budget_s: float = 900.0
+    max_tool_calls: int = Field(default=90, ge=0)
+    time_budget_s: float = Field(default=900.0, ge=0)
     max_parallel_tools: int = 4  # tool calls on different candidates run at once
     # LLM access (OR-11)
     llm_backend: Literal["auto", "api", "claude-code"] = "auto"
     llm_model: str = Field(default_factory=default_model)
     # Science options
-    band_gap_fidelity: Literal["hse", "pbe"] = "hse"
+    band_gap_model: Literal["megnet-hse", "megnet-pbe", "megnet-gllb-sc", "megnet-scan"] = "megnet-hse"
     require_novel: bool = False
     potential: str = "mace-mp-0-small"
     final_potential: str = "mace-mp-0-medium"
@@ -80,13 +122,49 @@ class RunConfig(BaseModel):
     phonon_gate: Literal["mode_map", "strict"] = "mode_map"
     distortion_threshold_meV: float = 2.0
     run_phonons: bool = True
+    # Thermodynamic stability (SE-5, SE-13): whether to compute E_hull, and a threshold that
+    # replaces the goal's (None keeps the goal's, which defaults to 0.05 eV/atom)
+    run_hull: bool = True
+    e_hull_max_eV_per_atom: float | None = Field(default=None, ge=0)
     device: Literal["auto", "cpu", "cuda"] = "auto"
     dtype: Literal["float32", "float64"] = "float32"
     final_dtype: Literal["float32", "float64"] = "float64"
     max_atoms: int = 80
     # Final re-check (Section 9)
     run_final: bool = True
-    final_time_budget_s: float = 600.0
+    final_time_budget_s: float = Field(default=600.0, ge=0)
     # Reproducibility and offline replay (SYS-7, SYS-8)
     seed: int = 0
     offline: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_fidelity(cls, data: Any) -> Any:
+        """Read configs saved before ``band_gap_model`` existed, which stored ``band_gap_fidelity``.
+
+        Parameters
+        ----------
+        data : Any
+            Raw input.
+
+        Returns
+        -------
+        Any
+            Input with ``band_gap_fidelity`` turned into ``band_gap_model``.
+        """
+        if isinstance(data, dict) and "band_gap_fidelity" in data:
+            data = dict(data)
+            fid = data.pop("band_gap_fidelity")
+            data.setdefault("band_gap_model", f"megnet-{fid}")
+        return data
+
+    @property
+    def band_gap_fidelity(self) -> str:
+        """Fidelity of the chosen band gap model, e.g. ``"hse"``.
+
+        Returns
+        -------
+        str
+            The MEGNet output fidelity.
+        """
+        return str(BAND_GAP_MODELS[self.band_gap_model]["fidelity"])

@@ -499,7 +499,7 @@ The Experimental Brief Generator writes the document a researcher takes to the l
 | EB-1 | Contain every part listed above, in that order. | Must | Template check passes. |
 | EB-2 | Take every number from the run state; the LLM writes prose only. | Must | Each number in the brief matches a stored value. |
 | EB-3 | Show predicted properties as a table: property, predicted value ± uncertainty, target, met or not. | Must | Table present with all four columns. |
-| EB-4 | Base the synthesis route on literature synthesis insights for the same or closest composition, citing them. | Must | Each synthesis step names its source paper or says "inferred". |
+| EB-4 | Base the synthesis route on literature synthesis insights for the same or closest composition, citing them; for a compound never made, follow the closest analogues and say which. Lab conditions (temperatures, times, atmospheres) come from cited evidence or abstracts, or are marked "inferred"; computed results still come only from the run state (EB-2). | Must | Each synthesis step names its source paper or says "inferred". |
 | EB-5 | Order the characterisation plan by what most quickly confirms or kills the candidate (e.g. XRD for phase first). | Must | First step tests phase identity. |
 | EB-6 | List risks with severity and a concrete fallback for each critical one. | Must | Every critical risk has a fallback. |
 | EB-7 | Link each cited paper to its Valency record. | Must | All citations resolve. |
@@ -554,7 +554,7 @@ The UI talks to the backend over HTTP plus one event stream. All bodies are JSON
 | `GET /runs/{run_id}/events` | none | stream of ProgressEvent (server-sent events) | Drives the live view (UI-3, UI-5, UI-6). |
 | `GET /runs/{run_id}` | none | RunState | Full state for refresh or replay. |
 | `GET /runs/{run_id}/structure/{candidate_id}` | none | CIF text | For the 3D viewer (UI-7). |
-| `GET /runs/{run_id}/brief` | query: format (md or pdf) | file | UI-8. |
+| `GET /runs/{run_id}/brief` | query: format (md or pdf), kind (lab or compute) | file | UI-8. |
 | `POST /runs/{run_id}/stop` | none | {stopping: true} | UI-10. |
 | `POST /replay/{run_id}` | {speed (float, default 1)} | {replay\_id} | Re-emits a stored run's events with no network (UI-9). |
 | `GET /auth/valency` | query: start (bool) | {signed\_in, needs\_signin, access\_token\_expired, pending, url, error} | `?start=true` opens the browser sign-in (UI-11). |
