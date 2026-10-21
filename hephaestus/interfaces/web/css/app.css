@@ -3124,3 +3124,56 @@ details.issues[open] > summary {
     break-inside: avoid-page;
   }
 }
+
+/* run title and goal */
+.goal-quote {
+  margin: 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--ember);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.spec-title {
+  margin-bottom: 6px;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+/* editable run title */
+.title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.run-goal.editable {
+  cursor: text;
+  border-radius: 6px;
+}
+.run-goal.editable:hover {
+  background: var(--surface-2);
+  box-shadow: 0 0 0 4px var(--surface-2);
+}
+.title-edit {
+  opacity: 0;
+  margin-top: 2px;
+  transition: opacity 0.12s;
+}
+.title-row:hover .title-edit,
+.title-edit:focus-visible {
+  opacity: 1;
+}
+.title-input {
+  width: min(900px, 100%);
+  padding: 2px 8px;
+  margin: -3px -9px;
+  border: 1px solid var(--focus);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--info-wash);
+  font: 650 24px/1.25 var(--sans);
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  outline: none;
+}

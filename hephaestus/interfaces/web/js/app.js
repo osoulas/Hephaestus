@@ -90,7 +90,7 @@ function renderSidebar() {
       h(
         `a.run-item${r.run_id === active ? ".active" : ""}`,
         { href: `#/run/${encodeURIComponent(r.run_id)}/overview`, title: r.raw_goal },
-        h("div.run-item-goal", null, r.raw_goal || r.run_id),
+        h("div.run-item-goal", null, r.title || r.raw_goal || r.run_id),
         h(
           "div.run-item-meta",
           null,
@@ -658,7 +658,13 @@ function mountComposer(root) {
       h(
         "div.card-head",
         { style: { paddingBottom: "14px" } },
-        h("div", null, h("div.card-title", null, "Parsed specification"), h("div.card-sub", null, `Checked by ${p.parser.model || "the parser"} · edit the goal and review again to change it`)),
+        h(
+          "div",
+          null,
+          spec && spec.title ? h("div.spec-title", null, spec.title) : null,
+          h("div.card-title", null, "Parsed specification"),
+          h("div.card-sub", null, `Checked by ${modelName(p.parser.model) || "the parser"} · edit the goal and review again to change it`),
+        ),
         open ? pill("Needs answers", "warning", "alert") : errs.length ? pill("Check the goal", "critical", "alert") : pill("Ready to run", "good", "check"),
       ),
     );

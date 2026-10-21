@@ -83,6 +83,7 @@ class SearchSpec(Record):
     """Structured search specification produced by the goal parser (Section 1)."""
 
     raw_goal: str
+    title: str = ""  # short run title proposed by the parser, e.g. "Lead-free perovskite below SrTiO3's gap"
     material_family: str
     elements: list[str] = Field(default_factory=list)
     excluded_elements: list[str] = Field(default_factory=list)

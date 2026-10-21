@@ -282,3 +282,19 @@ def test_eb10_brief_downloads_as_pdf(client: TestClient) -> None:
     r = client.get(f"/runs/{run_id}/brief", params={"format": "pdf"})
     assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
     assert r.content.startswith(b"%PDF") and len(r.content) > 5000
+
+
+def test_run_title_can_be_edited_while_running(client: TestClient) -> None:
+    """A run starts with the parser's (or the goal's) title and can be renamed; bad titles are refused."""
+    run_id = client.post("/runs", json={"raw_goal": scripts.GOAL}).json()["run_id"]
+    first = client.get(f"/runs/{run_id}").json()["title"]
+    assert first and len(first) <= 70
+    r = client.patch(f"/runs/{run_id}", json={"title": "  Fe-doped SrTiO3   follow-up  "})
+    assert r.status_code == 200 and r.json()["title"] == "Fe-doped SrTiO3 follow-up"
+    stream(client, run_id)  # the run keeps rewriting state.json; the title survives
+    assert client.get(f"/runs/{run_id}").json()["title"] == "Fe-doped SrTiO3 follow-up"
+    assert [x["title"] for x in client.get("/runs").json()] == ["Fe-doped SrTiO3 follow-up"]
+    assert client.patch(f"/runs/{run_id}", json={"title": "   "}).status_code == 422
+    assert client.patch(f"/runs/{run_id}", json={"title": "x" * 200}).status_code == 422
+    rid = client.post(f"/replay/{run_id}", json={"speed": 0}).json()["replay_id"]
+    assert client.patch(f"/runs/{rid}", json={"title": "nope"}).status_code == 409
