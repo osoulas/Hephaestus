@@ -60,3 +60,27 @@ def test_dl1_run_dir_created(tmp_path: Path) -> None:
     rid = store.new_run_id()
     assert store.run_dir(rid, tmp_path).is_dir()
     assert rid.startswith("r-")
+
+
+def test_dl3_cached_second_call_does_not_compute(tmp_path: Path) -> None:
+    """The second identical call is served from disk; a new version recomputes."""
+    calls = []
+
+    def compute() -> dict:
+        """Count calls.
+
+        Returns
+        -------
+        dict
+            A result.
+        """
+        calls.append(1)
+        return {"e": -1.5}
+
+    for _ in range(2):
+        assert store.cached("relax", {"s": "SrTiO3", "fmax": 0.02}, compute, "v1", tmp_path) == {"e": -1.5}
+    assert len(calls) == 1
+    store.cached("relax", {"fmax": 0.02, "s": "SrTiO3"}, compute, "v1", tmp_path)  # key order irrelevant
+    assert len(calls) == 1
+    store.cached("relax", {"s": "SrTiO3", "fmax": 0.02}, compute, "v2", tmp_path)
+    assert len(calls) == 2
