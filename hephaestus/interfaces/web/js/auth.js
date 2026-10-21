@@ -1,5 +1,6 @@
-// "Connect Claude" dialog (UI-12): sign in with a Claude subscription through Claude Code, or save
-// an Anthropic API key. The server runs `claude auth login`, which opens the Claude page itself and
+// "Connections" dialog (UI-12): sign in with a Claude subscription through Claude Code, or save
+// an Anthropic API key; and save the Materials Project key every run needs. The server runs
+// `claude auth login`, which opens the Claude page itself and
 // finishes on its own after authorising; a code box covers the case where the page shows a code.
 
 import { api } from "./api.js";
@@ -7,13 +8,37 @@ import { append, h, icon, pill, toast } from "./dom.js";
 
 const ACTIVE = new Set(["starting", "waiting", "verifying"]);
 
+const KEYS = [
+  {
+    id: "api",
+    endpoint: "/auth/anthropic",
+    env: "ANTHROPIC_API_KEY",
+    title: "Anthropic API key",
+    sub: "Alternative to a subscription: billed to your Anthropic Console account.",
+    placeholder: "sk-ant-…",
+    icon: "key",
+    note: "Checked with one request.",
+  },
+  {
+    id: "mp",
+    endpoint: "/auth/materials-project",
+    env: "MP_API_KEY",
+    title: "Materials Project API key",
+    sub: "Required: free from next-gen.materialsproject.org/api.",
+    placeholder: "32 letters and digits",
+    icon: "database",
+    note: "Checked with one request.",
+    required: true,
+  },
+];
+
 /**
  * Open the dialog.
- * @param {{focus?: "claude"|"api", onChange: () => void}} opts Which option to highlight; called after a change.
+ * @param {{focus?: "claude"|"api"|"mp", onChange: () => void}} opts Which option to highlight; called after a change.
  */
 export function openConnectDialog(opts) {
   const dlg = h("dialog.modal", { "aria-labelledby": "connect-title" });
-  const st = { claude: null, key: null, code: "", keyInput: "", busy: null, keyError: null };
+  const st = { claude: null, keys: {}, inputs: {}, errors: {}, code: "", busy: null };
   let timer = null;
   let closed = false;
 
@@ -33,10 +58,10 @@ export function openConnectDialog(opts) {
   });
 
   async function refresh() {
-    const [claude, key] = await Promise.all([api("/auth/claude").catch(() => null), api("/auth/anthropic").catch(() => null)]);
+    const [claude, ...keys] = await Promise.all([api("/auth/claude").catch(() => null), ...KEYS.map((k) => api(k.endpoint).catch(() => null))]);
     const was = st.claude && st.claude.status;
     st.claude = claude;
-    st.key = key;
+    KEYS.forEach((k, i) => (st.keys[k.id] = keys[i]));
     if (claude && claude.status === "signed_in" && was && ACTIVE.has(was)) {
       toast("Signed in to Claude.");
       opts.onChange();
@@ -78,28 +103,29 @@ export function openConnectDialog(opts) {
     refresh();
   }
 
-  async function saveKey() {
-    if (!st.keyInput.trim()) return;
-    st.busy = "key";
-    st.keyError = null;
+  async function saveKey(k) {
+    const value = (st.inputs[k.id] || "").trim();
+    if (!value) return;
+    st.busy = k.id;
+    st.errors[k.id] = null;
     draw();
     try {
-      st.key = await api("/auth/anthropic", { body: { api_key: st.keyInput.trim() } });
-      st.keyInput = "";
-      toast("API key saved.");
+      st.keys[k.id] = await api(k.endpoint, { body: { api_key: value } });
+      st.inputs[k.id] = "";
+      toast(`${k.title} saved.`);
       opts.onChange();
       setTimeout(opts.onChange, 3000);
     } catch (e) {
-      st.keyError = e.message;
+      st.errors[k.id] = e.message;
     }
     st.busy = null;
     draw();
   }
 
-  async function forgetKey() {
+  async function forgetKey(k) {
     try {
-      st.key = await api("/auth/anthropic", { method: "DELETE" });
-      toast("Saved API key removed.");
+      st.keys[k.id] = await api(k.endpoint, { method: "DELETE" });
+      toast(`Saved ${k.title.toLowerCase()} removed.`);
       opts.onChange();
     } catch (e) {
       toast(e.message, "critical");
@@ -159,23 +185,23 @@ export function openConnectDialog(opts) {
     return h(`section.connect-panel${opts.focus === "claude" ? ".focus" : ""}`, null, head, body);
   }
 
-  function keyPanel() {
-    const k = st.key;
+  function keyPanel(k) {
+    const cur = st.keys[k.id];
     const head = h(
       "div.connect-head",
       null,
-      h("div.connect-icon", null, icon("key")),
-      h("div", null, h("div.connect-title", null, "Anthropic API key"), h("div.muted", null, "Billed to your Anthropic Console account.")),
-      k && k.present ? pill(k.source === "environment" ? "From environment" : "Saved", "good", "check") : null,
+      h("div.connect-icon", null, icon(k.icon)),
+      h("div", null, h("div.connect-title", null, k.title), h("div.muted", null, k.sub)),
+      cur && cur.present ? pill(cur.source === "environment" ? "From environment" : "Saved", "good", "check") : cur ? (k.required ? pill("Missing", "critical", "alert") : pill("Not set")) : null,
     );
     const body = h("div.connect-body");
-    if (k && k.present) {
+    if (cur && cur.present) {
       body.append(
         h(
           "div.connect-row",
           { style: { justifyContent: "space-between" } },
-          h("span", null, "Using key ", h("code", null, k.hint)),
-          k.source === "saved" ? h("button.btn.ghost.sm.danger", { onclick: forgetKey }, "Remove") : h("span.muted", { style: { fontSize: "12px" } }, "Set by ANTHROPIC_API_KEY"),
+          h("span", null, "Using key ", h("code", null, cur.hint)),
+          cur.source === "saved" ? h("button.btn.ghost.sm.danger", { onclick: () => forgetKey(k) }, "Remove") : h("span.muted", { style: { fontSize: "12px" } }, `Set by ${k.env}`),
         ),
       );
     }
@@ -185,20 +211,20 @@ export function openConnectDialog(opts) {
         null,
         h("input.input.mono", {
           type: "password",
-          placeholder: k && k.present ? "Replace with a new key" : "sk-ant-…",
-          value: st.keyInput,
+          placeholder: cur && cur.present ? "Replace with a new key" : k.placeholder,
+          value: st.inputs[k.id] || "",
           autocomplete: "off",
           spellcheck: false,
-          oninput: (e) => (st.keyInput = e.target.value),
-          onkeydown: (e) => e.key === "Enter" && saveKey(),
-          "aria-label": "Anthropic API key",
+          oninput: (e) => (st.inputs[k.id] = e.target.value),
+          onkeydown: (e) => e.key === "Enter" && saveKey(k),
+          "aria-label": k.title,
         }),
-        h("button.btn", { onclick: saveKey, disabled: st.busy === "key" }, st.busy === "key" ? h("span.spinner") : null, "Save key"),
+        h("button.btn", { onclick: () => saveKey(k), disabled: st.busy === k.id }, st.busy === k.id ? h("span.spinner") : null, "Save key"),
       ),
-      st.keyError ? h("div.callout.critical", null, icon("alert"), h("div", null, st.keyError)) : null,
-      h("div.muted", { style: { fontSize: "12px" } }, "Checked with one request, then stored owner-only in ", h("code", null, "~/.hephaestus/"), ". It is never shown again or sent anywhere else."),
+      st.errors[k.id] ? h("div.callout.critical", null, icon("alert"), h("div", null, st.errors[k.id])) : null,
+      h("div.muted", { style: { fontSize: "12px" } }, k.note, " Stored owner-only in ", h("code", null, "~/.hephaestus/"), "; never shown again."),
     ]);
-    return h(`section.connect-panel${opts.focus === "api" ? ".focus" : ""}`, null, head, body);
+    return h(`section.connect-panel${opts.focus === k.id ? ".focus" : ""}`, null, head, body);
   }
 
   function draw() {
@@ -208,10 +234,18 @@ export function openConnectDialog(opts) {
       h(
         "div.modal-head",
         null,
-        h("div", null, h("h2", { id: "connect-title" }, "Connect Claude"), h("div.muted", null, "Hephaestus needs one of these to run the orchestrator, reviewer and brief.")),
+        h("div", null, h("h2", { id: "connect-title" }, "Connections"), h("div.muted", null, "Claude runs the orchestrator, reviewer and brief. Materials Project supplies structures and the competing phases for the hull.")),
         h("button.btn.ghost.icon", { onclick: close, "aria-label": "Close" }, icon("x")),
       ),
-      h("div.modal-body", null, claudePanel(), keyPanel()),
+      h(
+        "div.modal-body",
+        null,
+        h("div.modal-section", null, "Claude: pick one"),
+        claudePanel(),
+        keyPanel(KEYS[0]),
+        h("div.modal-section", null, "Materials data"),
+        keyPanel(KEYS[1]),
+      ),
     );
     if (restore) {
       const again = [...dlg.querySelectorAll("input")].find((i) => i.getAttribute("placeholder") === restore);

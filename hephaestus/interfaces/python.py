@@ -18,6 +18,7 @@ Examples
 from __future__ import annotations
 
 import importlib.util
+import os
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -774,6 +775,48 @@ def backend_status(check_claude_code: bool = True) -> dict[str, Any]:
     return {"api": api, "claude-code": claude, "auto": {"resolves_to": auto, "ready": ready}}
 
 
+def simulation_status() -> dict[str, Any]:
+    """Whether the simulation stack and Materials Project access are available, without importing them.
+
+    Returns
+    -------
+    dict
+        ``{mace, matgl, torch, mp_key}`` booleans.
+    """
+    have = lambda mod: importlib.util.find_spec(mod) is not None  # noqa: E731
+    return {
+        "mace": have("mace"),
+        "matgl": have("matgl"),
+        "torch": have("torch"),
+        "mp_key": bool(os.environ.get("MP_API_KEY")),
+    }
+
+
+def run_blockers(sim: dict[str, Any] | None = None) -> list[str]:
+    """List what stops any run from working: missing MACE or Materials Project key.
+
+    Every run builds and relaxes its reference and candidates with MACE, and fetches competing
+    phases for the hull from Materials Project, so without either it fails at the first step.
+
+    Parameters
+    ----------
+    sim : dict, optional
+        A ``simulation_status()`` result; computed when omitted.
+
+    Returns
+    -------
+    list of str
+        One sentence per problem, with the fix; empty when runs can start.
+    """
+    sim = sim or simulation_status()
+    out = []
+    if not sim["mace"]:
+        out.append('MACE is not installed in the server\'s Python: pip install -e ".[sim]".')
+    if not sim["mp_key"]:
+        out.append("No Materials Project API key: add one under Connections, or set MP_API_KEY.")
+    return out
+
+
 def backend_ready(backend: str, status: dict[str, Any] | None = None) -> tuple[bool, str | None]:
     """Whether a run on ``backend`` can start now (``POST /runs`` answers 503 otherwise).
 
@@ -898,4 +941,6 @@ __all__ = [
     "models",
     "resume",
     "run",
+    "run_blockers",
+    "simulation_status",
 ]

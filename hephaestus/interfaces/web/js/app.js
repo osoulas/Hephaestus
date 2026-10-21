@@ -150,8 +150,22 @@ function statusPanel() {
           : h("button.link", { onclick: signInValency }, v.needs_signin && v.access_token_expired ? "Sign in again" : v.pending ? "Waiting…" : "Sign in"),
       ),
     );
+    const sim = hl.simulation || {};
+    rows.push(
+      h(
+        "div.status-row.clickable",
+        { role: "button", tabindex: 0, title: "Materials Project API key", onclick: () => connect("mp"), onkeydown: (e) => e.key === "Enter" && connect("mp") },
+        h(`span.dot.${sim.mp_key ? "good" : "critical"}`),
+        h("span.label", null, "Materials Project"),
+        h("span.value", sim.mp_key ? null : { style: { color: "var(--focus)", fontWeight: 550 } }, sim.mp_key ? "Key set" : "Add key"),
+      ),
+    );
     const d = hl.device;
-    if (d) rows.push(h("div.status-row", null, h(`span.dot.${d.cuda ? "good" : ""}`), h("span.label", null, "Compute"), h("span.value", null, d.cuda ? "GPU (CUDA)" : "CPU")));
+    if (sim.mace === false) {
+      rows.push(h("div.status-row", { title: 'pip install -e ".[sim]"' }, h("span.dot.critical"), h("span.label", null, "Simulation"), h("span.value", null, "MACE missing")));
+    } else if (d) {
+      rows.push(h("div.status-row", null, h(`span.dot.${d.cuda ? "good" : ""}`), h("span.label", null, "Compute"), h("span.value", null, d.cuda ? "GPU (CUDA)" : "CPU")));
+    }
   }
   return h("div.sidebar-foot", null, ...rows, h("div.foot-tools", null, themeButton(), h("a.btn.ghost.sm", { href: "/docs", target: "_blank", rel: "noopener" }, icon("terminal"), "API")));
 }
@@ -445,6 +459,7 @@ function mountComposer(root) {
         ),
       ),
       st.error ? h("div.callout.critical", { style: { marginTop: "18px" } }, icon("alert"), h("div", null, st.error)) : null,
+      blockersCallout(),
       st.parsed ? specReview() : null,
       h(
         "div.card.options",
@@ -553,6 +568,34 @@ function mountComposer(root) {
     if (!st.goal) requestAnimationFrame(() => textarea.focus());
   }
 
+  function blockers() {
+    const hl = app.health || {};
+    const out = [...((hl.simulation && hl.simulation.blockers) || [])];
+    const b = hl.backends;
+    if (b) {
+      const key = st.backend === "auto" ? b.auto.resolves_to : st.backend;
+      if (!(b[key] && b[key].ready)) out.unshift(st.backend === "api" || key === "api" ? "No Anthropic API key." : "Claude Code is signed out.");
+    }
+    return out;
+  }
+
+  function blockersCallout() {
+    const list = blockers();
+    if (!list.length) return null;
+    return h(
+      "div.callout.warning",
+      { style: { marginTop: "18px", alignItems: "flex-start" } },
+      icon("alert"),
+      h(
+        "div",
+        { style: { display: "grid", gap: "8px", flex: 1 } },
+        h("strong", null, "Runs cannot start yet"),
+        h("ul.list-plain", null, list.map((t) => h("li", null, h("span"), h("span", null, t)))),
+        h("div", null, h("button.btn.sm", { onclick: () => connect(list.some((t) => t.includes("Materials Project")) && !list.some((t) => t.includes("Claude") || t.includes("Anthropic")) ? "mp" : "claude") }, icon("key"), "Open connections")),
+      ),
+    );
+  }
+
   function specReview() {
     const p = st.parsed;
     const spec = p.spec;
@@ -599,7 +642,7 @@ function mountComposer(root) {
         "div.card-body",
         { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" } },
         h("span.muted", { style: { fontSize: "12.5px" } }, "Stability verdicts, the target check, budgets and stop rules are decided by code, never by the model."),
-        h("button.btn.primary.lg", { onclick: start, disabled: open || Boolean(st.busy) || !spec }, st.busy === "run" ? h("span.spinner") : icon("play"), "Start run"),
+        h("button.btn.primary.lg", { onclick: start, disabled: open || Boolean(st.busy) || !spec || blockers().length > 0, title: blockers().join(" ") }, st.busy === "run" ? h("span.spinner") : icon("play"), "Start run"),
       ),
     );
     return card;
