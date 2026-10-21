@@ -26,6 +26,7 @@ from hephaestus.core.types import (
 )
 from hephaestus.harness.agent import Campaign, NoveltyFn
 from hephaestus.harness.brief import assemble_brief
+from hephaestus.harness.brief_pdf import export_pdf
 from hephaestus.harness.goal import parse_goal, validate_spec
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot, sync_state, write_artifacts
 from hephaestus.llm.base import LLM, LoggedLLM, make_llm
@@ -644,8 +645,12 @@ def _brief(state: RunState, files: RunFiles, ws: Workspace, llm: LLM, bus: Event
     bus.emit(state.run_id, "brief_generator", "started", {})
     brief, errors = assemble_brief(state, ws, llm)
     state.errors += errors
-    state.brief = brief
     atomic_write_text(files.brief_md, brief.markdown)
+    try:  # a failed PDF degrades the run; the Markdown brief stands (EB-10)
+        brief.pdf_path = str(export_pdf(brief.markdown, files.brief_pdf, state.run_id, state.raw_goal))
+    except Exception as exc:
+        state.errors.append(ErrorRecord(step="brief_pdf", code="export_failed", message=str(exc)[:300]))
+    state.brief = brief
     bus.emit(
         state.run_id, "brief_generator", "finished", {"pdf": brief.pdf_path, "cited": brief.cited_paper_ids}
     )

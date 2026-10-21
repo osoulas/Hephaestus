@@ -2781,3 +2781,346 @@ details.issues[open] > summary {
   font-size: 0.72em;
   line-height: 0;
 }
+
+/* ------------------------------------------------------------------ designed brief */
+
+.doc.brief {
+  padding: 40px 44px 48px;
+  max-width: 880px;
+  font-size: 14.5px;
+}
+.brief-head {
+  margin-bottom: 18px;
+}
+.brief-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+.brief-eyebrow svg {
+  width: 14px;
+  height: 14px;
+}
+.doc .brief-title {
+  margin: 6px 0 0;
+  font-size: 34px;
+  letter-spacing: -0.03em;
+}
+.doc .brief-title sub {
+  font-size: 0.55em;
+}
+.brief-alert {
+  border-left: 0 !important;
+  padding: 12px 14px !important;
+  border-radius: 10px;
+  background: var(--critical-wash);
+  color: var(--critical-ink) !important;
+}
+
+/* at a glance */
+.glance {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0 30px;
+}
+.glance-tile {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+}
+.glance-tile.wide {
+  grid-column: 1 / -1;
+}
+.glance-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.glance-key svg {
+  width: 14px;
+  height: 14px;
+}
+.glance-value {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.glance-tile.good {
+  background: var(--good-wash);
+  border-color: color-mix(in srgb, var(--good) 30%, transparent);
+}
+.glance-tile.good .glance-key {
+  color: var(--good-ink);
+}
+.glance-tile.warning {
+  background: var(--warning-wash);
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+}
+.glance-tile.warning .glance-key {
+  color: var(--warning-ink);
+}
+.glance-tile.critical {
+  background: var(--critical-wash);
+}
+.glance-tile.critical .glance-key {
+  color: var(--critical-ink);
+}
+.glance-tile.next {
+  background: var(--ember-soft);
+  border-color: color-mix(in srgb, var(--ember) 35%, transparent);
+}
+.glance-tile.next .glance-key {
+  color: var(--ember);
+}
+
+/* sections */
+.bsec {
+  --tone: var(--ink-3);
+  --tone-wash: var(--surface-2);
+  position: relative;
+  margin: 0 0 18px;
+  padding: 18px 20px 6px 22px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+}
+.bsec::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 16px;
+  bottom: 16px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--tone);
+}
+.bsec.tone-ember {
+  --tone: var(--ember);
+  --tone-wash: var(--ember-soft);
+}
+.bsec.tone-blue {
+  --tone: var(--series-1);
+  --tone-wash: var(--info-wash);
+}
+.bsec.tone-violet {
+  --tone: #6250d6;
+  --tone-wash: rgba(98, 80, 214, 0.1);
+}
+.bsec.tone-green {
+  --tone: var(--good);
+  --tone-wash: var(--good-wash);
+}
+.bsec.tone-red {
+  --tone: var(--critical);
+  --tone-wash: var(--critical-wash);
+}
+.bsec-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.bsec-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--tone-wash);
+  color: var(--tone);
+  flex: none;
+}
+.bsec-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.doc .bsec h2 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 16.5px;
+}
+.bsec.quiet {
+  background: transparent;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.doc .bsec table {
+  margin-top: 4px;
+}
+.doc .bsec th {
+  background: var(--surface-2);
+}
+.doc .bsec td.cell-yes {
+  color: var(--good-ink);
+  font-weight: 600;
+}
+.doc .bsec td.cell-no {
+  color: var(--critical-ink);
+  font-weight: 600;
+}
+.sev {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.sev-critical {
+  background: var(--critical-wash);
+  color: var(--critical-ink);
+}
+.sev-major {
+  background: var(--serious-wash);
+  color: var(--serious-ink);
+}
+.sev-minor {
+  background: var(--warning-wash);
+  color: var(--warning-ink);
+}
+
+/* callouts inside sections */
+.doc p.callout-approach,
+.doc p.callout-watch,
+.doc p.verdict-line {
+  padding: 10px 14px;
+  border-radius: 10px;
+}
+.doc p.callout-approach {
+  background: var(--tone-wash);
+}
+.doc p.callout-watch {
+  background: var(--warning-wash);
+}
+.doc p.verdict-line.v-confirmed {
+  background: var(--good-wash);
+}
+.doc p.verdict-line.v-weakened {
+  background: var(--warning-wash);
+}
+.doc p.verdict-line.v-overturned {
+  background: var(--critical-wash);
+}
+
+/* numbered steps as a timeline */
+.doc ol.steps {
+  list-style: none;
+  counter-reset: step;
+  margin: 4px 0 14px;
+  padding: 0;
+}
+.doc ol.steps > li {
+  position: relative;
+  counter-increment: step;
+  margin: 0;
+  padding: 0 0 14px 40px;
+}
+.doc ol.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--tone-wash);
+  color: var(--tone);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.doc ol.steps > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 12.5px;
+  top: 30px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--hairline-strong);
+}
+.doc ol.steps > li > strong:first-child {
+  color: var(--ink);
+}
+
+/* references as cards */
+.doc ol.refs {
+  list-style: none;
+  counter-reset: ref;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.doc ol.refs > li {
+  position: relative;
+  counter-increment: ref;
+  margin: 0;
+  padding: 10px 12px 10px 46px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.doc ol.refs > li::before {
+  content: counter(ref);
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--info-wash);
+  color: var(--focus);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+}
+
+/* coloured words */
+.tag-inferred {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--warning-wash);
+  color: var(--warning-ink);
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.crit-pass {
+  color: var(--good-ink);
+  font-weight: 650;
+}
+.crit-stop {
+  color: var(--critical-ink);
+  font-weight: 650;
+}
+
+@media (max-width: 900px) {
+  .glance {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .doc.brief {
+    padding: 22px 16px;
+  }
+}
+
+@media print {
+  .bsec {
+    break-inside: avoid-page;
+  }
+}

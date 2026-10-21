@@ -249,14 +249,20 @@ class Experiment:
 
     @property
     def brief_pdf(self) -> Path | None:
-        """The brief's PDF, when one was rendered.
+        """The brief's PDF, rendered now if the run has a brief but no PDF yet (EB-10).
 
         Returns
         -------
         pathlib.Path or None
-            ``brief.pdf``, or ``None``.
+            ``brief.pdf``, or ``None`` before the brief exists.
         """
         path = self.files.brief_pdf
+        md = self.files.brief_md
+        if md.exists() and (not path.exists() or path.stat().st_mtime < md.stat().st_mtime):
+            from hephaestus.harness.brief_pdf import export_pdf
+
+            state = self.state
+            export_pdf(md.read_text(encoding="utf-8"), path, state.run_id, state.raw_goal)
         return path if path.exists() else None
 
     def structure(self, candidate_id: str) -> str | None:
