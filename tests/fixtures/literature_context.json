@@ -1,0 +1,54 @@
+{
+  "papers": [
+    {
+      "paper_id": "arxiv:2101.00001",
+      "title": "Band gap engineering in SrTiO3 by B-site substitution",
+      "authors": [
+        "A. Author"
+      ],
+      "year": 2021,
+      "doi": "10.1000/xyz",
+      "url": "https://valency.io/paper/arxiv:2101.00001",
+      "source": "arxiv",
+      "abstract": "We report ... band gap of 3.25 eV ...",
+      "citation_count": 42,
+      "relevance": 0.83,
+      "found_via": "semantic"
+    }
+  ],
+  "insights": [
+    {
+      "composition": "SrTiO3",
+      "property": "band_gap",
+      "value": {
+        "value": 3.25,
+        "uncertainty": null,
+        "units": "eV",
+        "source": "arxiv:2101.00001"
+      },
+      "conditions": "300 K, optical absorption",
+      "finding_type": "positive",
+      "summary": "SrTiO3 indirect gap measured at 3.25 eV.",
+      "paper_id": "arxiv:2101.00001"
+    }
+  ],
+  "property_map": {
+    "SrTiO3": {
+      "value": 3.25,
+      "uncertainty": null,
+      "units": "eV",
+      "source": "arxiv:2101.00001"
+    }
+  },
+  "failed_approaches": [
+    "Sn solubility in SrTiO3 above 30 % gives SnO2 secondary phase"
+  ],
+  "mechanisms": [],
+  "synthesis_routes": [],
+  "open_questions": [],
+  "field_trend": {
+    "2020": 10,
+    "2021": 12
+  },
+  "coverage_note": "Valency indexes arXiv, bioRxiv, medRxiv and PubMed; journal-only papers are missing."
+}
