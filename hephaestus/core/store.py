@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from hephaestus.core.config import runs_root
+from hephaestus.core.config import cache_root, runs_root
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -167,3 +169,65 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
     return out
+
+
+def cache_key(namespace: str, inputs: Any, version: str = "") -> str:
+    """Hash of a namespace, canonical JSON inputs and a version (DL-3).
+
+    Parameters
+    ----------
+    namespace : str
+        ``llm``, ``valency``, ``mp``, ``relax`` ...
+    inputs : Any
+        JSON-serialisable inputs; dict keys are sorted.
+    version : str
+        Model or tool version, so a new version misses the old cache.
+
+    Returns
+    -------
+    str
+        Hex SHA-256.
+    """
+    blob = json.dumps([namespace, inputs, version], sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def cached(
+    namespace: str,
+    inputs: Any,
+    compute: Callable[[], Any],
+    version: str = "",
+    root: Path | None = None,
+) -> Any:
+    """Return a stored result for exactly these inputs, or compute and store it (DL-3, SYS-8).
+
+    Parameters
+    ----------
+    namespace : str
+        Cache folder under the cache root.
+    inputs : Any
+        JSON-serialisable inputs that fully determine the result.
+    compute : callable
+        Produces a JSON-serialisable result on a miss.
+    version : str
+        Model or tool version.
+    root : pathlib.Path, optional
+        Cache root; defaults to ``cache_root()``.
+
+    Returns
+    -------
+    Any
+        The cached or freshly computed result.
+    """
+    key = cache_key(namespace, inputs, version)
+    path = (root or cache_root()) / namespace / key[:2] / f"{key}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))["result"]
+        except (json.JSONDecodeError, KeyError):
+            pass
+    result = compute()
+    atomic_write_text(
+        path, json.dumps({"namespace": namespace, "version": version, "result": result}, default=str)
+    )
+    return result
