@@ -1,0 +1,14 @@
+{
+  "composition": "SrTiO3",
+  "property": "band_gap",
+  "value": {
+    "value": 3.25,
+    "uncertainty": null,
+    "units": "eV",
+    "source": "arxiv:2101.00001"
+  },
+  "conditions": "300 K, optical absorption",
+  "finding_type": "positive",
+  "summary": "SrTiO3 indirect gap measured at 3.25 eV.",
+  "paper_id": "arxiv:2101.00001"
+}
