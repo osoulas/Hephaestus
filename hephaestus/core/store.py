@@ -175,6 +175,10 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 _IN_FLIGHT = KeyedLocks()
 
 
+class CacheMiss(KeyError):
+    """Raised by ``cached`` on a miss when the run is offline (SYS-8)."""
+
+
 def cache_key(namespace: str, inputs: Any, version: str = "") -> str:
     """Hash of a namespace, canonical JSON inputs and a version (DL-3).
 
@@ -202,6 +206,7 @@ def cached(
     compute: Callable[[], Any],
     version: str = "",
     root: Path | None = None,
+    offline: bool = False,
 ) -> Any:
     """Return a stored result for exactly these inputs, or compute and store it (DL-3, SYS-8).
 
@@ -219,11 +224,18 @@ def cached(
         Model or tool version.
     root : pathlib.Path, optional
         Cache root; defaults to ``cache_root()``.
+    offline : bool
+        When true, a miss raises ``CacheMiss`` instead of calling ``compute`` (offline replay).
 
     Returns
     -------
     Any
         The cached or freshly computed result.
+
+    Raises
+    ------
+    CacheMiss
+        If the entry is missing and ``offline`` is true.
     """
     key = cache_key(namespace, inputs, version)
     path = (root or cache_root()) / namespace / key[:2] / f"{key}.json"
@@ -233,6 +245,8 @@ def cached(
                 return json.loads(path.read_text(encoding="utf-8"))["result"]
             except (json.JSONDecodeError, KeyError):
                 pass
+        if offline:
+            raise CacheMiss(f"{namespace}: not cached and the run is offline")
         result = compute()
         atomic_write_text(
             path, json.dumps({"namespace": namespace, "version": version, "result": result}, default=str)

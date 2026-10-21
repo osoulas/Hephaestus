@@ -119,13 +119,24 @@ Record a finding for the reviewer and the brief.
 #### `lookup_materials_project`
 All MP polymorphs of an exact composition. **Input:** `composition`.
 
-**Returns:** `{formula, n_entries, default_polymorph, note, entries: [...]}`. Each entry has `mp_id`,
-`space_group`, `e_hull_eV_per_atom` (PBE), `experimental` (ICSD-backed), `n_icsd` (how often it has been
-reported), `band_gap_pbe_eV` and `nsites`.
+**Returns:** `{formula, n_entries, default_polymorph, note, entries: [...]}` (at most 8 entries, lowest
+E_hull first). Each entry has `mp_id`, `space_group`, `e_hull_eV_per_atom` (PBE),
+`formation_energy_eV_per_atom`, `experimental` (ICSD-backed), `n_icsd` (how often it has been reported),
+`band_gap_pbe_eV` and `nsites`. The default polymorph and the others within 0.05 eV/atom (up to 3) also
+carry `phonon: {available, min_frequency_THz, where, method}`: MP's own band-path phonons, **for information
+only**. They flag soft modes on known-stable phases (cubic SrTiO3: −2 THz at R), so `dyn_stable` always
+comes from the `phonons` tool.
 
 `default_polymorph` is the most-reported experimentally observed entry within 0.05 eV/atom of the lowest:
 a proxy for the ambient phase. The 0 K DFT ground state can be a high-temperature phase (LaFeO3: R-3c in
 DFT, Pnma at room temperature).
+
+- **IDs.** MP now issues IDs such as `mp-aaaaahtd`. Legacy IDs (`mp-5229`) still resolve when passed to
+  `build_structure`.
+- **Solid solutions.** Fractional formulas return `n_entries: 0` with a note to look up the end-members,
+  and no request is made.
+- **Caching and offline.** Results are cached (`cache/mp/`). With `RunConfig.offline`, an uncached
+  composition is a tool error.
 
 ### Candidates and structures: owner B, `tools/structures.py`
 
@@ -133,9 +144,17 @@ DFT, Pnma at room temperature).
 Register a candidate before any calculation. **Code checks**, returning `accepted: false` with `reasons`
 when any fail:
 - **Hard constraints:** no excluded elements (CG-2).
-- **Charge balance** under common oxidation states (CG-3). An intentional exception is declared with an
-  `off-stoichiometric: <reason>` risk.
-- **Structure:** the structure type is supported, and the composition is ABX3 for perovskites (CG-9).
+- **Charge balance** under common oxidation states (CG-3). These are pymatgen's common states, plus
+  well-established oxide states it omits: Mn3+, Ni3+, Fe4+, Co4+, Cu+, Ti3+, V3+/4+ and others; see
+  `EXTRA_OXIDATION_STATES` in `tools/structures.py`. An intentional exception is declared with an
+  `off-stoichiometric: <reason>` risk. Up to 5 % missing anions then become vacancies.
+- **Structure:** the composition fits the prototype's sites. Elements are placed by ionic radius, not by
+  formula order (CG-9, SG-5).
+- **Ordered compounds only (for now).** Every site must hold a single element. Doped solid solutions and
+  partly vacant sites are rejected with the shared sites named. They need a choice of dopant site and an
+  ensemble of configurations, which is parked until the ordered workflow is complete
+  (`ALLOW_PARTIAL_OCCUPANCY` in `tools/structures.py`). The builders still support supercells for
+  partial occupancy (SG-4, SG-8); only candidates are refused.
 - **No repeats** of a composition already proposed in this run (CG-6).
 - **Evidence:** at least one `evidence_id`, and each is a retrieved `paper_id` or an `mp:<id>` (CG-4).
 - **Novelty** when `RunConfig.require_novel`: no ICSD-backed MP entry for the exact composition.
@@ -143,7 +162,7 @@ when any fail:
 | Input | Type |
 | --- | --- |
 | `composition` | string (pymatgen notation; site fractions in multiples of 0.125 for supercells ≤ 80 atoms) |
-| `structure_type` | `perovskite_cubic` (more templates are a Should, SG-3) |
+| `structure_type` | a prototype key from `hephaestus/resources/prototypes.json` (list below), or `mp` |
 | `rationale` | string |
 | `evidence_ids` | string[] |
 | `prior_estimate` | number \| null |
@@ -151,8 +170,34 @@ when any fail:
 | `synthesis_feasibility` | `easy` \| `moderate` \| `difficult` \| `unknown` |
 | `risks` | string[] |
 
-**Returns:** `{accepted: true, candidate_id: "c<round>-<n>", sites: {A, B, X}, tolerance_factor}`, or
-`{accepted: false, reasons: [...]}`.
+**Returns:** `{accepted: true, candidate_id: "c<round>-<n>", sites, tolerance_factor, descriptors,
+warnings}`, or `{accepted: false, reasons: [...]}`.
+- `sites` maps each site label to `{element: fraction}`, e.g. `{"A": {"Sr": 1.0}, "B": {"Ti": 0.875,
+  "Fe": 0.125}, "X": {"O": 1.0}}`.
+- `tolerance_factor` is set for perovskites, else null.
+- `descriptors` adds the octahedral factor for perovskites, or rA/rB for pyrochlores.
+- `warnings` include known inverse spinels (NiFe2O4, CoFe2O4, Fe3O4 ...) proposed on the `spinel`
+  template, which always builds the normal arrangement.
+
+**`structure_type: "mp"`** takes the structure from Materials Project as-is, for compounds that no
+prototype fits (a garnet, a scheelite ...).
+- The prototype-fit, disorder and supercell checks are skipped. Every other check still applies,
+  charge balance included.
+- The exact composition must be in MP. Otherwise the candidate is refused at proposal, since there is no
+  prototype to fall back on.
+- The result has `sites: null` and adds `mp_default_polymorph: {mp_id, space_group, n_entries}`.
+
+**Prototypes** (`structure_type`). Each is a reference compound written as labelled Wyckoff orbits in
+`hephaestus/resources/prototypes.json`. Adding one is a single JSON entry, validated on import by
+`tools/prototypes.py`.
+
+| Family | Keys |
+| --- | --- |
+| Perovskite | `perovskite_cubic`, `perovskite_tetragonal`, `perovskite_orthorhombic`, `perovskite_rhombohedral`, `double_perovskite`, `ruddlesden_popper`, `antiperovskite` |
+| Fluorite | `fluorite`, `antifluorite`, `pyrochlore` |
+| Spinel, corundum and others | `spinel`, `ilmenite`, `corundum`, `olivine`, `layered_rocksalt` |
+| Binary | `rocksalt`, `cesium_chloride`, `zincblende`, `wurtzite`, `rutile` |
+| Intermetallic | `b2`, `l12`, `half_heusler`, `full_heusler` |
 
 #### `build_structure`
 Build the starting structure.
@@ -170,8 +215,27 @@ Build the starting structure.
 | `seed` | integer |
 
 **Returns:** `{candidate_id, source ("mp:<id>" | "template:<name>"), n_atoms, supercell, composition_error,
-disorder_seed}`. For MP builds it also returns `polymorph: {space_group, experimental, other_polymorphs}`
-and a note to confirm the phase. Building resets that candidate's later results.
+disorder_seed, space_group, notes}`. `composition_error` is the largest relative error of any element's
+fraction on any site.
+- **MP builds** also return `polymorph: {space_group, experimental, n_icsd, matches_structure_type,
+  other_polymorphs}` and a note to confirm the phase.
+  - `matches_structure_type` is false when the MP polymorph's space group differs from the proposed
+    prototype's. LaFeO3 proposed as `perovskite_cubic` builds as MP's Pnma phase. A note then says the
+    candidate is evaluated in the MP phase and how to get the prototype instead.
+  - It is null for `structure_type: "mp"`.
+  - **Cell size (SG-8).** An MP cell above `RunConfig.max_atoms` is first reduced to its primitive cell.
+    If it is still too big, `auto` falls back to the template and says so in `notes`. An explicit
+    `mp_id`, or a `structure_type: "mp"` candidate, fails with `supercell`.
+- **Template builds** also return `sites` and `lattice_abc_A`. The lattice is scaled from the reference
+  compound by bond lengths (Shannon radii); cubic perovskites use a fitted formula, within 1 % of known
+  cells (SG-13).
+- **`auto` degrades.** If MP is unreachable it falls back to the template and says so in `notes`.
+  A `structure_type: "mp"` candidate has no template: there `source=template` fails with `no_template`, and
+  an unreachable MP fails with `mp_unavailable`.
+
+Building resets that candidate's later results. A failure is a `ToolError` with a named code
+(`no_template`, `disordered`, `supercell`, `geometry`, `mp_missing`, `mp_unavailable`), also recorded in the
+candidate's `errors` (SG-10).
 
 ### Simulation: owner B, `tools/simulation.py`
 
