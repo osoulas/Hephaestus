@@ -1,0 +1,37 @@
+{
+  "candidate_id": "c1-1",
+  "cif": "data_SrTiO3\n_cell_length_a 3.905\n",
+  "pmg_dict": {
+    "@module": "pymatgen.core.structure",
+    "@class": "Structure",
+    "lattice": {
+      "matrix": [
+        [
+          3.905,
+          0,
+          0
+        ],
+        [
+          0,
+          3.905,
+          0
+        ],
+        [
+          0,
+          0,
+          3.905
+        ]
+      ]
+    },
+    "sites": []
+  },
+  "source": "template:perovskite_cubic",
+  "supercell": [
+    2,
+    2,
+    2
+  ],
+  "n_atoms": 40,
+  "disorder_seed": 0,
+  "composition_error": 0.0
+}

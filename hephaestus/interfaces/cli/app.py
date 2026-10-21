@@ -1,6 +1,6 @@
 """Command-line subcommands: ``run``, ``parse``, ``replay``, ``resume``, ``login``, ``signin``, ``backends``, ``serve``.
 
-Owner: B. Placeholder until round 2; every subcommand reports that it is not implemented yet.
+Placeholder until round 2; every subcommand reports that it is not implemented yet.
 """
 
 import argparse

@@ -1,0 +1,8 @@
+{
+  "candidate_id": "c1-1",
+  "runner_up_id": null,
+  "justification": "Best checks.",
+  "gate_passed": true,
+  "accept_not_met": false,
+  "picked_by": "orchestrator"
+}

@@ -121,6 +121,18 @@ behave identically, and a harness fix reaches both.
 Each interface owner can start early (in round 1, if their round-1 piece finishes) against **recorded
 event fixtures** in `tests/fixtures/events/`. They don't need a working engine to build the display.
 
+### File ownership
+
+Ownership is recorded here only; source files carry no owner notes. Ask the owner before changing
+their files.
+
+| Files | Owner |
+| --- | --- |
+| `core/types.py`, `core/config.py`, `tools/registry.py`, `docs/TOOLS.md` | All three: contracts, changed only by agreement |
+| `harness/` (except `final_check.py`), `core/events.py`, `llm/`, `tools/stubs.py`, `interfaces/python.py`, `interfaces/http.py` | A |
+| `tools/structures.py`, `tools/simulation.py`, `harness/final_check.py`, `interfaces/cli/` | B |
+| `tools/literature.py`, `tools/materials_project.py`, `tools/properties.py`, `core/store.py`, `interfaces/web/` | C |
+
 ### Hours 20–24: everyone
 
 - Cache a full demo run.

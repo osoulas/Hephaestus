@@ -1,0 +1,21 @@
+{
+  "candidate_id": "c1-1",
+  "checks": [
+    {
+      "name": "e_hull_eV_per_atom",
+      "screening_value": 0.021,
+      "final_value": 0.025,
+      "delta": 0.004
+    },
+    {
+      "name": "dyn_stable",
+      "screening_value": true,
+      "final_value": true,
+      "delta": null
+    }
+  ],
+  "verdict": "confirmed",
+  "notes": [
+    "Re-relaxed with mace-mp-0-medium, fmax 0.005."
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "mode": "fast",
+  "stable": true,
+  "min_frequency_THz": -0.3,
+  "instability_at": "R",
+  "supercell": [
+    2,
+    2,
+    2
+  ]
+}
