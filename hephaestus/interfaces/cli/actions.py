@@ -11,11 +11,12 @@ import subprocess
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
-from hephaestus.interfaces.cli.render import brief_panel, result_line, spec_panel
-from hephaestus.interfaces.cli.stream import EXIT_FAILED, EXIT_OK, history_renderer
+from hephaestus.interfaces.cli.render import brief_panel, literature_view, result_line, spec_panel
+from hephaestus.interfaces.cli.stream import EXIT_FAILED, EXIT_OK, describe_blocker, history_renderer
 from hephaestus.interfaces.cli.theme import DASH, GLYPH, mark
 from hephaestus.interfaces.python import (
     ExperimentError,
@@ -149,6 +150,57 @@ def brief_view(console: Console, run_id: str, root: Path | None = None, pdf: boo
     return EXIT_OK
 
 
+def literature_cmd(
+    console: Console,
+    run_id: str,
+    root: Path | None = None,
+    *,
+    text_filter: str | None = None,
+    limit: int | None = 15,
+    full: bool = False,
+) -> int:
+    """Show the literature a run gathered (UI-4); works on a running run, as its state is saved after every call.
+
+    Parameters
+    ----------
+    console : rich.console.Console
+        Output console.
+    run_id : str
+        Run ID or folder path.
+    root : pathlib.Path, optional
+        Runs folder.
+    text_filter : str, optional
+        Keep papers whose title, abstract or authors contain this text.
+    limit : int or None
+        Most papers to list; ``None`` lists all.
+    full : bool
+        Whole abstracts.
+
+    Returns
+    -------
+    int
+        Exit code.
+    """
+    from hephaestus.interfaces.cli.stream import locate_run
+    from hephaestus.interfaces.python import Experiment
+
+    rid, base = locate_run(run_id, root)
+    try:
+        state = Experiment.load(rid, base).state
+    except ExperimentError as exc:
+        console.print(result_line(f"[bad]{exc}[/]"))
+        return EXIT_FAILED
+    if state.literature is None or not (state.literature.papers or state.literature.insights):
+        console.print(result_line(f"[muted]Run {rid} has no literature yet.[/]"))
+        return EXIT_OK
+    cited = set(state.brief.cited_paper_ids) if state.brief else set()
+    view = literature_view(
+        state.literature.model_dump(mode="json"), cited, text_filter=text_filter, limit=limit, full=full
+    )
+    console.print(view)
+    return EXIT_OK
+
+
 def load_saved_keys() -> None:
     """Put keys saved under ``~/.hephaestus/`` into the environment, unless already set (DL-7).
 
@@ -207,10 +259,12 @@ def backends_view(console: Console) -> int:
     s.add_row(
         "mace",
         mark(sim.get("mace")),
-        "screening and final potentials" if sim.get("mace") else 'pip install -e ".[sim]"',
+        "screening and final potentials" if sim.get("mace") else escape('pip install -e ".[sim]"'),
     )
     s.add_row(
-        "matgl", mark(sim.get("matgl")), "MEGNet band gap" if sim.get("matgl") else 'pip install -e ".[sim]"'
+        "matgl",
+        mark(sim.get("matgl")),
+        "MEGNet band gap" if sim.get("matgl") else escape('pip install -e ".[sim]"'),
     )
     s.add_row(
         "torch", mark(sim.get("torch")), device_status()["device"] if sim.get("torch") else "not installed"
@@ -226,7 +280,7 @@ def backends_view(console: Console) -> int:
     )
     found = blockers()
     for reason in found:
-        console.print(result_line(f"[bad]blocked:[/] {reason}"))
+        console.print(result_line(f"[bad]blocked:[/] {describe_blocker(reason)}"))
     return EXIT_OK if auto["ready"] and not found else EXIT_FAILED
 
 

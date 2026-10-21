@@ -28,7 +28,13 @@ from hephaestus.interfaces.cli.render import (
     spec_panel,
 )
 from hephaestus.interfaces.cli.theme import ember_frame
-from hephaestus.interfaces.python import Experiment, ExperimentError, backend_ready
+from hephaestus.interfaces.python import (
+    Experiment,
+    ExperimentError,
+    backend_ready,
+    run_blockers,
+    simulation_status,
+)
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_NEEDS_INPUT, EXIT_DETACHED = 0, 1, 2, 3, 130
 MAX_QUESTION_ROUNDS = 3
@@ -305,6 +311,58 @@ def preflight(console: Console, config: RunConfig, deps: runner.Deps | None) -> 
     return True
 
 
+def describe_blocker(reason: str) -> str:
+    """Reword a run blocker for the terminal, as safe markup (``run_blockers`` words them for the web UI).
+
+    Parameters
+    ----------
+    reason : str
+        One sentence from ``run_blockers``.
+
+    Returns
+    -------
+    str
+        The sentence with the command-line fix, markup escaped.
+    """
+    from rich.markup import escape
+
+    text = reason.replace("the server's Python", "this Python environment")
+    text = text.replace(
+        "add one under Connections, or set MP_API_KEY.",
+        "run hephaestus login --mp-api-key (or /login mp-api-key), or set MP_API_KEY.",
+    )
+    return escape(text)
+
+
+def runnable(console: Console, deps: runner.Deps | None) -> bool:
+    """Refuse a run that cannot pass its first step: MACE missing, or no Materials Project key (OR-1).
+
+    ``Experiment.start`` does not check this (only the HTTP API does), so the CLI checks before
+    starting or resuming. Skipped when stub tools are injected, as the HTTP API does.
+
+    Parameters
+    ----------
+    console : rich.console.Console
+        Output console.
+    deps : runner.Deps or None
+        Injected dependencies.
+
+    Returns
+    -------
+    bool
+        True when the run can start.
+    """
+    if deps is not None and deps.handlers is not None:
+        return True
+    found = run_blockers(simulation_status())
+    if not found:
+        return True
+    console.print(result_line("[bad]The run cannot start yet:[/]"))
+    for reason in found:
+        console.print(result_line(describe_blocker(reason)))
+    return False
+
+
 def run_goal(
     console: Console,
     goal: str,
@@ -380,10 +438,12 @@ def run_goal(
         console.print(Text(f"  parsed by {parser.get('backend')} · {parser.get('model')}", style="faint"))
     if parse_only:
         return EXIT_OK
+    if not runnable(console, d):
+        return EXIT_FAILED
     if prompts.interactive and not prompts.confirm("Start the campaign?", True):
         console.print(result_line("[muted]Not started. Change options with /config, or type a new goal.[/]"))
         return EXIT_OK
-    renderer = Renderer(verbose=verbose)
+    renderer = Renderer(verbose=verbose, live=True)
     renderer.spec = spec
     try:
         exp.start()
@@ -430,13 +490,13 @@ def resume_run(
     d = make_deps(deps)
     try:
         exp = Experiment.load(run_id, root, d)
-        if not preflight(console, exp.config, d):
+        if not preflight(console, exp.config, d) or not runnable(console, d):
             return EXIT_FAILED
         exp.start(resume=True)
     except ExperimentError as exc:
         console.print(result_line(f"[bad]{exc}[/]"))
         return EXIT_FAILED
-    renderer = Renderer(verbose=verbose)
+    renderer = Renderer(verbose=verbose, live=True)
     try:
         state = stream(exp, console, renderer, json_lines=json_lines)
     except Detached as d_exc:
@@ -508,7 +568,7 @@ def replay_run(
         console.print(
             Text.assemble((" REPLAY ", "tab.accent"), " ", (run_id, "id"), (f" at {speed:g}\u00d7", "muted"))
         )
-    renderer = Renderer(verbose=verbose)
+    renderer = Renderer(verbose=verbose, replaying=True)
     try:
         state = stream(handle, console, renderer, json_lines=json_lines, stoppable=False)
     except Detached:

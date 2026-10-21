@@ -394,3 +394,51 @@ def test_second_ctrl_c_detaches() -> None:
     with pytest.raises(Detached) as exc:
         stream(run, make_console(file=io.StringIO()), Renderer())  # type: ignore[arg-type]
     assert exc.value.run_id == "r-fake" and run.stopped == 1
+
+
+def test_or1_run_refused_when_it_cannot_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With real tools but no MACE or MP key, the goal is parsed and the run refused, leaving no folder."""
+    from hephaestus.interfaces.cli import stream as stream_mod
+
+    monkeypatch.setattr(
+        stream_mod,
+        "simulation_status",
+        lambda: {"mace": False, "matgl": False, "torch": False, "mp_key": False},
+    )
+
+    def real_tools() -> runner.Deps:
+        """Scripted model, but the real tool handlers (so the run checks apply).
+
+        Returns
+        -------
+        runner.Deps
+            Dependencies.
+        """
+        d = factory()()
+        d.handlers = None
+        return d
+
+    code, out = cli(["run", scripts.GOAL, "--yes"], tmp_path, deps=real_tools)
+    assert code == 1
+    assert "GOAL PARSED" in out and "The run cannot start yet" in out
+    assert 'pip install -e ".[sim]"' in out and "hephaestus login --mp-api-key" in out
+    assert actions.list_runs(tmp_path) == [] and not list(tmp_path.glob("r-*"))
+
+
+def test_ui4_literature_view(tmp_path: Path) -> None:
+    """``literature`` lists a run's papers by relevance, its evidence and the coverage note; filters work."""
+    runs = tmp_path / "runs"
+    shutil.copytree(DEMO, runs / "r-demo")
+    code, out = cli(["literature", "r-demo", "--root", str(runs)], tmp_path)
+    assert code == 0
+    assert "3 papers" in out and "2 cited in the brief" in out
+    assert out.index("Fe-doped SrTiO3") < out.index("Solubility limit of Sn")
+    assert (
+        "EVIDENCE NOTES" in out and "1200.00 C" in out and "SYNTHESIS ROUTES" in out and "Valency Bond" in out
+    )
+    code, out = cli(["literature", "r-demo", "--root", str(runs), "--filter", "solubility"], tmp_path)
+    assert code == 0 and "Solubility limit of Sn" in out and "Fe-doped SrTiO3" not in out
+    code, out = cli(["literature", "nope", "--root", str(runs)], tmp_path)
+    assert code == 1 and "No run nope" in out
+    code, out = cli(["show", "r-demo", "--root", str(runs)], tmp_path)
+    assert "hephaestus literature r-demo" in out

@@ -265,3 +265,82 @@ def test_gutter_runs_down_every_line_of_a_campaign() -> None:
     assert campaign and all(line.startswith(("┃", "━━ ROUND")) for line in campaign if line.strip())
     assert "━━ ROUND 2" in text  # rules open each round, outside the bar
     assert start < review
+
+
+def test_fc9_final_steps_stream_under_the_re_check() -> None:
+    """Each finished re-check step prints once; the running one is named in the status line."""
+    now = [0.0]
+    r = Renderer(clock=lambda: now[0])
+    events = [
+        event("orchestrator", "started", {"backend": "api", "model": "m"}),
+        event("final_calculation", "started", {"candidates": ["c2-1", "c1-1"]}, 1),
+        event(
+            "final_step",
+            "started",
+            {"tool": "relax", "candidate_id": "c2-1", "potential": "mace-mp-0-medium"},
+            2,
+        ),
+        event(
+            "final_step",
+            "finished",
+            {"tool": "relax", "candidate_id": "c2-1", "potential": "mace-mp-0-medium", "wall_s": 12.3},
+            14,
+        ),
+        event(
+            "final_step",
+            "started",
+            {"tool": "phonons", "candidate_id": "ref", "potential": "mace-mp-0-medium", "mode": "full"},
+            15,
+        ),
+    ]
+    text = render(events, r)
+    assert "▸ Re-relax  c2-1 · mace-mp-0-medium" in text and "12s" in text
+    assert "Full phonons" not in text  # still running
+    console = make_console(file=io.StringIO(), width=140, record=True)
+    console.print(r.status())
+    assert "Re-checking: Full phonons for the reference · mace-mp-0-medium" in console.export_text()
+    text = render(
+        [
+            event(
+                "final_step",
+                "failed",
+                {"tool": "phonons", "candidate_id": "ref", "potential": "p", "mode": "full", "wall_s": 3},
+            )
+        ],
+        r,
+    )
+    assert "Full phonons  reference · p · full" in text and "failed" in text and not r.final_steps
+
+
+def test_or9_campaign_and_final_time_against_budgets() -> None:
+    """Campaign and re-check time come from event timestamps and are shown against their budgets."""
+    cfg = {"time_budget_s": 900, "final_time_budget_s": 200, "max_iterations": 3, "max_tool_calls": 90}
+    r = Renderer()
+    render(
+        [
+            event("run", "started", {"config": cfg, "goal": "g"}),
+            event("orchestrator", "started", {"backend": "api", "model": "m"}, 10),
+            event(
+                "orchestrator",
+                "finished",
+                {"submitted": {"candidate_id": "c1-1"}, "rule": "x", "usage": {}},
+                250,
+            ),
+            event("final_calculation", "started", {"candidates": ["c1-1"]}, 260),
+            event("final_step", "started", {"tool": "relax", "candidate_id": "c1-1"}, 261),
+            event("final_step", "finished", {"tool": "relax", "candidate_id": "c1-1", "wall_s": 160}, 430),
+        ],
+        r,
+    )
+    console = make_console(file=io.StringIO(), width=140, record=True)
+    console.print(r.budget_text())
+    text = console.export_text()
+    assert "campaign 4m 00s / 15m 00s" in text  # 10 s to 250 s
+    assert "re-check 2m 50s / 3m 20s" in text  # 260 s to the last event, still open (not live)
+    assert r.budget_text().spans[-2].style == "warn"  # 170 of 200 s is above 80 %
+
+
+def test_ui5_best_so_far_after_each_round() -> None:
+    """Each round closes with the best candidate's code-computed facts."""
+    text = render(demo_events())
+    assert "best so far c1-1 SrTi0.875Fe0.125O3 · band gap 2.60 ± 0.65 eV · E_hull 0.030 eV/atom ✓" in text
