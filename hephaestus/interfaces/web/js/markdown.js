@@ -1,3 +1,5 @@
+import { stripCodes } from "./dom.js";
+
 // A small Markdown renderer for the brief: headings, paragraphs, lists, tables, quotes, code,
 // emphasis and links. Input is escaped first, so the brief cannot inject HTML.
 
@@ -38,7 +40,7 @@ export function slug(t) {
  * @returns {{html: string, headings: {level: number, text: string, id: string}[]}}
  */
 export function renderMarkdown(md) {
-  const lines = esc(md || "").replace(/\r\n/g, "\n").split("\n");
+  const lines = esc(stripCodes(md || "")).replace(/\r\n/g, "\n").split("\n");
   const out = [];
   const headings = [];
   let i = 0;

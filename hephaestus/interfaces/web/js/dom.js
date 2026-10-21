@@ -19,6 +19,7 @@ export function h(tag, attrs, ...children) {
     else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
     else if (k === "dataset") Object.assign(el.dataset, v);
     else if (k === "value") el.value = v; // a property: the attribute does not fill a textarea
+    else if (k === "title" && typeof v === "string") el.setAttribute("title", stripCodes(v));
     else if (k in el && typeof v !== "string") el[k] = v;
     else el.setAttribute(k, v === true ? "" : v);
   }
@@ -34,8 +35,35 @@ export function h(tag, attrs, ...children) {
 export function append(el, children) {
   for (const c of children.flat(Infinity)) {
     if (c == null || c === false || c === true) continue;
-    el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    el.append(c instanceof Node ? c : document.createTextNode(stripCodes(String(c))));
   }
+}
+
+// Requirement IDs from docs/REQUIREMENTS.md (e.g. "FC-1", "GP-11"): useful in code and logs, noise
+// to a user. Server text carries them ("… full phonons (FC-1, FC-2)."), so every string the UI shows
+// passes through stripCodes.
+const CODE = String.raw`\b(?:CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b`;
+const CODE_LIST = String.raw`${CODE}(?:\s*(?:,|;|and|to|–|—|-|/)\s*${CODE})*`;
+const ONLY_CODES = new RegExp(String.raw`\s*\(\s*${CODE_LIST}\s*\)`, "g"); // " (FC-1, FC-2)"
+const TRAILING = new RegExp(String.raw`\s*[,;]\s*${CODE_LIST}(?=\s*\))`, "g"); // "(note; GP-11)"
+const LEADING = new RegExp(String.raw`(\(\s*)${CODE_LIST}\s*[,;:]\s*`, "g"); // "(GP-11: note)"
+const BARE = new RegExp(String.raw`\s*${CODE_LIST}`, "g");
+
+/**
+ * Remove requirement IDs from text shown to the user.
+ * @param {string} text Text.
+ * @returns {string}
+ */
+export function stripCodes(text) {
+  if (!text || !/-\d/.test(text)) return text;
+  return text
+    .replace(ONLY_CODES, "")
+    .replace(TRAILING, "")
+    .replace(LEADING, "$1")
+    .replace(BARE, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/[ \t]+([.,;:])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ");
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
