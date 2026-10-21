@@ -1224,6 +1224,9 @@ button.link {
     color-mix(in srgb, var(--molten-5) 14%, var(--surface)) 38%,
     var(--surface) 75%
   );
+  /* keep the glow inside the border: a translucent border would show it at the edges */
+  background-clip: padding-box;
+  border-color: color-mix(in srgb, var(--ink) 9%, var(--surface));
 }
 .hero-label {
   display: flex;
