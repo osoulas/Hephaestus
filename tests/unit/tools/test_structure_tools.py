@@ -204,19 +204,23 @@ def test_build_mp_unavailable_falls_back_to_template(fake_mp: FakeMP) -> None:
 
 
 def test_build_resets_later_results(fake_mp: FakeMP) -> None:
-    """Rebuilding clears relaxation, hull and predictions."""
+    """Rebuilding clears every later result, including ones added to CandidateState later."""
     ws = _ws()
     cid = _propose(ws, "SrTiO3")["candidate_id"]
     cs = ws.candidates[cid]
     cs.energy_eV_per_atom, cs.e_hull, cs.converged, cs.space_group = -7.0, 0.01, True, "Pm-3m"
+    cs.elastic, cs.domain_note, cs.wall_time_s = {"K": 170.0}, "old structure", 12.0
     S.build_structure(ws, cid, "template", None, 0)
     after = ws.candidates[cid]
+    assert after is cs
     assert (after.energy_eV_per_atom, after.e_hull, after.converged, after.space_group) == (
         None,
         None,
         False,
         None,
     )
+    assert (after.elastic, after.domain_note, after.wall_time_s) == (None, "", 0.0)
+    assert after.record is not None and after.candidate.composition == "SrTiO3"
 
 
 def test_sg10_build_failure_is_named_and_recorded(fake_mp: FakeMP) -> None:
@@ -314,3 +318,32 @@ def test_polymorph_mismatch_is_flagged(fake_mp: FakeMP) -> None:
     out = S.build_structure(ws, cid, "auto", None, 0)
     assert out["polymorph"]["matches_structure_type"] is True
     assert not any("does not have the space group" in n for n in out["notes"])
+
+
+def test_cg6_close_formulas_are_different_compositions() -> None:
+    """Fe3O4 and Fe2O3 are distinct candidates; only the same composition counts as a repeat."""
+    ws = _ws()
+    assert _propose(ws, "Fe3O4", "spinel")["accepted"]
+    assert _propose(ws, "Fe2O3", "corundum")["accepted"]
+
+
+def test_inverse_spinel_warning_at_proposal() -> None:
+    """Proposing a known inverse spinel on the spinel template warns."""
+    out = _propose(_ws(), "NiFe2O4", "spinel")
+    assert out["accepted"] and any("inverse spinel" in w for w in out["warnings"])
+
+
+def test_sg8_oversized_mp_cell(fake_mp: FakeMP) -> None:
+    """An MP cell above max_atoms: auto falls back to the template; mp_id or 'mp' candidates fail."""
+    ws = _ws(max_atoms=10)
+    cid = _propose(ws, "LaFeO3", "perovskite_cubic")["candidate_id"]
+    out = S.build_structure(ws, cid, "auto", None, 0)
+    assert out["source"] == "template:perovskite_cubic" and out["n_atoms"] <= 10
+    assert any("above max_atoms=10" in n for n in out["notes"])
+    pnma = next(e["mp_id"] for e in S.mp.mp_polymorphs("LaFeO3") if e["space_group"] == "Pnma")
+    with pytest.raises(ToolError, match="supercell"):
+        S.build_structure(ws, cid, "mp", pnma, 0)
+    ws_mp = _ws(max_atoms=10)  # a fresh run: LaFeO3 was already proposed in ws (CG-6)
+    mp_cid = _propose(ws_mp, "LaFeO3", "mp")["candidate_id"]
+    with pytest.raises(ToolError, match="supercell"):
+        S.build_structure(ws_mp, mp_cid, "auto", None, 0)

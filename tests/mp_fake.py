@@ -41,7 +41,7 @@ class FakeMP:
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
     def phonon(self, phonon_id: str, method: str) -> dict[str, Any]:
-        """Return the recorded cubic SrTiO3 phonon band.
+        """Return a phonon band for a phonon document ID.
 
         Parameters
         ----------
@@ -53,12 +53,13 @@ class FakeMP:
         Returns
         -------
         dict
-            Frequencies, q-points and labels.
+            Frequencies, q-points and labels: the recorded cubic SrTiO3 band for its ID, a stable
+            stand-in for any other.
         """
         self.calls.append(("phonon", {"id": phonon_id, "method": method}))
         data = json.loads((MP_FIX / "phonon_SrTiO3_Pm-3m.json").read_text(encoding="utf-8"))
-        if phonon_id != data["phonon_id"]:
-            raise RuntimeError("no such phonon document")
+        if phonon_id != data["phonon_id"]:  # other polymorphs: a small, stable stand-in band
+            return {"frequencies": [[0.0, 1.5, 2.0]], "qpoints": [[0, 0, 0], [0.25, 0, 0], [0.5, 0, 0]]}
         return data
 
 

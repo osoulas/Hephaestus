@@ -176,6 +176,8 @@ warnings}`, or `{accepted: false, reasons: [...]}`.
   "Fe": 0.125}, "X": {"O": 1.0}}`.
 - `tolerance_factor` is set for perovskites, else null.
 - `descriptors` adds the octahedral factor for perovskites, or rA/rB for pyrochlores.
+- `warnings` include known inverse spinels (NiFe2O4, CoFe2O4, Fe3O4 ...) proposed on the `spinel`
+  template, which always builds the normal arrangement.
 
 **`structure_type: "mp"`** takes the structure from Materials Project as-is, for compounds that no
 prototype fits (a garnet, a scheelite ...).
@@ -221,6 +223,9 @@ fraction on any site.
     prototype's. LaFeO3 proposed as `perovskite_cubic` builds as MP's Pnma phase. A note then says the
     candidate is evaluated in the MP phase and how to get the prototype instead.
   - It is null for `structure_type: "mp"`.
+  - **Cell size (SG-8).** An MP cell above `RunConfig.max_atoms` is first reduced to its primitive cell.
+    If it is still too big, `auto` falls back to the template and says so in `notes`. An explicit
+    `mp_id`, or a `structure_type: "mp"` candidate, fails with `supercell`.
 - **Template builds** also return `sites` and `lattice_abc_A`. The lattice is scaled from the reference
   compound by bond lengths (Shannon radii); cubic perovskites use a fitted formula, within 1 % of known
   cells (SG-13).
