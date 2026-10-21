@@ -449,7 +449,7 @@ export function mountRun(root, id, tab, hooks) {
       brief: { pending: "Not started", active: "Writing…", done: "Ready", failed: "Failed" },
     };
     return h(
-      "div.stepper",
+      `div.stepper${model.running ? ".live" : ""}`,
       null,
       PHASES.map((p) => {
         const st = model.phase[p.key];
