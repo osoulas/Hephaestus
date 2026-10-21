@@ -31,6 +31,7 @@ from typing import Any, Protocol
 
 from pymatgen.core import Composition, Element
 
+from hephaestus.core.store import cached
 from hephaestus.core.types import Insight, LiteratureContext, Paper, Quantity
 from hephaestus.tools.registry import ToolError, register
 
@@ -83,7 +84,7 @@ LogFn = Callable[..., None]
 
 
 def _no_cache(namespace: str, key_inputs: dict[str, Any], compute_fn: Callable[[], Any]) -> Any:
-    """Compute without caching; the default until ``core.store.cached`` is configured.
+    """Compute without caching; tests use it so recorded responses are never reused across tests.
 
     Parameters
     ----------
@@ -106,7 +107,7 @@ class _Config:
     """Module-level wiring: the Valency backend, the cache and the call logger."""
 
     backend: ValencyBackend | None = None
-    cache: CacheFn = staticmethod(_no_cache)  # type: ignore[assignment]
+    cache: CacheFn = staticmethod(cached)  # type: ignore[assignment]
     log: LogFn | None = None
 
 
@@ -118,15 +119,16 @@ def configure(
 ) -> None:
     """Wire the literature tools to a backend, cache and logger.
 
-    The harness passes ``core.store.cached`` and ``core.store.log_external_call`` (DL-3, DL-5);
-    tests pass a fake backend.
+    Valency results are cached on disk by exact inputs by default (``core.store.cached``, DL-3), so a
+    repeated call and an offline replay make no network request. Tests pass a fake backend and
+    ``_no_cache``.
 
     Parameters
     ----------
     backend : ValencyBackend or None
         Valency client; :class:`McpValency` is created lazily if never set.
     cache : callable or None
-        ``cached(namespace, key_inputs, compute_fn)``.
+        ``cached(namespace, key_inputs, compute_fn)``; defaults to ``core.store.cached``.
     log : callable or None
         ``log_external_call(service, operation, duration_s, ok, error)``.
     """
@@ -139,9 +141,9 @@ def configure(
 
 
 def reset() -> None:
-    """Restore the default wiring (no backend yet, no cache, no logger)."""
+    """Restore the default wiring (no backend yet, the disk cache, no logger)."""
     _Config.backend = None
-    _Config.cache = _no_cache
+    _Config.cache = cached
     _Config.log = None
 
 
