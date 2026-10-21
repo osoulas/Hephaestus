@@ -251,3 +251,22 @@ def test_ui9_replay_reports_progress_and_takes_speed_changes(client: TestClient)
     assert client.post(f"/replay/{r['replay_id']}/speed", json={"speed": 0}).json()["speed"] == 0
     assert len(stream(client, r["replay_id"])) == len(stored)
     assert client.post(f"/replay/{run_id}/speed", json={"speed": 2}).status_code == 404  # not a replay
+
+
+def test_ui9_stopped_replay_resumes_where_it_stopped(client: TestClient) -> None:
+    """Stopping a slow replay part-way and resuming it sends the remaining events once each."""
+    import time
+
+    run_id = client.post("/runs", json={"raw_goal": scripts.GOAL}).json()["run_id"]
+    stored = stream(client, run_id)
+    rid = client.post(f"/replay/{run_id}", json={"speed": 0.001}).json()["replay_id"]
+    time.sleep(0.3)
+    assert client.post(f"/runs/{rid}/stop").json() == {"stopping": True}
+    first = stream(client, rid)
+    assert 0 < len(first) < len(stored)
+    client.post(f"/replay/{rid}/speed", json={"speed": 0})
+    r = client.post(f"/replay/{rid}/resume").json()
+    assert r["resumed_at"] == len(first)
+    events = stream(client, rid)
+    assert [e["seq"] for e in events] == [e["seq"] for e in stored]
+    assert client.post(f"/replay/{rid}/resume").status_code == 409  # finished

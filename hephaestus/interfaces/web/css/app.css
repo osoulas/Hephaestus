@@ -376,6 +376,7 @@ pre,
 /* ------------------------------------------------------------------ primitives */
 
 .btn {
+  text-decoration: none;
   display: inline-flex;
   align-items: center;
   gap: 7px;

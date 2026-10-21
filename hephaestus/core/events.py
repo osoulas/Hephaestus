@@ -289,6 +289,7 @@ class EventBus:
         speed: float | Callable[[], float] = 1.0,
         max_gap_s: float = 2.0,
         stop: threading.Event | None = None,
+        start: int = 0,
     ) -> list[ProgressEvent]:
         """Re-emit a stored run's events under ``replay_id`` with their original pacing (UI-9).
 
@@ -305,6 +306,8 @@ class EventBus:
             Longest pause between two events, in seconds, after scaling.
         stop : threading.Event, optional
             Set it to end the replay early.
+        start : int
+            Index of the first event to publish; a stopped replay resumes from where it ended.
 
         Returns
         -------
@@ -315,7 +318,9 @@ class EventBus:
         source = self.history(run_id)
         out = []
         for i, event in enumerate(source):
-            if i:
+            if i < start:
+                continue
+            if i > start:
                 self._pause((event.time - source[i - 1].time).total_seconds(), speed_now, max_gap_s, stop)
             if stop is not None and stop.is_set():
                 break

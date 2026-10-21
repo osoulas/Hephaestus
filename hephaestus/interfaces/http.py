@@ -588,6 +588,27 @@ def create_app(
             experiments[handle.run_id] = handle
         return {"replay_id": handle.run_id, "total_events": handle.replay_control["total_events"]}
 
+    @app.post("/replay/{replay_id}/resume")
+    def replay_resume(replay_id: str) -> dict[str, Any]:
+        """Continue a stopped replay where it ended (UI-9).
+
+        Parameters
+        ----------
+        replay_id : str
+            Replay ID.
+
+        Returns
+        -------
+        dict
+            ``{replay_id, resumed_at}``; reconnect to ``/runs/{replay_id}/events``.
+        """
+        exp = get_experiment(replay_id)
+        try:
+            start = exp.resume_replay()
+        except ExperimentError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"replay_id": replay_id, "resumed_at": start}
+
     @app.post("/replay/{replay_id}/speed")
     def replay_speed(replay_id: str, req: ReplayRequest) -> dict[str, Any]:
         """Change a running replay's speed (UI-9).
