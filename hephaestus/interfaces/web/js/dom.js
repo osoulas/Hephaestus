@@ -293,6 +293,27 @@ export function label(k) {
 }
 
 /**
+ * Text clamped to a few lines, with "Show more" when it is longer.
+ * @param {any} content Text or nodes.
+ * @param {number} [lines] Lines shown while collapsed.
+ * @returns {HTMLElement}
+ */
+export function clamp(content, lines = 3) {
+  const text = h("div.clamp-text.clamped", null, content);
+  text.style.setProperty("--lines", String(lines));
+  const btn = h("button.link.clamp-toggle", { type: "button", hidden: true }, "Show more");
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = !text.classList.toggle("clamped");
+    btn.textContent = open ? "Show less" : "Show more";
+  });
+  requestAnimationFrame(() => {
+    if (text.scrollHeight > text.clientHeight + 1) btn.hidden = false;
+  });
+  return h("div.clamp", null, text, btn);
+}
+
+/**
  * A status pill.
  * @param {string} text Label.
  * @param {string} [kind] good | warning | serious | critical | info | live.

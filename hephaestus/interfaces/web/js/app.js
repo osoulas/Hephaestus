@@ -107,8 +107,7 @@ function renderSidebar() {
       "a.brand",
       { href: "#/new", title: "Hephaestus: new experiment" },
       wordmark(),
-      h("div.brand-tag", null, "self-designing experiments for materials discovery"),
-      h("div.brand-motto", null, "forged in simulation · checked by code · grounded in the literature"),
+      h("div.brand-tag", { title: "forged in simulation · checked by code · grounded in the literature" }, "self-designing experiments for materials discovery"),
     ),
     h("div.sidebar-actions", null, h("a.btn.primary", { href: "#/new" }, icon("plus"), "New experiment")),
     h("div.sidebar-section", null, "Runs", h("span.num", null, app.runs.length || "")),
@@ -125,59 +124,48 @@ function statusPanel() {
   const hl = app.health;
   const rows = [];
   if (!hl) {
-    rows.push(h("div.status-row", null, h("span.spinner"), h("span.label", null, "Checking services…")));
+    rows.push(h("div.status-row", null, h("span.spinner"), h("span.label", null, "Checking connections…")));
   } else if (!hl.ok) {
     rows.push(h("div.status-row", null, h("span.dot.critical"), h("span.label", null, "Server unreachable")));
   } else {
     const b = hl.backends;
-    if (!b) rows.push(h("div.status-row", null, h("span.spinner"), h("span.label", null, "Checking Claude access…")));
-    else {
-      const auto = b.auto || {};
-      const name = auto.resolves_to === "api" ? "API key" : "Claude Code";
+    const sim = hl.simulation || {};
+    const v = hl.valency || {};
+    const problems = [];
+    if (!b) problems.push({ pending: true, name: "Checking Claude access…" });
+    else if (!(b.auto && b.auto.ready)) problems.push({ name: "Claude", value: "Sign in", onclick: () => connect("claude") });
+    if (!v.signed_in) problems.push({ name: "Valency literature", value: v.pending ? "Waiting…" : v.needs_signin && v.access_token_expired ? "Sign in again" : "Sign in", onclick: signInValency });
+    if (sim.mp_key === false) problems.push({ name: "Materials Project", value: "Add key", onclick: () => connect("mp") });
+    if (sim.mace === false) problems.push({ name: "Simulation", value: "MACE missing", title: 'pip install -e ".[sim]"' });
+    const d = hl.device || {};
+    if (!problems.length) {
       rows.push(
         h(
           "div.status-row.clickable",
-          { role: "button", tabindex: 0, title: "Connect Claude", onclick: () => connect(), onkeydown: (e) => e.key === "Enter" && connect() },
-          h(`span.dot.${auto.ready ? "good" : "critical"}`),
-          h("span.label", null, `Claude · ${name}`),
-          h("span.value", auto.ready ? null : { style: { color: "var(--focus)", fontWeight: 550 } }, auto.ready ? "Ready" : "Sign in"),
+          { role: "button", tabindex: 0, title: "Connections", onclick: () => connect(), onkeydown: (e) => e.key === "Enter" && connect() },
+          h("span.dot.good"),
+          h("span.label", null, "All connections ready"),
+          h("span.value", null, d.cuda ? "GPU" : "CPU"),
         ),
       );
     }
-    const v = hl.valency || {};
-    rows.push(
-      h(
-        "div.status-row",
-        { title: v.error || "" },
-        h(`span.dot.${v.signed_in ? "good" : v.pending ? "warning" : "critical"}`),
-        h("span.label", null, "Valency literature"),
-        v.signed_in
-          ? h("span.value", null, "Signed in")
-          : h("button.link", { onclick: signInValency }, v.needs_signin && v.access_token_expired ? "Sign in again" : v.pending ? "Waiting…" : "Sign in"),
-      ),
-    );
-    const sim = hl.simulation || {};
-    rows.push(
-      h(
-        "div.status-row.clickable",
-        { role: "button", tabindex: 0, title: "Materials Project API key", onclick: () => connect("mp"), onkeydown: (e) => e.key === "Enter" && connect("mp") },
-        h(`span.dot.${sim.mp_key ? "good" : "critical"}`),
-        h("span.label", null, "Materials Project"),
-        h("span.value", sim.mp_key ? null : { style: { color: "var(--focus)", fontWeight: 550 } }, sim.mp_key ? "Key set" : "Add key"),
-      ),
-    );
-    const d = hl.device;
-    if (sim.mace === false) {
-      rows.push(h("div.status-row", { title: 'pip install -e ".[sim]"' }, h("span.dot.critical"), h("span.label", null, "Simulation"), h("span.value", null, "MACE missing")));
-    } else if (d) {
-      rows.push(h("div.status-row", null, h(`span.dot.${d.cuda ? "good" : ""}`), h("span.label", null, "Compute"), h("span.value", null, d.cuda ? "GPU (CUDA)" : "CPU")));
+    for (const pr of problems) {
+      rows.push(
+        h(
+          `div.status-row${pr.onclick ? ".clickable" : ""}`,
+          { role: pr.onclick ? "button" : null, tabindex: pr.onclick ? 0 : null, title: pr.title || null, onclick: pr.onclick || null },
+          pr.pending ? h("span.spinner") : h("span.dot.critical"),
+          h("span.label", null, pr.name),
+          pr.value ? h("span.value", { style: { color: "var(--focus)", fontWeight: 550 } }, pr.value) : null,
+        ),
+      );
     }
   }
   return h("div.sidebar-foot", null, ...rows, h("div.foot-tools", null, themeButton(), h("a.btn.ghost.sm", { href: "/docs", target: "_blank", rel: "noopener" }, icon("terminal"), "API")));
 }
 
 /**
- * Open the "Connect Claude" dialog.
+ * Open the "Connections" dialog.
  * @param {"claude"|"api"} [focus] Option to highlight.
  */
 export function connect(focus) {
@@ -400,7 +388,7 @@ function mountComposer(root) {
         h(
           "p",
           null,
-          "Describe the goal in plain English. The agent reads the literature, proposes compositions, simulates them, and hands back a candidate that passed code-enforced stability checks, with a cited lab brief.",
+          "Describe the goal in plain English. You get back a candidate that passed code-enforced stability checks, and a cited lab brief.",
         ),
       ),
       h(

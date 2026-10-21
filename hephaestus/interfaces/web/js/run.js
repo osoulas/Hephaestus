@@ -3,7 +3,7 @@
 
 import { api, streamEvents } from "./api.js";
 import { columnChart, confidenceChart, confidenceLegend, scoreRing } from "./chart.js";
-import { ago, check, download, duration, empty, formula, h, icon, label, num, pill, pm, toast } from "./dom.js";
+import { ago, check, clamp, download, duration, empty, formula, h, icon, label, num, pill, pm, toast } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
 import { PHASES, RunModel, toolKind } from "./model.js";
 import { CONFIG_GROUPS, configName, modelName, specGrid, targetText } from "./spec.js";
@@ -206,7 +206,7 @@ export function mountRun(root, id, tab, hooks) {
     for (const el of root.querySelectorAll("[data-tick]")) {
       const kind = el.dataset.tick;
       if (kind === "elapsed") {
-        el.textContent = model.elapsed != null ? `${duration(model.elapsed)} elapsed` : "";
+        el.textContent = model.elapsed == null ? "" : model.running ? `${duration(model.elapsed)} elapsed` : `took ${duration(model.elapsed)}`;
       } else if (kind === "campaign" || kind === "final") {
         const used = kind === "campaign" ? model.span(model.campaignStart, model.campaignEnd) : model.span(model.finalStart, model.finalEnd);
         const max = kind === "campaign" ? cfg.time_budget_s || 900 : cfg.final_time_budget_s || 600;
@@ -237,30 +237,36 @@ export function mountRun(root, id, tab, hooks) {
     if (!model.running && (model.events.length || model.state)) {
       actions.push(
         h(
-          "div.segmented",
-          { title: "Replay speed" },
-          [1, 4, 10].map((sp) =>
-            h(
-              "button",
-              {
-                "aria-pressed": String(ui.replaySpeed === sp),
-                onclick: () => {
-                  ui.replaySpeed = sp;
-                  renderHead();
+          "details.menu",
+          null,
+          h("summary.btn", { title: "Replay this run with no network" }, icon("replay"), "Replay"),
+          h(
+            "div.menu-list",
+            null,
+            [
+              [1, "Real time"],
+              [4, "4× speed"],
+              [10, "10× speed"],
+            ].map(([sp, text]) =>
+              h(
+                "button",
+                {
+                  onclick: (e) => {
+                    e.currentTarget.closest("details").open = false;
+                    ui.replaySpeed = sp;
+                    replay();
+                  },
                 },
-              },
-              `${sp}×`,
+                text,
+              ),
             ),
           ),
         ),
-        h("button.btn", { onclick: replay }, icon("replay"), "Replay"),
       );
     }
     const meta = [
-      h("span.mono", null, id),
       model.isReplay ? pill(`Replay of ${sourceId()}`, "info", "replay") : null,
       cfg.llm_model ? h("span", null, modelName(cfg.llm_model)) : null,
-      model.backend && model.backend !== cfg.llm_model ? h("span", null, model.backend === "claude-code" ? "Claude Code" : model.backend === "api" ? "Anthropic API" : model.backend) : null,
       model.startTime ? h("span", null, `Started ${ago(model.startTime)}`) : model.state ? h("span", null, `Created ${ago(model.state.created_at)}`) : null,
       model.startTime ? h("span.num", { dataset: { tick: "elapsed" } }) : null,
       cfg.require_novel ? pill("Novel only", "info", "star") : null,
@@ -281,7 +287,7 @@ export function mountRun(root, id, tab, hooks) {
       h(
         "div.run-title-row",
         null,
-        h("div", null, h("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } }, statusPill), h("h1.run-goal", null, model.goal || (model.state && model.state.raw_goal) || id), h("div.run-meta", null, metaWithSeps)),
+        h("div", null, h("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } }, statusPill), h("h1.run-goal", { title: id }, model.goal || (model.state && model.state.raw_goal) || id), h("div.run-meta", null, metaWithSeps)),
         h("div.run-actions", null, actions),
       ),
       stepper(),
@@ -366,7 +372,7 @@ export function mountRun(root, id, tab, hooks) {
       "div.grid.overview",
       null,
       h("div.grid", null, heroCard(), confidenceCard(rows, cfg.confidence_threshold ?? 72, cfg.max_iterations || 3)),
-      h("div.grid", { style: { alignContent: "start" } }, outcomeCard(), budgetCard(cfg), latestReviewCard()),
+      h("div.grid", { style: { alignContent: "start" } }, budgetCard(cfg), latestReviewCard()),
       ),
     );
   }
@@ -440,12 +446,12 @@ export function mountRun(root, id, tab, hooks) {
       h(
         "div.hero-sub",
         null,
-        h("span.mono", null, best),
+        h("span.mono.muted", null, best),
         c.space_group ? pill(c.space_group, "outline") : null,
         c.novelty ? pill(label(c.novelty), c.novelty === "novel" ? "info" : null) : null,
         verdict ? verdictPill(verdict) : null,
       ),
-      c.rationale || (c.proposal && c.proposal.rationale) ? h("p.hero-why", null, c.rationale || c.proposal.rationale) : null,
+      c.rationale || (c.proposal && c.proposal.rationale) ? h("div.hero-why", null, clamp(c.rationale || c.proposal.rationale, 2)) : null,
       h(
         "div.stats",
         null,
@@ -458,7 +464,22 @@ export function mountRun(root, id, tab, hooks) {
         stat("Lowest phonon", c.min_freq != null ? h("span", null, num(c.min_freq), h("small", null, "THz")) : "–", c.dyn_stable == null ? null : check(c.dyn_stable, "Dynamically stable", "Unstable")),
         stat("Final re-check", verdict ? label(verdict) : model.phase.final === "active" ? "Running…" : "–", verdict ? h("span.muted", null, model.config ? model.config.final_potential : "") : null),
       ),
+      outcomeLine(),
     );
+  }
+
+  function outcomeLine() {
+    const st = model.useState ? model.state : null;
+    const sub = model.submitted || (st && st.submission);
+    if (!sub) return null;
+    const rule = (model.runResult && model.runResult.stop_reason) || (st && st.stop_reason) || (model.log.filter((e) => e.type === "submit").pop() || {}).rule;
+    const parts = [
+      rule ? `Stopped: ${label(rule).toLowerCase()}` : null,
+      `submit gate ${sub.gate_passed ? "passed" : sub.accept_not_met ? "not met (accepted)" : "failed"}`,
+      `picked by ${sub.picked_by}`,
+      sub.runner_up_id ? `runner-up ${sub.runner_up_id}` : null,
+    ].filter(Boolean);
+    return h("div.hero-foot", null, parts.join(" · "));
   }
 
   function confidenceCard(rows, threshold, maxRounds) {
@@ -490,27 +511,8 @@ export function mountRun(root, id, tab, hooks) {
     return h(
       "section.card",
       null,
-      h("div.card-head", null, h("div", null, h("div.card-title", null, "Confidence by round"), h("div.card-sub", null, `A stop needs both at or above ${threshold}, passing code checks and no critical finding.`)), toggle),
+      h("div.card-head", null, h("div", null, h("div.card-title", null, "Confidence by round"), h("div.card-sub", null, `Stops on target when both reach ${threshold}.`)), toggle),
       h("div.card-body", null, bodyEl),
-    );
-  }
-
-  function outcomeCard() {
-    const st = model.useState ? model.state : null;
-    const sub = model.submitted || (st && st.submission);
-    const stopReason = (model.runResult && model.runResult.stop_reason) || (st && st.stop_reason) || (model.submitted ? model.log.filter((e) => e.type === "submit").pop()?.rule : null);
-    const items = [
-      ["Status", label(model.status)],
-      ["Stop rule", stopReason ? label(stopReason) : model.running ? "Still running" : "–"],
-      ["Submission", sub ? h("span", null, h("span.mono", null, sub.candidate_id), sub.runner_up_id ? h("span.muted", null, ` · runner-up ${sub.runner_up_id}`) : null) : "–"],
-      ["Submit gate", sub ? check(sub.gate_passed, "Passed", sub.accept_not_met ? "Not met (accepted)" : "Failed") : "–"],
-      ["Picked by", sub ? label(sub.picked_by) : "–"],
-    ];
-    return h(
-      "section.card",
-      null,
-      h("div.card-head", null, h("div.card-title", null, "Outcome")),
-      h("div.card-body", null, h("dl.kv", null, items.map(([k, v]) => [h("dt", null, k), h("dd", null, v)]))),
     );
   }
 
@@ -532,7 +534,7 @@ export function mountRun(root, id, tab, hooks) {
     return h(
       "section.card",
       null,
-      h("div.card-head", null, h("div.card-title", null, "Budgets"), h("span.card-sub", null, "Enforced by code")),
+      h("div.card-head", null, h("div.card-title", null, "Budgets")),
       h(
         "div.card-body",
         { style: { display: "grid", gap: "14px" } },
@@ -562,8 +564,7 @@ export function mountRun(root, id, tab, hooks) {
         "div.card-body",
         { style: { display: "grid", gap: "12px" } },
         gate ? h("div.callout.warning", null, icon("gate"), h("div", null, gate)) : null,
-        findingsList((r.findings || []).slice(0, 3)),
-        r.recommended_next ? h("div.secondary", { style: { fontSize: "13px" } }, "Next suggested: ", h("strong", null, formula(r.recommended_next)), r.why ? h("span.muted", null, ` — ${r.why}`) : null) : null,
+        findingsList((r.findings || []).slice(0, 2), 2),
       ),
     );
   }
@@ -641,7 +642,7 @@ export function mountRun(root, id, tab, hooks) {
   function logEntry(e) {
     const key = String(e.seq);
     const open = ui.open.has(key);
-    const time = h("span.nowrap", null, new Date(e.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    const time = h("span.nowrap.log-time", null, new Date(e.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     switch (e.type) {
       case "thinking":
       case "text": {
@@ -1199,7 +1200,7 @@ export function mountRun(root, id, tab, hooks) {
                         h("td", null, checkName(ch.name)),
                         h("td.num", null, fmtCheck(ch.screening_value)),
                         h("td.num", null, fmtCheck(ch.final_value)),
-                        h("td.num", null, ch.delta != null ? `${ch.delta > 0 ? "+" : ""}${num(ch.delta, 3)}` : "–"),
+                        h("td.num", null, ch.delta != null ? `${ch.delta > 0 ? "+" : ""}${num(ch.delta, Math.abs(ch.delta) >= 10 ? 1 : 3)}` : "–"),
                       ),
                     ),
                   ),
@@ -1227,28 +1228,30 @@ export function mountRun(root, id, tab, hooks) {
                 ["Winner", h("span", null, formula(model.candidate(sub.candidate_id).composition || ""), " ", h("span.mono.muted", null, sub.candidate_id))],
                 ["Runner-up", sub.runner_up_id ? h("span", null, formula(model.candidate(sub.runner_up_id).composition || ""), " ", h("span.mono.muted", null, sub.runner_up_id)) : "–"],
                 ["Submit gate", check(sub.gate_passed, "Passed", "Failed")],
-                ["Accepted not met", sub.accept_not_met ? "Yes" : "No"],
+                sub.accept_not_met ? ["Accepted not met", "Yes"] : null,
                 ["Picked by", label(sub.picked_by)],
-                ["Justification", sub.justification || "–"],
-              ].map(([k, v]) => [h("dt", null, k), h("dd", null, v)]),
+                ["Justification", sub.justification ? clamp(sub.justification, 5) : "–"],
+              ]
+                .filter(Boolean)
+                .map(([k, v]) => [h("dt", null, k), h("dd", null, v)]),
             ),
           ),
         ),
       );
     }
     side.push(
-      h(
-        "section.card",
-        null,
-        h("div.card-head", null, h("div.card-title", null, "Run issues"), h("span.card-sub.num", null, errors.length || "")),
-        h(
-          "div.card-body",
-          null,
-          errors.length
-            ? h("ul.list-plain", null, errors.map((e) => h("li", null, h("span.check.bad", null, icon("alert")), h("span", null, h("strong", null, `${label(e.step)}: `), h("span.secondary", null, e.message), h("span.muted.mono", { style: { fontSize: "11.5px" } }, ` ${e.code}`)))))
-            : h("div.muted", null, "No recorded failures. A failed optional step degrades a run but never stops it, and would be listed here."),
-        ),
-      ),
+      errors.length
+        ? h(
+            "details.card.issues",
+            null,
+            h("summary.card-head", null, h("div.card-title", null, icon("chevron", "round-chevron"), `${errors.length} recorded issue${errors.length === 1 ? "" : "s"}`), h("span.card-sub", null, "Degraded steps; the run continued")),
+            h(
+              "div.card-body",
+              null,
+              h("ul.list-plain", null, errors.map((e) => h("li", null, h("span.check.bad", null, icon("alert")), h("span", null, h("strong", null, `${label(e.step)}: `), h("span.secondary", null, e.message))))),
+            ),
+          )
+        : null,
     );
     return h("div.grid", { style: { gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)", alignItems: "start" } }, h("div.grid", null, parts), h("div.grid", null, side));
   }
@@ -1388,26 +1391,23 @@ export function mountRun(root, id, tab, hooks) {
   function reviewBlock(r, gateNote) {
     const breakdown = Object.entries(r.score_breakdown || {});
     const checks = r.checks || {};
-    return h(
-      "div.review",
+    const scores = h(
+      "div.review-scores",
       null,
       h(
-        "div.score-head",
+        "div.score-pair",
         null,
-        scoreRing(r.score, "var(--series-1)"),
-        h("div", null, h("div", { style: { fontWeight: 600 } }, "Code rubric"), h("div.muted", { style: { fontSize: "12px" } }, `Round ${r.round} · best ${r.best_of_round || "–"}`)),
-        scoreRing(r.llm_confidence, "var(--series-2)"),
-        h("div", { style: { minWidth: 0 } }, h("div", { style: { fontWeight: 600 } }, "Reviewer confidence"), h("div.muted", { style: { fontSize: "12px" } }, r.llm_confidence_reason || "Independent reviewer LLM")),
+        h("div.score-item", null, scoreRing(r.score, "var(--series-1)"), h("div", null, h("div.score-name", null, "Code rubric"), h("div.muted.score-sub", null, `best ${r.best_of_round || "–"}`))),
+        h("div.score-item", null, scoreRing(r.llm_confidence, "var(--series-2)"), h("div", null, h("div.score-name", null, "Reviewer"), h("div.muted.score-sub", null, "own confidence"))),
       ),
       h(
-        "div.chips",
+        "div.check-list",
         null,
-        check(checks.target_met_central, "Target met (central)", "Target not met"),
-        checks.target_met_conservative != null ? check(checks.target_met_conservative, "Met within error bar", "Not within error bar") : null,
-        check(checks.thermo_stable, "Thermodynamically stable", "Off hull"),
+        check(checks.target_met_central, "Target met", "Target not met"),
+        checks.target_met_conservative != null ? check(checks.target_met_conservative, "Within error bar", "Not within error bar") : null,
+        check(checks.thermo_stable, "On the hull", "Off hull"),
         check(checks.dyn_stable, "Dynamically stable", "Dynamically unstable"),
       ),
-      gateNote || r.gate_note ? h("div.callout.warning", null, icon("gate"), h("div", null, gateNote || r.gate_note)) : null,
       breakdown.length
         ? h(
             "div.breakdown",
@@ -1418,12 +1418,19 @@ export function mountRun(root, id, tab, hooks) {
             }),
           )
         : null,
-      findingsList(r.findings || []),
+    );
+    const words = h(
+      "div.review-words",
+      null,
+      gateNote || r.gate_note ? h("div.callout.warning", null, icon("gate"), h("div", null, gateNote || r.gate_note)) : null,
+      r.llm_confidence_reason ? h("div", null, h("div.field-label", null, "Reviewer's view"), clamp(r.llm_confidence_reason, 3)) : null,
+      (r.findings || []).length ? h("div", null, h("div.field-label", null, "Findings"), findingsList(r.findings, 3)) : null,
       r.recommended_next ? h("div.secondary", { style: { fontSize: "13px" } }, "Recommended next: ", h("strong", null, formula(r.recommended_next)), r.why ? h("span.muted", null, ` — ${r.why}`) : null) : null,
     );
+    return h("div.review", null, scores, words);
   }
 
-  function findingsList(findings) {
+  function findingsList(findings, lines = 3) {
     if (!findings.length) return null;
     return h(
       "ul.findings",
@@ -1433,7 +1440,7 @@ export function mountRun(root, id, tab, hooks) {
           "li.finding",
           null,
           pill(label(f.severity), SEVERITY[f.severity], f.severity === "critical" ? "alert" : null),
-          h("div", null, h("span.muted", null, `${label(f.category)} · `), f.text, f.suggestion ? h("div.suggest", null, f.suggestion) : null),
+          clamp([h("span.muted", null, `${label(f.category)} · `), f.text, f.suggestion ? h("div.suggest", null, f.suggestion) : null], lines),
         ),
       ),
     );
@@ -1576,7 +1583,7 @@ function setMeter(el, used, max, text) {
   const frac = max > 0 ? used / max : 0;
   const fill = el.querySelector(".meter-fill");
   fill.style.width = `${Math.min(1, frac) * 100}%`;
-  fill.className = `meter-fill${frac >= 1 ? " critical" : frac > 0.8 ? " warning" : ""}`;
+  fill.className = `meter-fill${frac > 1.001 ? " critical" : frac >= 0.9 ? " warning" : ""}`; // red only when over
   const t = el.querySelector(".meter-text");
   if (t) t.textContent = text;
 }
@@ -1618,9 +1625,16 @@ function verdictPill(v) {
 
 const CHECK_NAMES = {
   e_hull_eV_per_atom: "Energy above hull (eV/atom)",
+  thermo_stable: "On the hull",
   dyn_stable: "Dynamically stable",
   min_freq_THz: "Lowest phonon (THz)",
+  min_frequency_THz: "Lowest phonon (THz)",
+  md_stable: "Stable in MD",
+  target_met: "Target met",
+  target_met_conservative: "Target met within error",
   band_gap: "Band gap (eV)",
+  bulk_modulus: "Bulk modulus (GPa)",
+  disorder_spread_eV_per_atom: "Disorder spread (eV/atom)",
 };
 
 /**
