@@ -15,6 +15,7 @@ import json
 import re
 from typing import Any
 
+from hephaestus.core.config import BAND_GAP_MODELS
 from hephaestus.core.types import Brief, ErrorRecord, Paper, RunState, ValidationReport
 from hephaestus.harness import gates as G
 from hephaestus.llm.base import LLM, LLMError
@@ -978,7 +979,7 @@ def assemble_brief(state: RunState, ws: Workspace, llm: LLM | None = None) -> tu
         [f"- {a}" for a in spec.assumptions]
         + [
             f"- Screening potential {ws.cfg.potential}; final re-check {ws.cfg.final_potential}.",
-            f"- Property values are on the models' own scale ({ws.cfg.band_gap_fidelity.upper()} fidelity for band gaps).",
+            f"- Band gaps from {BAND_GAP_MODELS[ws.cfg.band_gap_model]['label']}; property values are on each model's own scale.",
             *(
                 [f"- {state.literature.coverage_note}"]
                 if state.literature and state.literature.coverage_note

@@ -621,7 +621,7 @@ export function mountRun(root, id, tab, hooks) {
               ? h("span", null, "Latest step: ", h("span.mono", null, lastTool.tool), " ", summary(lastTool))
               : "The orchestrator is reading the goal and the literature."
             : model.status === "needs_input"
-              ? "The goal parser asked clarifying questions. Start a new experiment and answer them."
+              ? "The goal parser asked clarifying questions. Start a new run and answer them."
               : "This run ended before a review picked a best candidate.",
         ),
       );

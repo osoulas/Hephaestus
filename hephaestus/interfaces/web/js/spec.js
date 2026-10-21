@@ -62,50 +62,113 @@ export function modelName(m) {
   return t ? `${t[1][0].toUpperCase()}${t[1].slice(1)} ${t[2]}.${t[3]}` : m;
 }
 
-/** Run settings by group, with display names and hints; keys follow RunConfig (OR-4). */
+/**
+ * Run settings by group; keys follow RunConfig. Each field is
+ * [name, hint, unit, expert] where unit "min" shows seconds as minutes and expert fields hide
+ * behind "Show expert settings".
+ */
 export const CONFIG_GROUPS = [
   {
-    name: "Campaign",
+    name: "Search budget",
+    id: "budget",
+    icon: "gauge",
     fields: {
-      max_iterations: ["Review rounds", "Rounds before it must submit."],
-      max_tool_calls: ["Tool-call budget", "Calls before it is told to submit."],
-      time_budget_s: ["Campaign time budget", "Wall clock for the search. When it runs out, the best candidate goes to the final re-check.", "min"],
-      max_parallel_tools: ["Parallel tool calls", "Calls on different candidates that run at once."],
-      confidence_threshold: ["Stop threshold", "Code rubric and reviewer must both reach this to stop on target."],
+      max_iterations: ["Review rounds", "Rounds of proposing, simulating and reviewing before it must submit.", "rounds"],
+      max_tool_calls: ["Tool calls", "Calls before it is told to submit.", "calls"],
+      time_budget_s: ["Time for the search", "When it runs out, the best candidate goes to the final re-check.", "min"],
+      confidence_threshold: ["Stop threshold", "Code rubric and reviewer must both reach this to stop on target.", "/ 100", true],
+      max_parallel_tools: ["Parallel tool calls", "Calls on different candidates that run at once.", "", true],
     },
+    summary: (c) => `${c.max_iterations} rounds · ${c.max_tool_calls} tool calls · ${Math.round(c.time_budget_s / 60)} min`,
   },
   {
-    name: "Science",
+    name: "Models",
+    id: "models",
+    icon: "atom",
     fields: {
-      band_gap_fidelity: ["Band gap fidelity", "HSE (±0.65 eV) or PBE (runs about 1.6 eV low)."],
-      potential: ["Screening potential", "Machine-learned potential for every candidate."],
-      final_potential: ["Final potential", "Larger potential for the final re-check."],
-      cross_check_potential: ["Cross-check potential", "Optional second potential in the final re-check. Empty for none."],
-      phonon_mode: ["Phonon mode", "Fast or full phonons during screening."],
-      phonon_gate: ["Phonon gate", "Mode mapping freezes in soft modes; strict fails any imaginary mode."],
-      distortion_threshold_meV: ["Mode-mapping threshold (meV/atom)", "Energy drop that counts as a real instability."],
-      run_phonons: ["Run phonons", "Dynamic stability check."],
-      max_atoms: ["Max atoms", "Largest supercell built."],
+      band_gap_model: ["Band gap model", "Used for the reference and every candidate, so all gaps share one scale."],
+      potential: ["Screening potential", "Machine-learned potential for relaxations, hull and phonons."],
+      final_potential: ["Final re-check potential", "A larger potential for the higher-fidelity re-check."],
+      cross_check_potential: ["Second opinion", "Optional second potential in the final re-check."],
     },
+    summary: (c, bandGapLabel) => `${bandGapLabel(c.band_gap_model)} · ${potentialName(c.potential)} → ${potentialName(c.final_potential)}`,
   },
   {
-    name: "Final re-check",
+    name: "Stability checks",
+    id: "checks",
+    icon: "shield",
     fields: {
+      run_phonons: ["Phonons", "Check dynamic stability."],
+      phonon_mode: ["Phonon detail", "Fast during screening; full is slower but samples more of the Brillouin zone."],
       run_final: ["Final re-check", "Re-check the winner and runner-up at higher fidelity."],
-      final_time_budget_s: ["Final time budget", "Optional extras are skipped when they would not fit; the core re-check always runs.", "min"],
-      final_dtype: ["Final precision", "Floating-point precision for the re-check."],
+      final_time_budget_s: ["Time for the re-check", "Optional extras are skipped if they would not fit.", "min"],
+      phonon_gate: ["Instability rule", "Mode mapping freezes soft modes in and re-relaxes; strict fails any imaginary mode.", "", true],
+      distortion_threshold_meV: ["Mode-mapping threshold", "Energy drop that counts as a real instability.", "meV/atom", true],
+      max_atoms: ["Largest cell", "Biggest supercell built.", "atoms", true],
     },
+    summary: (c) =>
+      [
+        c.run_phonons ? `${c.phonon_mode === "full" ? "Full" : "Fast"} phonons` : "No phonons",
+        c.run_final ? `final re-check (${Math.round(c.final_time_budget_s / 60)} min)` : "no final re-check",
+      ].join(" · "),
   },
   {
     name: "Compute",
+    id: "compute",
+    icon: "cpu",
     fields: {
-      device: ["Device", "auto uses a GPU when one is available."],
-      dtype: ["Screening precision", "float32 is about 3× faster on consumer GPUs."],
-      seed: ["Seed", "For disorder configurations and anything random."],
+      device: ["Device", "Auto uses a GPU when one is available."],
       offline: ["Offline", "Use cached results only; make no network requests."],
+      dtype: ["Screening precision", "float32 is about 3× faster on consumer GPUs.", "", true],
+      final_dtype: ["Re-check precision", "Precision for the final re-check.", "", true],
+      seed: ["Seed", "For disorder configurations and anything random.", "", true],
     },
+    summary: (c) => `${c.device === "auto" ? "Auto device" : c.device === "cuda" ? "GPU" : "CPU"}${c.offline ? " · offline" : ""}`,
   },
 ];
+
+/** Profiles: one click sets the budget and depth of checking. */
+export const PROFILES = [
+  {
+    id: "quick",
+    name: "Quick look",
+    hint: "Two short rounds; useful to check a goal makes sense.",
+    values: { max_iterations: 2, max_tool_calls: 50, time_budget_s: 480, final_time_budget_s: 300, phonon_mode: "fast" },
+  },
+  { id: "standard", name: "Standard", hint: "The defaults: three rounds and a 10-minute re-check.", values: {} },
+  {
+    id: "thorough",
+    name: "Thorough",
+    hint: "Five rounds, full phonons and more time for the re-check.",
+    values: { max_iterations: 5, max_tool_calls: 150, time_budget_s: 1800, final_time_budget_s: 1200, phonon_mode: "full" },
+  },
+];
+
+/** Readable names for setting values. */
+export const VALUE_NAMES = {
+  fast: "Fast",
+  full: "Full",
+  mode_map: "Mode mapping",
+  strict: "Strict",
+  auto: "Auto",
+  cpu: "CPU",
+  cuda: "GPU (CUDA)",
+};
+
+/** Machine-learned potentials offered in the model menus. */
+export const POTENTIALS = ["mace-mp-0-small", "mace-mp-0-medium", "mace-mp-0-large", "chgnet"];
+
+/**
+ * Display name of a potential: "mace-mp-0-small" -> "MACE-MP-0 small".
+ * @param {string|null} p Potential ID.
+ * @returns {string}
+ */
+export function potentialName(p) {
+  if (!p) return "None";
+  const m = String(p).match(/^mace-mp-0-(\w+)$/);
+  if (m) return `MACE-MP-0 ${m[1]}`;
+  return p === "chgnet" ? "CHGNet" : p;
+}
 
 /** Settings chosen above the advanced section, not inside it. */
 export const TOP_LEVEL_SETTINGS = new Set(["llm_backend", "llm_model", "require_novel"]);

@@ -299,7 +299,7 @@ domain flag (PP-5). The registry (`simulation.property_registry`) lists every ke
 
 | Property | Model | Units | Uncertainty |
 | --- | --- | --- | --- |
-| `band_gap` | MEGNet-BandGap-mfi-MP-2019.4.1, fidelity from `RunConfig.band_gap_fidelity` (`hse` default, or `pbe`) | eV | HSE ±0.65 (MAE vs 15 measured perovskite gaps); PBE ±0.57 vs MP PBE gaps, about 1.6 eV below experiment |
+| `band_gap` | MEGNet-BandGap-mfi-MP-2019.4.1; `RunConfig.band_gap_model` picks the output: `megnet-hse` (default), `megnet-pbe`, `megnet-gllb-sc`, `megnet-scan` | eV | HSE ±0.65 (MAE vs 15 measured perovskite gaps); PBE ±0.57 vs MP PBE gaps, about 1.6 eV below experiment; GLLB-SC and SCAN not benchmarked, so no uncertainty |
 | `bulk_modulus`, `shear_modulus` | elastic tensor from strain-stress with the run's potential (±0.25 and ±0.5 % strains, ions relaxed at each strain), Voigt-Reuss-Hill | GPa | 15 / 20 (typical MLIP MAE) |
 | `youngs_modulus`, `poisson_ratio`, `pugh_ratio` | from K and G | GPa, –, – | propagated from K and G |
 | `sound_velocity_longitudinal`, `sound_velocity_transverse`, `sound_velocity_mean`, `debye_temperature` | from K, G and the density | km/s, K | propagated from K and G |

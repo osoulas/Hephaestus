@@ -89,7 +89,8 @@ class ParseRequest(BaseModel):
     llm_backend: str | None = None
     llm_model: str | None = None
     require_novel: bool | None = None
-    band_gap_fidelity: str | None = None
+    band_gap_model: str | None = None
+    band_gap_fidelity: str | None = None  # older clients; mapped to band_gap_model
 
 
 class RunRequest(BaseModel):

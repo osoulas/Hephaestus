@@ -1270,8 +1270,8 @@ def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
 
     Parameters
     ----------
-    fidelity : {"hse", "pbe"}
-        Band gap fidelity.
+    fidelity : {"hse", "pbe", "gllb-sc", "scan"}
+        Output fidelity of the chosen band gap model.
 
     Returns
     -------
@@ -1282,6 +1282,8 @@ def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
     gap_err = {
         "hse": (0.65, "MAE against 15 measured perovskite gaps"),
         "pbe": (0.57, "MAE against MP PBE gaps; about 1.6 eV below experiment"),
+        "gllb-sc": (None, "no uncertainty available: GLLB-SC output not benchmarked against measured gaps"),
+        "scan": (None, "no uncertainty available: SCAN output not benchmarked against measured gaps"),
     }[fidelity]
     reg: dict[str, dict[str, Any]] = {
         "band_gap": {
