@@ -33,6 +33,45 @@ from hephaestus.llm.base import LLM, LoggedLLM, make_llm
 from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
 
 FinalCheck = Callable[[Workspace, Submission], list[ValidationReport]]
+TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+
+
+class UsageMeter:
+    """Token totals for the run state: campaign turns plus parser, reviewer and brief calls."""
+
+    def __init__(self, state: RunState, *llms: LoggedLLM) -> None:
+        """Start from what the state already holds (a resumed run keeps its earlier tokens).
+
+        Parameters
+        ----------
+        state : RunState
+            Run state to update.
+        *llms : LoggedLLM
+            Wrappers whose structured calls count.
+        """
+        self.state = state
+        self.llms = llms
+        self.base = {k: int(state.usage.get(k, 0)) for k in TOKEN_KEYS}
+        self.campaign: dict[str, int] = {}
+
+    def update(self, campaign_usage: Mapping[str, int] | None = None) -> None:
+        """Write the current totals into ``state.usage``.
+
+        Parameters
+        ----------
+        campaign_usage : mapping, optional
+            The campaign's orchestrator usage so far; kept from the last call when omitted.
+        """
+        if campaign_usage is not None:
+            self.campaign = dict(campaign_usage)
+        for k in TOKEN_KEYS:
+            self.state.usage[k] = (
+                self.base[k]
+                + int(self.campaign.get(k, 0))
+                + sum(int(m.structured_usage.get(k, 0)) for m in self.llms)
+            )
+
+
 ACTIVE: dict[str, Campaign] = {}
 _STOPS: dict[str, threading.Event] = {}
 _LOCK = threading.Lock()
@@ -338,6 +377,7 @@ def _drive(
     bus = deps.bus
     try:
         llm, reviewer = _models(state.config, deps, files)
+        meter = UsageMeter(state, llm, reviewer)
         bus.emit(
             rid,
             "run",
@@ -362,7 +402,7 @@ def _drive(
                 return state
         state.status = "running"
         if ws.submitted is None:
-            _campaign(state, files, ws, critiques, llm, reviewer, handlers, deps, stop, resume)
+            _campaign(state, files, ws, critiques, llm, reviewer, handlers, deps, stop, resume, meter)
         else:
             state.stop_reason = state.stop_reason or "submitted"
         sync_state(state, ws, [it.critique for it in state.iterations if it.critique])
@@ -370,7 +410,7 @@ def _drive(
         _final(state, files, ws, deps, bus, handlers, stop)
         _brief(state, files, ws, llm, bus)
         state.status = "finished"
-        state.usage = {**state.usage, **llm.usage}
+        meter.update()
         save_json(files.state, state)
         bus.emit(
             rid,
@@ -471,6 +511,7 @@ def _campaign(
     deps: Deps,
     stop: threading.Event,
     resume: bool,
+    meter: UsageMeter | None = None,
 ) -> None:
     """Run the agent campaign and record its outcome.
 
@@ -494,6 +535,8 @@ def _campaign(
         Set by ``request_stop``.
     resume : bool
         Whether this resumes.
+    meter : UsageMeter, optional
+        Keeps ``state.usage`` token totals current.
     """
     offset = float(state.usage.get("campaign_s", 0))
 
@@ -507,6 +550,8 @@ def _campaign(
         """
         llm.iteration = reviewer.iteration = c.ws.round
         state.usage["campaign_s"] = int(c.elapsed_s)
+        if meter:
+            meter.update(c.usage)
         state.errors = [*base_errors, *c.errors]
         save_snapshot(files, state, c.ws, c.critiques)
         if c.critiques and len(c.critiques) != n_written[0]:
@@ -535,6 +580,8 @@ def _campaign(
     state.stop_reason = camp.stop_rule
     state.errors = [*base_errors, *camp.errors]
     state.usage["campaign_s"] = int(camp.elapsed_s)
+    if meter:
+        meter.update(camp.usage)
     save_snapshot(files, state, ws, camp.critiques)
     if sub is None:
         state.errors.append(

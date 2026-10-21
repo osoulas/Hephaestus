@@ -725,7 +725,6 @@ export function mountRun(root, id, tab, hooks) {
       setMeter(el, v, max, text);
       return el;
     };
-    const usage = (model.state && model.state.usage) || {};
     return h(
       "section.card",
       null,
@@ -736,13 +735,23 @@ export function mountRun(root, id, tab, hooks) {
         meter("Tool calls", used, maxCalls, `${used} / ${maxCalls}`),
         meter("Review rounds", rounds, cfg.max_iterations || 3, `${rounds} / ${cfg.max_iterations || 3}`),
         meter("Campaign time", 0, cfg.time_budget_s || 900, "", "campaign"),
-        model.finalStart || model.phase.final === "active"
-          ? meter("Final re-check time", 0, cfg.final_time_budget_s || 600, "", "final")
-          : null,
-        usage.input_tokens || usage.output_tokens
-          ? h("div.muted", { style: { fontSize: "12px" } }, `${(usage.input_tokens || 0).toLocaleString()} input · ${(usage.output_tokens || 0).toLocaleString()} output tokens`)
-          : null,
+        tokensRow(),
       ),
+    );
+  }
+
+  function tokensRow() {
+    const t = model.tokens;
+    const breakdown = t
+      ? `Input: ${t.fresh.toLocaleString()} fresh, ${t.cacheWrite.toLocaleString()} written to cache, ${t.cacheRead.toLocaleString()} read from cache. Output: ${t.output.toLocaleString()}.`
+      : "";
+    return h(
+      "div.tokens",
+      { title: breakdown },
+      h("span.secondary", null, "Tokens"),
+      t
+        ? h("span.tokens-values", null, h("span.tok", null, h("strong.num", null, compact(t.input)), " in"), h("span.tok", null, h("strong.num", null, compact(t.output)), " out"))
+        : h("span.muted", null, model.running ? "Counting…" : "–"),
     );
   }
 
@@ -1789,6 +1798,17 @@ function finalStepName(e) {
   const id = e.info && e.info.candidate_id;
   const who = id ? cidText(id) : null;
   return `${FINAL_STEP_NAMES[e.tool] || label(e.tool)}${who ? ` · ${who}` : ""}`;
+}
+
+/**
+ * Compact count: 814445 -> "814k", 15134 -> "15.1k", 2918277 -> "2.92M".
+ * @param {number} n Count.
+ * @returns {string}
+ */
+function compact(n) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 1 : 2)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e5 ? 0 : 1)}k`;
+  return String(n);
 }
 
 /**

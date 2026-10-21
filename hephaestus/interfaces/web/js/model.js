@@ -69,6 +69,7 @@ export class RunModel {
     this.finalStart = null;
     this.finalEnd = null;
     this.finalStep = null; // latest final-check tool call
+    this.campaignUsage = null; // orchestrator tokens so far, from round events
     this._openFinal = null;
     this.round = 0;
     this.toolCount = 0;
@@ -147,6 +148,7 @@ export class RunModel {
       this.model = p.model;
       return;
     }
+    if (p.usage) this.campaignUsage = p.usage;
     if (p.round != null) {
       const row = {
         round: p.round,
@@ -251,6 +253,20 @@ export class RunModel {
       entry.finished = e.time;
       this._openFinal = null;
     }
+  }
+
+  /**
+   * Tokens used: the run's stored totals when available, else the campaign's so far.
+   * @returns {{input: number, output: number, fresh: number, cacheWrite: number, cacheRead: number}|null}
+   */
+  get tokens() {
+    const stored = this.useState && this.state.usage;
+    const u = stored && ("output_tokens" in stored || "input_tokens" in stored) ? stored : this.campaignUsage;
+    if (!u) return null;
+    const fresh = u.input_tokens || 0;
+    const cacheWrite = u.cache_creation_input_tokens || 0;
+    const cacheRead = u.cache_read_input_tokens || 0;
+    return { input: fresh + cacheWrite + cacheRead, output: u.output_tokens || 0, fresh, cacheWrite, cacheRead };
   }
 
   /**

@@ -204,3 +204,34 @@ def test_fc1_default_final_check_runs_with_the_run_handlers(tmp_path: Path) -> N
     assert state.validation[0].verdict == "confirmed"
     assert (tmp_path / "r-fc" / "final" / "validation.json").exists()
     assert "Final settings: mace-mp-0-medium" in state.brief.markdown
+
+
+def test_dl4_token_usage_totals_campaign_and_structured_calls(tmp_path: Path) -> None:
+    """state.usage adds campaign turns and parser/reviewer/brief calls once each; resumes keep earlier totals."""
+    from hephaestus.core.types import RunState
+    from hephaestus.llm.base import LoggedLLM
+
+    class Fake:
+        backend, model = "scripted", "scripted"
+
+    a, b = LoggedLLM(Fake(), tmp_path / "a.jsonl"), LoggedLLM(Fake(), tmp_path / "b.jsonl")  # type: ignore[arg-type]
+    a._log(
+        "orchestrator", None, None, {"input_tokens": 100, "output_tokens": 10}, 0.0
+    )  # a turn: counted by the campaign
+    a._log("goal_parser", None, None, {"input_tokens": 5, "output_tokens": 1}, 0.0)
+    b._log("reviewer", None, None, {"input_tokens": 7, "cache_read_input_tokens": 70}, 0.0)
+    state = RunState(run_id="u", usage={"campaign_s": 3, "input_tokens": 1000})
+    meter = runner.UsageMeter(state, a, b)
+    meter.update({"input_tokens": 100, "output_tokens": 10})
+    assert state.usage == {
+        "campaign_s": 3,
+        "input_tokens": 1000 + 100 + 5 + 7,
+        "output_tokens": 10 + 1,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 70,
+    }
+
+    finished = runner.run(
+        scripts.GOAL, deps=deps(tmp_path, scripts.ROUND_1 + scripts.ROUND_2, ANSWERS), run_id="r-u"
+    )
+    assert set(runner.TOKEN_KEYS) <= set(finished.usage)

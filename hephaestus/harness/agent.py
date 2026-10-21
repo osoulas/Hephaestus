@@ -610,6 +610,7 @@ class Campaign:
                 "gate_note": decision.gate_note,
                 "scores": [c.score for c in self.critiques],
                 "llm_scores": [c.llm_confidence for c in self.critiques],
+                "usage": dict(self.usage),
             },
         )
         if decision.stop:
