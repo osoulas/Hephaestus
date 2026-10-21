@@ -978,11 +978,11 @@ button.link {
   gap: 24px;
 }
 .run-goal {
-  font-size: 18px;
-  line-height: 1.35;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  max-width: 820px;
+  font-size: 24px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  max-width: 900px;
 }
 .run-meta {
   display: flex;
@@ -1008,28 +1008,74 @@ button.link {
 
 .stepper {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  margin: 18px 0 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0 18px;
 }
 .step {
   position: relative;
   display: grid;
-  gap: 2px;
-  padding-top: 10px;
+  gap: 4px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 .step::before {
   content: "";
   position: absolute;
-  top: 0;
   left: 0;
   right: 0;
+  bottom: 0;
   height: 3px;
-  border-radius: 999px;
-  background: var(--surface-3);
+  background: transparent;
 }
 .step.done::before {
   background: var(--ink);
+}
+.step.done {
+  border-color: var(--hairline-strong);
+}
+.step.active {
+  border-color: color-mix(in srgb, var(--ember) 45%, var(--hairline));
+}
+.step.failed {
+  border-color: color-mix(in srgb, var(--critical) 45%, var(--hairline));
+}
+.step-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 650;
+  flex: none;
+}
+.step-mark svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.4;
+}
+.step-mark.done {
+  background: var(--ink);
+  color: var(--surface);
+}
+.step-mark.active {
+  background: var(--ember-soft);
+}
+.step-mark.active .spinner {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+.step-mark.failed {
+  background: var(--critical);
+  color: #fff;
 }
 .step.active::before {
   background: linear-gradient(90deg, var(--ember) 0%, var(--ember) 40%, var(--surface-3) 40%);
@@ -1051,8 +1097,8 @@ button.link {
 .step-name {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
+  gap: 8px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink-2);
 }
@@ -1061,6 +1107,7 @@ button.link {
   color: var(--ink);
 }
 .step-detail {
+  padding-left: 28px;
   font-size: 12px;
   color: var(--ink-3);
   white-space: nowrap;
@@ -2540,4 +2587,83 @@ details.issues[open] .round-chevron {
 }
 details.issues[open] > summary {
   padding-bottom: 0;
+}
+
+/* connections */
+.foot-title {
+  padding: 2px 6px 6px;
+}
+.status-row .value.action {
+  color: var(--focus);
+  font-weight: 550;
+}
+
+/* replay */
+.replay-pop {
+  width: 300px;
+  gap: 10px;
+  padding: 14px;
+}
+.replay-pop-title {
+  font-weight: 600;
+}
+.replay-pop-sub {
+  font-size: 12.5px;
+}
+.replay-pop .btn.primary {
+  justify-content: center;
+}
+.speed-picker button {
+  padding: 0 10px;
+}
+.replay-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--info-wash);
+  border: 1px solid color-mix(in srgb, var(--focus) 25%, transparent);
+}
+.replay-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--focus);
+  flex: none;
+}
+.replay-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.replay-line {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 13px;
+  min-width: 0;
+}
+.replay-track {
+  height: 4px;
+  background: color-mix(in srgb, var(--focus) 15%, var(--surface));
+}
+.replay-track .meter-fill {
+  background: var(--focus);
+}
+.replay-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+@media (max-width: 900px) {
+  .replay-bar {
+    flex-wrap: wrap;
+  }
 }

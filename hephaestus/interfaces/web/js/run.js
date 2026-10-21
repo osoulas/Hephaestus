@@ -3,7 +3,7 @@
 
 import { api, streamEvents } from "./api.js";
 import { columnChart, confidenceChart, confidenceLegend, scoreRing } from "./chart.js";
-import { ago, check, clamp, download, duration, empty, formula, h, icon, label, num, pill, pm, toast } from "./dom.js";
+import { ago, check, clamp, download, duration, empty, formula, h, icon, label, num, pill, pm, store, stored, toast } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
 import { PHASES, RunModel, toolKind } from "./model.js";
 import { CONFIG_GROUPS, configName, modelName, specGrid, targetText } from "./spec.js";
@@ -45,7 +45,8 @@ export function mountRun(root, id, tab, hooks) {
     brief: null,
     briefLoading: false,
     notFound: false,
-    replaySpeed: 4,
+    replaySpeed: stored("heph-replay-speed", 4),
+    replayInfo: null, // {source, total_events, speed} for a replay
   };
   const head = h("header.run-head");
   const body = h("div.tab-body", { role: "tabpanel" });
@@ -77,6 +78,41 @@ export function mountRun(root, id, tab, hooks) {
     schedule();
   }
 
+  async function loadReplayInfo() {
+    try {
+      const st = await api(`/runs/${encodeURIComponent(id)}`);
+      ui.replayInfo = st.replay || null;
+      if (ui.replayInfo) ui.replaySpeed = ui.replayInfo.speed;
+      if (!model.goal) model.goal = st.raw_goal;
+    } catch (e) {
+      if (e.status === 404) ui.notFound = true;
+    }
+    lastHeadSig = null;
+    schedule();
+  }
+
+  async function setReplaySpeed(sp) {
+    ui.replaySpeed = sp;
+    store("heph-replay-speed", sp);
+    // Update the pickers in place: re-rendering the header would close an open popover.
+    for (const b of head.querySelectorAll(".speed-picker button")) b.setAttribute("aria-pressed", String(Number(b.dataset.speed) === sp));
+    if (model.isReplay && model.running) {
+      try {
+        await api(`/replay/${encodeURIComponent(id)}/speed`, { body: { speed: sp } });
+      } catch (e) {
+        toast(e.message, "critical");
+      }
+    }
+  }
+
+  async function stopReplay() {
+    try {
+      await api(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST" });
+    } catch (e) {
+      toast(e.message, "critical");
+    }
+  }
+
   const loadStateSoon = () => {
     clearTimeout(stateTimer);
     stateTimer = setTimeout(loadState, 350);
@@ -96,6 +132,7 @@ export function mountRun(root, id, tab, hooks) {
       () => {
         model.ended = true;
         model.running = false;
+        lastHeadSig = null;
         if (model.isReplay) loadState();
         else loadStateSoon();
         hooks.onChange();
@@ -105,6 +142,7 @@ export function mountRun(root, id, tab, hooks) {
   }
 
   if (!model.isReplay) loadState();
+  else loadReplayInfo();
   connect();
   const ticker = setInterval(() => model.running && tick(), 1000);
   const onTheme = () => viewer && viewer.draw();
@@ -137,7 +175,8 @@ export function mountRun(root, id, tab, hooks) {
 
   async function replay() {
     try {
-      const { replay_id } = await api(`/replay/${encodeURIComponent(model.isReplay ? sourceId() : id)}`, { body: { speed: ui.replaySpeed } });
+      const src = model.isReplay ? (ui.replayInfo && ui.replayInfo.source) || sourceId() : id;
+      const { replay_id } = await api(`/replay/${encodeURIComponent(src)}`, { body: { speed: ui.replaySpeed } });
       location.hash = `#/run/${encodeURIComponent(replay_id)}/activity`;
     } catch (e) {
       toast(e.message, "critical");
@@ -192,7 +231,7 @@ export function mountRun(root, id, tab, hooks) {
 
   function renderHead() {
     const fs = model.finalStep;
-    const sig = `${model.status}|${JSON.stringify(model.phase)}|${model.round}|${model.toolCount}|${model.best}|${ui.tab}|${model.running}|${model.resumable}|${ui.replaySpeed}|${model.paperList.length}|${model.candidateIds.length}|${model.log.length}|${fs ? fs.seq + fs.status : ""}`;
+    const sig = `${model.status}|${JSON.stringify(model.phase)}|${model.round}|${model.toolCount}|${model.best}|${ui.tab}|${model.running}|${model.resumable}|${model.paperList.length}|${model.candidateIds.length}|${model.log.length}|${fs ? fs.seq + fs.status : ""}|${model.isReplay ? model.events.length + JSON.stringify(ui.replayInfo) + model.ended : ""}`;
     if (sig === lastHeadSig) return tick();
     lastHeadSig = sig;
     head.replaceChildren(headContent());
@@ -234,40 +273,36 @@ export function mountRun(root, id, tab, hooks) {
     const actions = [];
     if (model.running && !model.isReplay) actions.push(h("button.btn.danger", { onclick: stop }, icon("stop"), "Stop"));
     if (model.resumable) actions.push(h("button.btn.primary", { onclick: resume }, icon("resume"), "Resume"));
-    if (!model.running && (model.events.length || model.state)) {
+    if (!model.running && !model.isReplay && (model.events.length || model.state)) {
       actions.push(
         h(
-          "details.menu",
+          "details.menu.replay-menu",
           null,
-          h("summary.btn", { title: "Replay this run with no network" }, icon("replay"), "Replay"),
+          h("summary.btn", { title: "Replay this run" }, icon("replay"), "Replay"),
           h(
-            "div.menu-list",
+            "div.menu-list.replay-pop",
             null,
-            [
-              [1, "Real time"],
-              [4, "4× speed"],
-              [10, "10× speed"],
-            ].map(([sp, text]) =>
-              h(
-                "button",
-                {
-                  onclick: (e) => {
-                    e.currentTarget.closest("details").open = false;
-                    ui.replaySpeed = sp;
-                    replay();
-                  },
+            h("div.replay-pop-title", null, "Replay this run"),
+            h("div.muted.replay-pop-sub", null, "Plays the recorded events back with no network, as they happened."),
+            speedPicker(),
+            h(
+              "button.btn.primary",
+              {
+                onclick: (e) => {
+                  e.currentTarget.closest("details").open = false;
+                  replay();
                 },
-                text,
-              ),
+              },
+              icon("play"),
+              "Start replay",
             ),
           ),
         ),
       );
     }
     const meta = [
-      model.isReplay ? pill(`Replay of ${sourceId()}`, "info", "replay") : null,
       cfg.llm_model ? h("span", null, modelName(cfg.llm_model)) : null,
-      model.startTime ? h("span", null, `Started ${ago(model.startTime)}`) : model.state ? h("span", null, `Created ${ago(model.state.created_at)}`) : null,
+      model.startTime ? h("span", null, `${model.isReplay ? "Recorded" : "Started"} ${ago(model.startTime)}`) : model.state ? h("span", null, `Created ${ago(model.state.created_at)}`) : null,
       model.startTime ? h("span.num", { dataset: { tick: "elapsed" } }) : null,
       cfg.require_novel ? pill("Novel only", "info", "star") : null,
     ].filter(Boolean);
@@ -290,6 +325,7 @@ export function mountRun(root, id, tab, hooks) {
         h("div", null, h("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } }, statusPill), h("h1.run-goal", { title: id }, model.goal || (model.state && model.state.raw_goal) || id), h("div.run-meta", null, metaWithSeps)),
         h("div.run-actions", null, actions),
       ),
+      model.isReplay ? replayBar() : null,
       stepper(),
       h(
         "nav.tabs",
@@ -304,6 +340,56 @@ export function mountRun(root, id, tab, hooks) {
           ),
         ),
       ),
+    );
+  }
+
+  function speedPicker() {
+    const speeds = [
+      [1, "1×"],
+      [2, "2×"],
+      [4, "4×"],
+      [10, "10×"],
+      [0, "Instant"],
+    ];
+    return h(
+      "div.segmented.speed-picker",
+      { role: "group", "aria-label": "Replay speed" },
+      speeds.map(([sp, text]) => h("button", { type: "button", dataset: { speed: String(sp) }, "aria-pressed": String(ui.replaySpeed === sp), onclick: (e) => (e.preventDefault(), setReplaySpeed(sp)) }, text)),
+    );
+  }
+
+  function replayBar() {
+    const info = ui.replayInfo || {};
+    const total = info.total_events || 0;
+    const seen = model.events.length;
+    const frac = total ? Math.min(1, seen / total) : model.ended ? 1 : 0;
+    const source = info.source || sourceId();
+    const live = model.running || (!model.ended && seen < total);
+    return h(
+      "div.replay-bar",
+      null,
+      h("div.replay-icon", null, icon("replay")),
+      h(
+        "div.replay-main",
+        null,
+        h(
+          "div.replay-line",
+          null,
+          h("strong", null, live ? "Replaying" : model.ended && seen < total ? "Replay stopped" : "Replay finished"),
+          h("span.muted", null, " · recorded run "),
+          h("a.mono", { href: `#/run/${encodeURIComponent(source)}/${ui.tab}` }, source),
+          h("span.muted.num", { style: { marginLeft: "auto" } }, total ? `${seen} / ${total} events` : `${seen} events`),
+        ),
+        h("div.meter-track.replay-track", null, h("div.meter-fill", { style: { width: `${frac * 100}%` } })),
+      ),
+      live
+        ? h("div.replay-actions", null, speedPicker(), h("button.btn.sm", { onclick: stopReplay }, icon("stop"), "Stop"))
+        : h(
+            "div.replay-actions",
+            null,
+            h("button.btn.sm", { onclick: replay }, icon("replay"), "Replay again"),
+            h("a.btn.sm", { href: `#/run/${encodeURIComponent(source)}/overview` }, "Open recorded run"),
+          ),
     );
   }
 
@@ -334,8 +420,21 @@ export function mountRun(root, id, tab, hooks) {
       PHASES.map((p) => {
         const st = model.phase[p.key];
         const cls = st === "done" ? "done" : st === "active" && model.running ? "active" : st === "failed" ? "failed" : st === "input" ? "failed" : "";
-        const ic = st === "done" ? icon("check") : st === "active" && model.running ? h("span.spinner") : null;
-        return h(`div.step${cls ? "." + cls : ""}`, null, h("div.step-name", null, ic, p.name), h("div.step-detail", null, (detail[p.key] || {})[st] || ""));
+        const n = PHASES.indexOf(p) + 1;
+        const mark =
+          cls === "done"
+            ? h("span.step-mark.done", null, icon("check"))
+            : cls === "active"
+              ? h("span.step-mark.active", null, h("span.spinner"))
+              : cls === "failed"
+                ? h("span.step-mark.failed", null, icon("x"))
+                : h("span.step-mark", null, n);
+        return h(
+          `div.step${cls ? "." + cls : ""}`,
+          null,
+          h("div.step-name", null, mark, p.name),
+          h("div.step-detail", null, (detail[p.key] || {})[st] || ""),
+        );
       }),
     );
   }

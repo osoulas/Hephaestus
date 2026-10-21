@@ -123,45 +123,52 @@ function renderSidebar() {
 function statusPanel() {
   const hl = app.health;
   const rows = [];
+  const row = (state, name, value, onclick, title) =>
+    h(
+      `div.status-row${onclick ? ".clickable" : ""}`,
+      { role: onclick ? "button" : null, tabindex: onclick ? 0 : null, title: title || null, onclick: onclick || null, onkeydown: onclick ? (e) => e.key === "Enter" && onclick() : null },
+      state === "pending" ? h("span.spinner") : h(`span.dot${state ? "." + state : ""}`),
+      h("span.label", null, name),
+      h(`span.value${state === "critical" ? ".action" : ""}`, null, value),
+    );
   if (!hl) {
-    rows.push(h("div.status-row", null, h("span.spinner"), h("span.label", null, "Checking connections…")));
+    rows.push(row("pending", "Checking…", ""));
   } else if (!hl.ok) {
-    rows.push(h("div.status-row", null, h("span.dot.critical"), h("span.label", null, "Server unreachable")));
+    rows.push(row("critical", "Server unreachable", ""));
   } else {
     const b = hl.backends;
     const sim = hl.simulation || {};
     const v = hl.valency || {};
-    const problems = [];
-    if (!b) problems.push({ pending: true, name: "Checking Claude access…" });
-    else if (!(b.auto && b.auto.ready)) problems.push({ name: "Claude", value: "Sign in", onclick: () => connect("claude") });
-    if (!v.signed_in) problems.push({ name: "Valency literature", value: v.pending ? "Waiting…" : v.needs_signin && v.access_token_expired ? "Sign in again" : "Sign in", onclick: signInValency });
-    if (sim.mp_key === false) problems.push({ name: "Materials Project", value: "Add key", onclick: () => connect("mp") });
-    if (sim.mace === false) problems.push({ name: "Simulation", value: "MACE missing", title: 'pip install -e ".[sim]"' });
     const d = hl.device || {};
-    if (!problems.length) {
-      rows.push(
-        h(
-          "div.status-row.clickable",
-          { role: "button", tabindex: 0, title: "Connections", onclick: () => connect(), onkeydown: (e) => e.key === "Enter" && connect() },
-          h("span.dot.good"),
-          h("span.label", null, "All connections ready"),
-          h("span.value", null, d.cuda ? "GPU" : "CPU"),
-        ),
-      );
+    if (!b) rows.push(row("pending", "Claude", "Checking…"));
+    else {
+      const auto = b.auto || {};
+      const via = auto.resolves_to === "api" ? "API key" : "Claude Code";
+      rows.push(row(auto.ready ? "good" : "critical", "Claude", auto.ready ? via : "Sign in", () => connect("claude")));
     }
-    for (const pr of problems) {
-      rows.push(
-        h(
-          `div.status-row${pr.onclick ? ".clickable" : ""}`,
-          { role: pr.onclick ? "button" : null, tabindex: pr.onclick ? 0 : null, title: pr.title || null, onclick: pr.onclick || null },
-          pr.pending ? h("span.spinner") : h("span.dot.critical"),
-          h("span.label", null, pr.name),
-          pr.value ? h("span.value", { style: { color: "var(--focus)", fontWeight: 550 } }, pr.value) : null,
-        ),
-      );
-    }
+    rows.push(
+      row(
+        v.signed_in ? "good" : v.pending ? "warning" : "critical",
+        "Valency literature",
+        v.signed_in ? "Signed in" : v.pending ? "Waiting…" : v.needs_signin && v.access_token_expired ? "Sign in again" : "Sign in",
+        v.signed_in ? null : signInValency,
+        v.error || null,
+      ),
+    );
+    rows.push(row(sim.mp_key ? "good" : "critical", "Materials Project", sim.mp_key ? "Key set" : "Add key", () => connect("mp")));
+    rows.push(
+      sim.mace === false
+        ? row("critical", "Simulation", "MACE missing", null, 'pip install -e ".[sim]"')
+        : row(d.cuda ? "good" : "", "Compute", d.cuda ? "GPU (CUDA)" : "CPU"),
+    );
   }
-  return h("div.sidebar-foot", null, ...rows, h("div.foot-tools", null, themeButton(), h("a.btn.ghost.sm", { href: "/docs", target: "_blank", rel: "noopener" }, icon("terminal"), "API")));
+  return h(
+    "div.sidebar-foot",
+    null,
+    h("div.sidebar-section.foot-title", null, "Connections"),
+    ...rows,
+    h("div.foot-tools", null, themeButton(), h("a.btn.ghost.sm", { href: "/docs", target: "_blank", rel: "noopener" }, icon("terminal"), "API")),
+  );
 }
 
 /**

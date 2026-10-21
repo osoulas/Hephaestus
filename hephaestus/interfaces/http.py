@@ -436,7 +436,15 @@ def create_app(
             state = RunState(run_id=run_id, raw_goal=exp.goal, config=exp.config, status="created")
         else:
             state = exp.state
-        return {**state.model_dump(mode="json"), "running": exp.running}
+        out = {**state.model_dump(mode="json"), "running": exp.running}
+        if exp.replay_control is not None:
+            ctl = exp.replay_control
+            out["replay"] = {
+                "source": ctl["source"],
+                "total_events": ctl["total_events"],
+                "speed": ctl["speed"],
+            }
+        return out
 
     @app.get("/runs/{run_id}/events")
     def events(run_id: str, history: bool = True) -> StreamingResponse:
@@ -578,7 +586,30 @@ def create_app(
             raise HTTPException(404, str(exc)) from exc
         with lock:
             experiments[handle.run_id] = handle
-        return {"replay_id": handle.run_id}
+        return {"replay_id": handle.run_id, "total_events": handle.replay_control["total_events"]}
+
+    @app.post("/replay/{replay_id}/speed")
+    def replay_speed(replay_id: str, req: ReplayRequest) -> dict[str, Any]:
+        """Change a running replay's speed (UI-9).
+
+        Parameters
+        ----------
+        replay_id : str
+            Replay ID.
+        req : ReplayRequest
+            New speed; 0 plays the rest with no pauses.
+
+        Returns
+        -------
+        dict
+            ``{replay_id, speed}``.
+        """
+        exp = get_experiment(replay_id)
+        try:
+            exp.set_replay_speed(req.speed)
+        except ExperimentError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"replay_id": replay_id, "speed": req.speed}
 
     # ------------------------------------------------------------------ sign-in
 
