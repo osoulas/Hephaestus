@@ -84,3 +84,36 @@ def test_dl3_cached_second_call_does_not_compute(tmp_path: Path) -> None:
     assert len(calls) == 1
     store.cached("relax", {"s": "SrTiO3", "fmax": 0.02}, compute, "v2", tmp_path)
     assert len(calls) == 2
+
+
+def test_dl3_concurrent_identical_inputs_compute_once(tmp_path: Path) -> None:
+    """Callers with identical inputs at the same moment share one computation."""
+    import threading
+    import time
+
+    calls = []
+    gate = threading.Barrier(4)
+
+    def compute() -> int:
+        """Slow computation that counts calls.
+
+        Returns
+        -------
+        int
+            A result.
+        """
+        calls.append(1)
+        time.sleep(0.05)
+        return 7
+
+    def work() -> None:
+        """Ask for the same key as the other threads."""
+        gate.wait()
+        assert store.cached("relax", {"s": "same"}, compute, "v", tmp_path) == 7
+
+    threads = [threading.Thread(target=work) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1

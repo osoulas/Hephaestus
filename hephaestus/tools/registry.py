@@ -8,6 +8,7 @@ The contract between the harness and the tools; see ``docs/TOOLS.md``. Every han
 from __future__ import annotations
 
 import importlib
+import threading
 import traceback
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -50,6 +51,31 @@ PROPERTY_KEYS = [
     "density",
 ]
 """Properties ``predict_property`` accepts; units and errors are in ``simulation.PROPERTY_REGISTRY``."""
+
+
+EXCLUSIVE_TOOLS = {"propose_candidate", "candidate_status", "request_review", "submit_final"}
+"""Tools that read or change every candidate: they run with no other call in flight."""
+_COUNTER_LOCK = threading.Lock()
+
+
+def lock_key(name: str, args: dict[str, Any]) -> str | None:
+    """Return the candidate a call works on, which no other call may touch at the same time.
+
+    Parameters
+    ----------
+    name : str
+        Tool name.
+    args : dict
+        Tool input.
+
+    Returns
+    -------
+    str or None
+        ``candidate_id`` for per-candidate tools; ``None`` for literature and database lookups,
+        which only add to shared collections and may run alongside anything.
+    """
+    cid = args.get("candidate_id")
+    return str(cid) if cid else None
 
 
 class ToolError(Exception):
@@ -149,6 +175,17 @@ class Workspace(BaseModel):
     tool_calls: int = 0
     compute_s: float = 0.0
     submitted: Submission | None = None
+
+    def add_compute(self, seconds: float) -> None:
+        """Add compute time to the budget counter; safe from parallel tool calls.
+
+        Parameters
+        ----------
+        seconds : float
+            Wall time of a compute step, s.
+        """
+        with _COUNTER_LOCK:
+            self.compute_s += seconds
 
     def get(self, candidate_id: str) -> CandidateState:
         """Return a candidate's state or raise a ``ToolError`` for the LLM.
