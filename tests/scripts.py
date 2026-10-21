@@ -180,3 +180,26 @@ def review(next_comp: str, conf: int) -> dict[str, Any]:
 
 
 REVIEWS = [review(FE2, 60), review("SrTi0.625Fe0.375O3", 80)]
+
+GOAL = (
+    "a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable "
+    "(≤ 0.05 eV/atom above hull) and dynamically stable"
+)
+PARSED = {
+    "material_family": "oxide perovskite",
+    "elements": [],
+    "excluded_elements": [],
+    "target_property": "band_gap",
+    "target_value": None,
+    "target_units": "eV",
+    "direction": "minimise",
+    "target_tolerance": None,
+    "reference_material": "SrTiO3",
+    "temperature_K": None,
+    "pressure_GPa": None,
+    "e_hull_max_eV_per_atom": 0.05,
+    "hard_constraints": ["oxide perovskite ABO3"],
+    "soft_preferences": [],
+    "assumptions": [],
+    "questions": [],
+}
