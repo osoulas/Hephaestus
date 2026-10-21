@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Str
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from hephaestus.core import valency_auth
+from hephaestus.core import credentials, valency_auth
 from hephaestus.core.config import RunConfig
 from hephaestus.core.types import RunState, SearchSpec
 from hephaestus.harness import runner
@@ -34,6 +34,8 @@ from hephaestus.interfaces.python import (
     device_status,
     list_runs,
     models,
+    run_blockers,
+    simulation_status,
 )
 from hephaestus.llm.auth import (
     ClaudeLogin,
@@ -43,6 +45,7 @@ from hephaestus.llm.auth import (
     load_api_key,
     save_api_key,
 )
+from hephaestus.tools.materials_project import check_mp_key
 
 WEB_DIR = Path(__file__).parent / "web"
 STATUS_TTL_S = 60.0
@@ -170,6 +173,7 @@ def create_app(
     check_backends: bool | None = None,
     claude_login: ClaudeLogin | None = None,
     key_check: Callable[[str], str | None] | None = check_api_key,
+    mp_check: Callable[[str], str | None] | None = check_mp_key,
 ) -> FastAPI:
     """Build the API (tests pass a runs folder and scripted dependencies).
 
@@ -185,7 +189,9 @@ def create_app(
     claude_login : ClaudeLogin, optional
         Claude Code sign-in runner (tests inject a fake CLI).
     key_check : callable or None
-        Checks an API key before saving; ``None`` skips the check (tests).
+        Checks an Anthropic API key before saving; ``None`` skips the check (tests).
+    mp_check : callable or None
+        Checks a Materials Project key before saving; ``None`` skips the check (tests).
 
     Returns
     -------
@@ -196,7 +202,8 @@ def create_app(
     experiments: dict[str, Experiment] = {}
     lock = threading.Lock()
     status = StatusCache()
-    load_api_key()  # a key saved from the UI earlier
+    load_api_key()  # keys saved from the UI earlier
+    credentials.load_secret("materials_project")
     login = claude_login or ClaudeLogin()
     if login.on_done is None:
         login.on_done = status.invalidate
@@ -231,6 +238,20 @@ def create_app(
         ok, error = backend_ready(backend, st)
         if not ok:
             raise HTTPException(503, f"LLM backend {backend!r} is not ready: {error}")
+
+    def require_runnable() -> None:
+        """Answer 503 when no run could get past its first step (no MACE, no MP key).
+
+        Raises
+        ------
+        fastapi.HTTPException
+            503 listing what is missing and how to fix it.
+        """
+        if not check:
+            return
+        blockers = run_blockers(simulation_status())
+        if blockers:
+            raise HTTPException(503, " ".join(blockers))
 
     def get_experiment(run_id: str) -> Experiment:
         """Return the live ``Experiment`` for a run, or the stored run.
@@ -281,7 +302,8 @@ def create_app(
         Returns
         -------
         dict
-            ``{ok, backends, device, valency, running}``; ``backends`` is ``None`` until checked.
+            ``{ok, backends, device, simulation, valency, running}``; ``backends`` is ``None`` until
+            checked, and ``simulation.blockers`` lists what stops any run.
         """
         st = status.get() or {}
         try:
@@ -294,6 +316,7 @@ def create_app(
             "ok": True,
             "backends": st.get("backends"),
             "device": st.get("device"),
+            "simulation": {**simulation_status(), "blockers": run_blockers()},
             "valency": valency,
             "running": running,
         }
@@ -362,6 +385,7 @@ def create_app(
         if req.spec is None and not req.raw_goal.strip():
             raise HTTPException(422, "Give a spec or a raw_goal.")
         require_ready(req.config.llm_backend)
+        require_runnable()
         refuse_if_busy()
         exp = Experiment(
             req.raw_goal, req.config, spec=req.spec, answers=req.answers, root=root, deps=make_deps()
@@ -510,6 +534,7 @@ def create_app(
         """
         exp = get_experiment(run_id)
         require_ready(exp.config.llm_backend)
+        require_runnable()
         refuse_if_busy()
         try:
             exp.start(resume=True)
@@ -680,6 +705,53 @@ def create_app(
         out = forget_api_key()
         status.invalidate()
         return out
+
+    @app.get("/auth/materials-project")
+    def auth_mp() -> dict[str, Any]:
+        """Whether a Materials Project API key is available; never returns the key.
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}``.
+        """
+        return credentials.secret_status("materials_project")
+
+    @app.post("/auth/materials-project")
+    def auth_mp_save(req: ApiKeyRequest) -> dict[str, Any]:
+        """Check and save a Materials Project API key owner-only in ``~/.hephaestus/`` (DL-7).
+
+        Parameters
+        ----------
+        req : ApiKeyRequest
+            The key.
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}``; 422 when the key is malformed or rejected.
+        """
+        key = req.api_key.strip()
+        if not key.isalnum() or len(key) < 16:
+            raise HTTPException(
+                422, "That does not look like a Materials Project API key (32 letters and digits)."
+            )
+        if mp_check is not None and (reason := mp_check(key)):
+            raise HTTPException(422, reason)
+        credentials.write_secret("materials_project", key)
+        return credentials.secret_status("materials_project")
+
+    @app.delete("/auth/materials-project")
+    def auth_mp_forget() -> dict[str, Any]:
+        """Delete the saved Materials Project key.
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}`` afterwards.
+        """
+        credentials.delete_secret("materials_project")
+        return credentials.secret_status("materials_project")
 
     # ------------------------------------------------------------------ static UI
 

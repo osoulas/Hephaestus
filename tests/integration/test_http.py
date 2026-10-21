@@ -188,3 +188,53 @@ def test_ui12_api_key_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     saved = c.post("/auth/anthropic", json={"api_key": key})
     assert saved.status_code == 200 and saved.json()["hint"] == "sk-…ABCD" and key not in saved.text
     assert c.delete("/auth/anthropic").json()["present"] is False
+
+
+def test_or1_runs_refused_without_mace_or_mp_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With checks on, a run that would fail at its first step is refused with the fix, not started."""
+    ready = {"ready": True, "error": None, "auth_method": None}
+    monkeypatch.setattr(
+        http,
+        "backend_status",
+        lambda check_claude_code=True: {
+            "api": ready,
+            "claude-code": ready,
+            "auto": {"resolves_to": "api", "ready": True},
+        },
+    )
+    monkeypatch.setattr(
+        http, "simulation_status", lambda: {"mace": False, "matgl": True, "torch": True, "mp_key": False}
+    )
+    c = TestClient(http.create_app(tmp_path, deps_factory=deps, check_backends=True))
+    r = c.post("/runs", json={"raw_goal": scripts.GOAL})
+    assert (
+        r.status_code == 503
+        and "MACE is not installed" in r.json()["detail"]
+        and "Materials Project" in r.json()["detail"]
+    )
+    assert not list(tmp_path.glob("r-*"))
+    assert c.get("/health").json()["simulation"]["mace"] is False
+
+
+def test_dl7_materials_project_key_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Save, report and forget an MP key owner-only; it goes into MP_API_KEY and never comes back."""
+    monkeypatch.setenv("HEPHAESTUS_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("MP_API_KEY", raising=False)
+    c = TestClient(
+        http.create_app(
+            tmp_path,
+            deps_factory=deps,
+            mp_check=lambda k: "Materials Project rejected this key." if k.startswith("bad") else None,
+        )
+    )
+    assert c.get("/auth/materials-project").json()["present"] is False
+    assert c.post("/auth/materials-project", json={"api_key": "short"}).status_code == 422
+    assert c.post("/auth/materials-project", json={"api_key": "bad" + "x" * 29}).status_code == 422
+    key = "a1B2" * 8
+    saved = c.post("/auth/materials-project", json={"api_key": key})
+    assert saved.json() == {"present": True, "source": "saved", "hint": "…a1B2"} and key not in saved.text
+    import os
+
+    assert os.environ["MP_API_KEY"] == key
+    assert (tmp_path / "home" / "mp_api_key").read_text(encoding="utf-8") == key
+    assert c.delete("/auth/materials-project").json()["present"] is False and "MP_API_KEY" not in os.environ

@@ -98,7 +98,11 @@ export class RunModel {
     } else {
       this.running = false;
       this.runResult = p;
-      if (e.status === "failed") this.errors += (p.errors || []).length || 1;
+      if (e.status === "failed") {
+        this.errors += (p.errors || []).length || 1;
+        const stuck = PHASES.find((ph) => this.phase[ph.key] !== "done" && this.phase[ph.key] !== "skipped");
+        if (stuck && this.phase[stuck.key] !== "input") this.phase[stuck.key] = "failed";
+      }
       this.log.push({
         type: "marker",
         seq: e.seq,
@@ -246,6 +250,7 @@ export class RunModel {
       if (state.validation.length) this.phase.final = "done";
       if (state.brief) this.phase.brief = "done";
     }
+    if (state.spec && this.phase.parse === "pending") this.phase.parse = "done"; // started from a parsed spec
     if (state.running) this.running = true;
   }
 

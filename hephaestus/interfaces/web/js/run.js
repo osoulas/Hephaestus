@@ -282,6 +282,7 @@ export function mountRun(root, id, tab, hooks) {
     const detail = {
       parse: { pending: "Waiting", active: "Reading the goal…", done: model.spec ? h("span", null, targetText(model.spec)) : "Done", input: "Needs answers", failed: "Failed" },
       campaign: {
+        failed: "Failed: see Overview",
         pending: "Not started",
         active: `Round ${Math.max(model.round, 1)} of ${cfg.max_iterations ?? "?"} · ${model.toolCount} tool calls`,
         done: `${model.roundRows.length} round${model.roundRows.length === 1 ? "" : "s"}${model.submitted ? ` · submitted ${model.submitted.candidate_id}` : ""}`,
@@ -332,10 +333,46 @@ export function mountRun(root, id, tab, hooks) {
     const cfg = model.config || (model.state && model.state.config) || {};
     const rows = model.roundRows;
     return h(
+      "div.grid",
+      null,
+      failureCallout(),
+      h(
       "div.grid.overview",
       null,
       h("div.grid", null, heroCard(), confidenceCard(rows, cfg.confidence_threshold ?? 72, cfg.max_iterations || 3)),
       h("div.grid", { style: { alignContent: "start" } }, outcomeCard(), budgetCard(cfg), latestReviewCard()),
+      ),
+    );
+  }
+
+  function runErrors() {
+    const fromEvent = (model.runResult && Array.isArray(model.runResult.errors) && model.runResult.errors) || [];
+    const fromState = (model.useState && model.state.errors) || [];
+    const seen = new Set();
+    return [...fromEvent, ...fromState].filter((e) => {
+      const k = `${e.step}|${e.code}|${e.message}`;
+      return !seen.has(k) && seen.add(k);
+    });
+  }
+
+  function failureCallout() {
+    if (model.status !== "failed") return null;
+    const errs = runErrors();
+    return h(
+      "div.callout.critical",
+      { style: { alignItems: "flex-start" } },
+      icon("alert"),
+      h(
+        "div",
+        { style: { display: "grid", gap: "6px" } },
+        h("strong", null, "The run failed before it could finish"),
+        errs.length
+          ? h("ul.list-plain", null, errs.map((e) => h("li", null, h("span"), h("span", null, h("strong", null, `${label(e.step)}: `), e.message))))
+          : h("span", null, "No error was recorded. See the Activity tab."),
+        errs.some((e) => /No module named 'mace'|MP_API_KEY/.test(e.message))
+          ? h("span", null, "Fix the setup (see the sidebar), then start a new run.")
+          : null,
+      ),
     );
   }
 
@@ -662,7 +699,15 @@ export function mountRun(root, id, tab, hooks) {
           "div.log-entry",
           null,
           h(`div.log-icon${e.status === "failed" ? ".error" : ""}`, null, icon(e.text.includes("finished") ? "check" : e.text.includes("failed") ? "x" : "play")),
-          h("div.log-main", null, h("strong", null, e.text), e.detail && e.detail.stop_reason ? h("span.muted", null, ` · ${label(e.detail.stop_reason)}`) : null),
+          h(
+            "div.log-main",
+            null,
+            h("strong", null, e.text),
+            e.detail && e.detail.stop_reason ? h("span.muted", null, ` · ${label(e.detail.stop_reason)}`) : null,
+            e.detail && Array.isArray(e.detail.errors)
+              ? e.detail.errors.map((x) => h("div.log-result.error", null, `${label(x.step)}: ${x.message}`))
+              : null,
+          ),
           h("div.log-side", null, time),
         );
       default:

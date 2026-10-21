@@ -16,6 +16,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from hephaestus.core import credentials
+
 
 def claude_cli_path() -> str | None:
     """Locate the Claude Code CLI: the Agent SDK's bundled copy, else ``claude`` on PATH.
@@ -296,23 +298,7 @@ def api_key_path() -> Path:
     pathlib.Path
         ``~/.hephaestus/anthropic_api_key``.
     """
-    from hephaestus.core.config import user_dir
-
-    return user_dir() / "anthropic_api_key"
-
-
-def _stored_key() -> str | None:
-    """Read the saved key.
-
-    Returns
-    -------
-    str or None
-        The key, or ``None`` when none is saved.
-    """
-    try:
-        return api_key_path().read_text(encoding="utf-8").strip() or None
-    except OSError:
-        return None
+    return credentials.secret_path("anthropic")
 
 
 def load_api_key() -> bool:
@@ -323,12 +309,9 @@ def load_api_key() -> bool:
     bool
         True when a saved key was loaded.
     """
-    if os.environ.get(API_KEY_ENV) or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+    if os.environ.get("ANTHROPIC_AUTH_TOKEN"):
         return False
-    key = _stored_key()
-    if key:
-        os.environ[API_KEY_ENV] = key
-    return bool(key)
+    return credentials.load_secret("anthropic")
 
 
 def check_api_key(key: str, timeout_s: float = 15.0) -> str | None:
@@ -384,13 +367,7 @@ def save_api_key(key: str, check: Callable[[str], str | None] | None = check_api
         raise ValueError("That does not look like an Anthropic API key (they start with sk-ant-).")
     if check is not None and (reason := check(key)):
         raise ValueError(reason)
-    path = api_key_path()
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(key)
-    os.chmod(path, 0o600)
-    os.environ[API_KEY_ENV] = key
+    credentials.write_secret("anthropic", key)
     return api_key_status()
 
 
@@ -402,10 +379,7 @@ def forget_api_key() -> dict[str, Any]:
     dict
         :func:`api_key_status` afterwards.
     """
-    key = _stored_key()
-    if key and os.environ.get(API_KEY_ENV) == key:
-        os.environ.pop(API_KEY_ENV, None)
-    api_key_path().unlink(missing_ok=True)
+    credentials.delete_secret("anthropic")
     return api_key_status()
 
 
@@ -418,10 +392,9 @@ def api_key_status() -> dict[str, Any]:
         ``{present, source, hint}``: ``source`` is ``saved``, ``environment`` or ``None``, and
         ``hint`` shows only the key's last four characters.
     """
-    key = os.environ.get(API_KEY_ENV)
-    stored = _stored_key()
-    if not key and os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+    st = credentials.secret_status("anthropic")
+    if not st["present"] and os.environ.get("ANTHROPIC_AUTH_TOKEN"):
         return {"present": True, "source": "environment", "hint": "auth token"}
-    if not key:
-        return {"present": False, "source": None, "hint": None}
-    return {"present": True, "source": "saved" if key == stored else "environment", "hint": f"sk-…{key[-4:]}"}
+    if st["present"]:
+        st["hint"] = "sk-" + st["hint"]
+    return st

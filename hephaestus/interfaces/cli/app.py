@@ -42,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     subs["login"].add_argument(
         "--forget-api-key", action="store_true", help="Delete the saved Anthropic API key."
     )
+    subs["login"].add_argument(
+        "--mp-api-key", action="store_true", help="Save a Materials Project API key (needed by every run)."
+    )
     subs["serve"].add_argument("--host", default="127.0.0.1", help="Interface to bind (default 127.0.0.1).")
     subs["serve"].add_argument("--port", type=int, default=8000, help="Port (default 8000).")
     return parser
@@ -62,6 +65,20 @@ def login(args: argparse.Namespace) -> int:
     """
     from hephaestus.llm import auth
 
+    if args.mp_api_key:
+        from hephaestus.core import credentials
+        from hephaestus.tools.materials_project import check_mp_key
+
+        key = getpass.getpass("Materials Project API key (input hidden): ").strip()
+        reason = (
+            "That does not look like a Materials Project API key." if not key.isalnum() else check_mp_key(key)
+        )
+        if reason:
+            print(f"Not saved: {reason}", file=sys.stderr)
+            return 1
+        credentials.write_secret("materials_project", key)
+        print(f"Saved …{key[-4:]} to {credentials.secret_path('materials_project')} (owner-only).")
+        return 0
     if args.forget_api_key:
         auth.forget_api_key()
         print("Saved API key removed.")
@@ -96,10 +113,12 @@ def backends() -> int:
     int
         0 when the ``auto`` choice is ready, 1 otherwise.
     """
-    from hephaestus.interfaces.python import backend_status
+    from hephaestus.core import credentials
+    from hephaestus.interfaces.python import backend_status, run_blockers
     from hephaestus.llm.auth import load_api_key
 
     load_api_key()
+    credentials.load_secret("materials_project")
     st = backend_status()
     for name in ("api", "claude-code"):
         s = st[name]
@@ -107,7 +126,10 @@ def backends() -> int:
         print(f"{name:12} {note}")
     auto = st["auto"]
     print(f"{'auto':12} uses {auto['resolves_to']}: {'ready' if auto['ready'] else 'not ready'}")
-    return 0 if auto["ready"] else 1
+    blockers = run_blockers()
+    for b in blockers:
+        print(f"blocked      {b}")
+    return 0 if auto["ready"] and not blockers else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
