@@ -1,0 +1,467 @@
+[
+ {
+  "phonon_IDs": {
+   "pheasy": [
+    "aaadbljb"
+   ]
+  },
+  "theoretical": true,
+  "database_IDs": {},
+  "band_gap": 0.6650999999999998,
+  "formation_energy_per_atom": -2.5739718200000015,
+  "energy_above_hull": 0.0006460229999962763,
+  "nsites": 10,
+  "formula_pretty": "BaSnO3",
+  "symmetry": {
+   "crystal_system": "Orthorhombic",
+   "symbol": "Imma",
+   "hall": "-I 2b 2",
+   "number": 74,
+   "point_group": "mmm",
+   "symprec": 0.1,
+   "angle_tolerance": 5.0,
+   "version": "2.7.0"
+  },
+  "material_id": "mp-aaacpbjl",
+  "structure": {
+   "@module": "pymatgen.core.structure",
+   "@class": "Structure",
+   "charge": 0.0,
+   "lattice": {
+    "matrix": [
+     [
+      -2.961375,
+      2.968105,
+      4.183936
+     ],
+     [
+      2.961375,
+      -2.968105,
+      4.183936
+     ],
+     [
+      2.961375,
+      2.968105,
+      -4.183936
+     ]
+    ],
+    "pbc": [
+     true,
+     true,
+     true
+    ],
+    "a": 5.923234727220086,
+    "b": 5.923234727220086,
+    "c": 5.923234727220086,
+    "alpha": 120.00541407842887,
+    "beta": 119.85501992637683,
+    "gamma": 90.12095949472123,
+    "volume": 147.10169950504223
+   },
+   "properties": {},
+   "sites": [
+    {
+     "species": [
+      {
+       "element": "Ba",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.249983,
+      0.75,
+      0.499983
+     ],
+     "properties": {
+      "magmom": 0.0
+     },
+     "label": "Ba",
+     "xyz": [
+      2.961375,
+      -0.00010091556999998127,
+      2.091968
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Ba",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.750017,
+      0.25,
+      0.500017
+     ],
+     "properties": {
+      "magmom": 0.0
+     },
+     "label": "Ba",
+     "xyz": [
+      3.7759225968159165e-17,
+      2.9682059155700005,
+      2.091968
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Sn",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "properties": {
+      "magmom": -0.0
+     },
+     "label": "Sn",
+     "xyz": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Sn",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.5,
+      0.5,
+      0.0
+     ],
+     "properties": {
+      "magmom": -0.0
+     },
+     "label": "Sn",
+     "xyz": [
+      0.0,
+      0.0,
+      4.183936
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.765463,
+      0.265463,
+      0.0
+     ],
+     "properties": {
+      "magmom": 0.0
+     },
+     "label": "O",
+     "xyz": [
+      -1.4806874999999997,
+      1.4840525,
+      4.3133284047360005
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.234537,
+      0.734537,
+      0.0
+     ],
+     "properties": {
+      "magmom": 0.0
+     },
+     "label": "O",
+     "xyz": [
+      1.4806875,
+      -1.4840525,
+      4.054543595264
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.726054,
+      0.75,
+      0.976054
+     ],
+     "properties": {
+      "magmom": 0.0
+     },
+     "label": "O",
+     "xyz": [
+      2.961375,
+      2.8259565153399997,
+      2.0919680000000005
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.765463,
+      0.765463,
+      0.5
+     ],
+     "properties": {
+      "magmom": 0.0
+     },
+     "label": "O",
+     "xyz": [
+      1.4806875000000002,
+      1.4840525,
+      4.313328404736
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.234537,
+      0.234537,
+      0.5
+     ],
+     "properties": {
+      "magmom": 0.0
+     },
+     "label": "O",
+     "xyz": [
+      1.4806875,
+      1.4840525,
+      -0.129392404736
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.273946,
+      0.25,
+      0.023946
+     ],
+     "properties": {
+      "magmom": 0.0
+     },
+     "label": "O",
+     "xyz": [
+      -1.1187193896255998e-16,
+      0.14214848466000005,
+      2.091968
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "phonon_IDs": {
+   "pheasy": [
+    "aaaehckr"
+   ],
+   "dfpt": [
+    "aaaaaerr"
+   ]
+  },
+  "theoretical": false,
+  "database_IDs": {
+   "icsd": [
+    "icsd-186899",
+    "icsd-190601",
+    "icsd-188149",
+    "icsd-239582",
+    "icsd-424820",
+    "icsd-185615",
+    "icsd-184338",
+    "icsd-27049",
+    "icsd-181091",
+    "icsd-180138",
+    "icsd-43138"
+   ]
+  },
+  "band_gap": 0.3730000000000002,
+  "formation_energy_per_atom": -2.574617843,
+  "energy_above_hull": 0.0,
+  "nsites": 5,
+  "formula_pretty": "BaSnO3",
+  "symmetry": {
+   "crystal_system": "Cubic",
+   "symbol": "Pm-3m",
+   "hall": "-P 4 2 3",
+   "number": 221,
+   "point_group": "m-3m",
+   "symprec": 0.1,
+   "angle_tolerance": 5.0,
+   "version": "2.7.0"
+  },
+  "material_id": "mp-aaaaaerr",
+  "structure": {
+   "@module": "pymatgen.core.structure",
+   "@class": "Structure",
+   "charge": 0.0,
+   "lattice": {
+    "matrix": [
+     [
+      4.14346542,
+      -0.0,
+      0.0
+     ],
+     [
+      -0.0,
+      4.14346542,
+      -0.0
+     ],
+     [
+      0.0,
+      -0.0,
+      4.14346542
+     ]
+    ],
+    "pbc": [
+     true,
+     true,
+     true
+    ],
+    "a": 4.14346542,
+    "b": 4.14346542,
+    "c": 4.14346542,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0,
+    "volume": 71.13628093297905
+   },
+   "properties": {},
+   "sites": [
+    {
+     "species": [
+      {
+       "element": "Ba",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.5,
+      0.5,
+      0.5
+     ],
+     "properties": {},
+     "label": "Ba",
+     "xyz": [
+      2.07173271,
+      2.07173271,
+      2.07173271
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Sn",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      -0.0,
+      -0.0,
+      -0.0
+     ],
+     "properties": {},
+     "label": "Sn",
+     "xyz": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.0,
+      0.5,
+      0.0
+     ],
+     "properties": {},
+     "label": "O",
+     "xyz": [
+      0.0,
+      2.07173271,
+      0.0
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      -0.0,
+      0.0,
+      0.5
+     ],
+     "properties": {},
+     "label": "O",
+     "xyz": [
+      0.0,
+      0.0,
+      2.07173271
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.5,
+      0.0,
+      0.0
+     ],
+     "properties": {},
+     "label": "O",
+     "xyz": [
+      2.07173271,
+      0.0,
+      0.0
+     ]
+    }
+   ]
+  }
+ }
+]

@@ -60,3 +60,39 @@ def test_dl1_run_dir_created(tmp_path: Path) -> None:
     rid = store.new_run_id()
     assert store.run_dir(rid, tmp_path).is_dir()
     assert rid.startswith("r-")
+
+
+def test_dl3_second_call_served_from_cache(tmp_path: Path) -> None:
+    """A repeated call with the same inputs does not recompute."""
+    calls = []
+
+    def compute() -> dict[str, float]:
+        """Count calls and return a value.
+
+        Returns
+        -------
+        dict
+            A fixed payload.
+        """
+        calls.append(1)
+        return {"a": 3.905}
+
+    first = store.cached("mp", {"formula": "SrTiO3"}, compute, root=tmp_path)
+    second = store.cached("mp", {"formula": "SrTiO3"}, compute, root=tmp_path)
+    assert first == second == {"a": 3.905}
+    assert len(calls) == 1
+
+
+def test_dl3_key_ignores_dict_order_but_not_version() -> None:
+    """Key order is canonical; a version change gives a new key."""
+    assert store.cache_key("mp", {"a": 1, "b": 2}) == store.cache_key("mp", {"b": 2, "a": 1})
+    assert store.cache_key("mp", {"a": 1}) != store.cache_key("mp", {"a": 1}, version="2")
+    assert store.cache_key("mp", {"a": 1}) != store.cache_key("valency", {"a": 1})
+
+
+def test_sys8_offline_miss_raises(tmp_path: Path) -> None:
+    """Offline, a miss raises instead of calling out."""
+    with pytest.raises(store.CacheMiss):
+        store.cached("mp", {"formula": "X"}, lambda: 1, offline=True, root=tmp_path)
+    store.cached("mp", {"formula": "X"}, lambda: 1, root=tmp_path)
+    assert store.cached("mp", {"formula": "X"}, lambda: 2, offline=True, root=tmp_path) == 1

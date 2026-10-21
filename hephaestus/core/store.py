@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from hephaestus.core.config import runs_root
+from hephaestus.core.config import cache_root, runs_root
 
 M = TypeVar("M", bound=BaseModel)
+T = TypeVar("T")
 
 
 def new_run_id() -> str:
@@ -167,3 +170,78 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
     return out
+
+
+class CacheMiss(KeyError):
+    """Raised by ``cached`` when an entry is missing and the run is offline (SYS-8)."""
+
+
+def cache_key(namespace: str, key: Any, version: str = "") -> str:
+    """Return the cache key: a hash of the namespace, the exact inputs and a version (DL-3).
+
+    Parameters
+    ----------
+    namespace : str
+        Cache namespace, e.g. ``"mp"``, ``"valency"``, ``"llm"``.
+    key : Any
+        JSON-serialisable inputs; dict key order does not matter.
+    version : str
+        Tool, model or schema version; changing it invalidates old entries.
+
+    Returns
+    -------
+    str
+        64-character SHA-256 hex digest.
+    """
+    canon = json.dumps({"ns": namespace, "key": key, "v": version}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def cached(
+    namespace: str,
+    key: Any,
+    compute: Callable[[], T],
+    *,
+    version: str = "",
+    offline: bool = False,
+    root: Path | None = None,
+) -> T:
+    """Return a cached value, computing and storing it on a miss (DL-3, SYS-8).
+
+    Parameters
+    ----------
+    namespace : str
+        Cache namespace; entries live in ``<root>/<namespace>/``.
+    key : Any
+        JSON-serialisable exact inputs of the call.
+    compute : callable
+        Zero-argument function producing a JSON-serialisable value; called only on a miss.
+    version : str
+        Version string folded into the key.
+    offline : bool
+        When true, a miss raises ``CacheMiss`` instead of calling ``compute``.
+    root : pathlib.Path, optional
+        Cache folder; defaults to ``cache_root()``.
+
+    Returns
+    -------
+    Any
+        The cached or freshly computed value (as it round-trips through JSON).
+
+    Raises
+    ------
+    CacheMiss
+        If the entry is missing and ``offline`` is true.
+    """
+    h = cache_key(namespace, key, version)
+    path = (root or cache_root()) / namespace / h[:2] / f"{h}.json"
+    if path.exists():
+        try:
+            return load_json(path)["value"]  # type: ignore[no-any-return]
+        except (json.JSONDecodeError, KeyError):
+            pass  # a torn or foreign file is recomputed
+    if offline:
+        raise CacheMiss(f"{namespace}: not cached and the run is offline")
+    value = compute()
+    atomic_write_text(path, json.dumps({"key": key, "version": version, "value": value}) + "\n")
+    return load_json(path)["value"]  # type: ignore[no-any-return]
