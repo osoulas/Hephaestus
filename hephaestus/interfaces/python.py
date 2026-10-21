@@ -18,6 +18,7 @@ Examples
 from __future__ import annotations
 
 import importlib.util
+import os
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -270,20 +271,24 @@ class Experiment:
         str or None
             CIF text, or ``None`` when the run has no structure for that candidate.
         """
-        if not self.files.workspace.exists():
+        if self.files.workspace.exists():
+            cs = load_model(self.files.workspace, Workspace).candidates.get(candidate_id)
+            if cs is not None:
+                cif = _to_cif(cs.structure) or (cs.record.cif if cs.record is not None else None)
+                if _has_atoms(cif):
+                    return cif
+        if not self.exists:
             return None
-        ws = load_model(self.files.workspace, Workspace)
-        cs = ws.candidates.get(candidate_id)
-        if cs is None:
-            return None
-        if cs.structure is not None:
-            try:
-                from pymatgen.core import Structure
-
-                return str(Structure.from_dict(cs.structure).to(fmt="cif"))
-            except Exception:
-                pass
-        return cs.record.cif if cs.record is not None else None
+        for it in reversed(self.state.iterations):  # runs stored without workspace.json
+            for sim in it.sims:
+                if sim.candidate_id == candidate_id and sim.relaxed is not None:
+                    cif = _to_cif(sim.relaxed.pmg_dict) or sim.relaxed.cif
+                    if _has_atoms(cif):
+                        return cif
+            for rec in it.structures:
+                if rec.candidate_id == candidate_id and _has_atoms(rec.cif):
+                    return rec.cif
+        return None
 
     # ------------------------------------------------------------------ parsing
 
@@ -668,6 +673,45 @@ class Experiment:
 # ---------------------------------------------------------------------- module helpers
 
 
+def _to_cif(pmg_dict: dict[str, Any] | None) -> str | None:
+    """Render a pymatgen structure dict as CIF.
+
+    Parameters
+    ----------
+    pmg_dict : dict or None
+        ``Structure.as_dict()`` output.
+
+    Returns
+    -------
+    str or None
+        CIF text, or ``None`` when the dict is empty or unreadable.
+    """
+    if not pmg_dict:
+        return None
+    try:
+        from pymatgen.core import Structure
+
+        return str(Structure.from_dict(pmg_dict).to(fmt="cif"))
+    except Exception:
+        return None
+
+
+def _has_atoms(cif: str | None) -> bool:
+    """Whether a CIF lists atom sites (stub records hold only a ``data_`` line).
+
+    Parameters
+    ----------
+    cif : str or None
+        CIF text.
+
+    Returns
+    -------
+    bool
+        True when the CIF has an ``_atom_site_`` loop.
+    """
+    return bool(cif) and "_atom_site_" in cif  # type: ignore[operator]
+
+
 def list_runs(root: Path | None = None) -> list[dict[str, Any]]:
     """Summaries of the stored runs, newest first (UI-9, UI-16).
 
@@ -729,6 +773,48 @@ def backend_status(check_claude_code: bool = True) -> dict[str, Any]:
     auto = resolve_backend("auto")
     ready = api["ready"] if auto == "api" else claude["ready"]
     return {"api": api, "claude-code": claude, "auto": {"resolves_to": auto, "ready": ready}}
+
+
+def simulation_status() -> dict[str, Any]:
+    """Whether the simulation stack and Materials Project access are available, without importing them.
+
+    Returns
+    -------
+    dict
+        ``{mace, matgl, torch, mp_key}`` booleans.
+    """
+    have = lambda mod: importlib.util.find_spec(mod) is not None  # noqa: E731
+    return {
+        "mace": have("mace"),
+        "matgl": have("matgl"),
+        "torch": have("torch"),
+        "mp_key": bool(os.environ.get("MP_API_KEY")),
+    }
+
+
+def run_blockers(sim: dict[str, Any] | None = None) -> list[str]:
+    """List what stops any run from working: missing MACE or Materials Project key.
+
+    Every run builds and relaxes its reference and candidates with MACE, and fetches competing
+    phases for the hull from Materials Project, so without either it fails at the first step.
+
+    Parameters
+    ----------
+    sim : dict, optional
+        A ``simulation_status()`` result; computed when omitted.
+
+    Returns
+    -------
+    list of str
+        One sentence per problem, with the fix; empty when runs can start.
+    """
+    sim = sim or simulation_status()
+    out = []
+    if not sim["mace"]:
+        out.append('MACE is not installed in the server\'s Python: pip install -e ".[sim]".')
+    if not sim["mp_key"]:
+        out.append("No Materials Project API key: add one under Connections, or set MP_API_KEY.")
+    return out
 
 
 def backend_ready(backend: str, status: dict[str, Any] | None = None) -> tuple[bool, str | None]:
@@ -855,4 +941,6 @@ __all__ = [
     "models",
     "resume",
     "run",
+    "run_blockers",
+    "simulation_status",
 ]

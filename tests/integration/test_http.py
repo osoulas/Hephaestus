@@ -100,7 +100,7 @@ def test_ui2_ui3_ui8_parse_run_stream_and_brief(client: TestClient) -> None:
     brief = client.get(f"/runs/{run_id}/brief")
     assert brief.status_code == 200 and "## Scope and assumptions" in brief.text
     assert client.get(f"/runs/{run_id}/brief", params={"format": "pdf"}).status_code == 404
-    assert client.get(f"/runs/{run_id}/structure/c2-1").text.startswith("data_")
+    assert client.get(f"/runs/{run_id}/structure/c2-1").status_code == 404  # stub tools store no atoms
     assert client.get(f"/runs/{run_id}/structure/zz").status_code == 404
     assert [r["run_id"] for r in client.get("/runs").json()] == [run_id]
     assert client.post(f"/runs/{run_id}/resume").status_code == 409
@@ -142,3 +142,99 @@ def test_ui12_status_endpoints(client: TestClient) -> None:
     assert client.get("/runs/nope").status_code == 404
     assert client.post("/runs", json={}).status_code == 422
     assert client.get("/").status_code == 200
+
+
+def test_ui1_web_ui_is_served_offline(client: TestClient) -> None:
+    """The static UI loads from the package with no external assets (UI-9: works with Wi-Fi off)."""
+    index = client.get("/")
+    assert index.status_code == 200 and "<title>Hephaestus</title>" in index.text
+    app_js = client.get("/js/app.js")
+    assert app_js.status_code == 200 and "javascript" in app_js.headers["content-type"]
+    for path in ["/css/app.css", "/js/run.js", "/js/viewer.js", "/favicon.svg"]:
+        assert client.get(path).status_code == 200, path
+    web = Path(http.WEB_DIR)
+    for f in web.rglob("*"):
+        if f.suffix in {".html", ".js", ".css"}:
+            text = f.read_text(encoding="utf-8")
+            assert "https://cdn" not in text and "fonts.googleapis" not in text, f
+
+
+def test_ui12_claude_sign_in_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start, follow and finish a Claude Code sign-in over HTTP with a fake CLI."""
+    from test_auth import fake_login, wait_for
+
+    login = fake_login(tmp_path, "code")
+    c = TestClient(http.create_app(tmp_path, deps_factory=deps, claude_login=login))
+    st = c.post("/auth/claude/start").json()
+    assert st["status"] in ("starting", "waiting")
+    wait_for(login, {"waiting"})
+    st = c.get("/auth/claude").json()
+    assert st["status"] == "waiting" and st["code_prompt"] and st["url"].startswith("https://")
+    assert c.post("/auth/claude/code", json={"code": "good"}).status_code == 200
+    wait_for(login, {"signed_in"})
+    assert c.get("/auth/claude").json()["signed_in"] is True
+    assert c.post("/auth/claude/code", json={"code": "again"}).status_code == 409
+
+
+def test_ui12_api_key_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Save, report and forget an API key; the key itself never comes back."""
+    monkeypatch.setenv("HEPHAESTUS_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    c = TestClient(http.create_app(tmp_path, deps_factory=deps, key_check=None))
+    assert c.get("/auth/anthropic").json()["present"] is False
+    assert c.post("/auth/anthropic", json={"api_key": "nope"}).status_code == 422
+    key = "sk-ant-api03-secret-ABCD"
+    saved = c.post("/auth/anthropic", json={"api_key": key})
+    assert saved.status_code == 200 and saved.json()["hint"] == "sk-…ABCD" and key not in saved.text
+    assert c.delete("/auth/anthropic").json()["present"] is False
+
+
+def test_or1_runs_refused_without_mace_or_mp_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With checks on, a run that would fail at its first step is refused with the fix, not started."""
+    ready = {"ready": True, "error": None, "auth_method": None}
+    monkeypatch.setattr(
+        http,
+        "backend_status",
+        lambda check_claude_code=True: {
+            "api": ready,
+            "claude-code": ready,
+            "auto": {"resolves_to": "api", "ready": True},
+        },
+    )
+    monkeypatch.setattr(
+        http, "simulation_status", lambda: {"mace": False, "matgl": True, "torch": True, "mp_key": False}
+    )
+    c = TestClient(http.create_app(tmp_path, deps_factory=deps, check_backends=True))
+    r = c.post("/runs", json={"raw_goal": scripts.GOAL})
+    assert (
+        r.status_code == 503
+        and "MACE is not installed" in r.json()["detail"]
+        and "Materials Project" in r.json()["detail"]
+    )
+    assert not list(tmp_path.glob("r-*"))
+    assert c.get("/health").json()["simulation"]["mace"] is False
+
+
+def test_dl7_materials_project_key_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Save, report and forget an MP key owner-only; it goes into MP_API_KEY and never comes back."""
+    monkeypatch.setenv("HEPHAESTUS_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("MP_API_KEY", raising=False)
+    c = TestClient(
+        http.create_app(
+            tmp_path,
+            deps_factory=deps,
+            mp_check=lambda k: "Materials Project rejected this key." if k.startswith("bad") else None,
+        )
+    )
+    assert c.get("/auth/materials-project").json()["present"] is False
+    assert c.post("/auth/materials-project", json={"api_key": "short"}).status_code == 422
+    assert c.post("/auth/materials-project", json={"api_key": "bad" + "x" * 29}).status_code == 422
+    key = "a1B2" * 8
+    saved = c.post("/auth/materials-project", json={"api_key": key})
+    assert saved.json() == {"present": True, "source": "saved", "hint": "…a1B2"} and key not in saved.text
+    import os
+
+    assert os.environ["MP_API_KEY"] == key
+    assert (tmp_path / "home" / "mp_api_key").read_text(encoding="utf-8") == key
+    assert c.delete("/auth/materials-project").json()["present"] is False and "MP_API_KEY" not in os.environ

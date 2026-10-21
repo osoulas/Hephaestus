@@ -43,7 +43,7 @@ SUBCOMMANDS = {
     "show": "Show a run's spec, rounds, candidates and summary.",
     "brief": "Print a run's experimental brief.",
     "backends": "Show LLM backend readiness.",
-    "login": "Sign in to Claude Code.",
+    "login": "Sign in to Claude (subscription via Claude Code, or an Anthropic API key); save a Materials Project key.",
     "signin": "Sign in to Valency.",
     "serve": "Serve the web UI and HTTP API.",
 }
@@ -133,8 +133,22 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "brief":
             p.add_argument("--pdf", action="store_true", help="print the PDF's path instead")
         p.add_argument("--root", type=Path, default=argparse.SUPPRESS, metavar="DIR")
-    for name in ("backends", "login", "signin"):
+    for name in ("backends", "signin"):
         sub.add_parser(name, help=SUBCOMMANDS[name], description=SUBCOMMANDS[name])
+    p = sub.add_parser("login", help=SUBCOMMANDS["login"], description=SUBCOMMANDS["login"])
+    keys = p.add_mutually_exclusive_group()
+    keys.add_argument(
+        "--api-key",
+        action="store_true",
+        help="save an Anthropic API key instead of signing in to Claude Code",
+    )
+    keys.add_argument("--forget-api-key", action="store_true", help="delete the saved Anthropic API key")
+    keys.add_argument(
+        "--mp-api-key", action="store_true", help="save a Materials Project API key (needed by every run)"
+    )
+    keys.add_argument(
+        "--forget-mp-api-key", action="store_true", help="delete the saved Materials Project key"
+    )
     p = sub.add_parser("serve", help=SUBCOMMANDS["serve"], description=SUBCOMMANDS["serve"])
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
@@ -252,6 +266,7 @@ def main(
     except SystemExit as exc:  # argparse already printed the message
         return int(exc.code) if isinstance(exc.code, int) else EXIT_USAGE
     out = console or make_console()
+    actions.load_saved_keys()  # keys saved by `login` or the web UI, unless the environment sets them
     folder = getattr(args, "root", None) or root
     verbose = bool(getattr(args, "verbose", False))
     try:
@@ -336,7 +351,10 @@ def _dispatch(
     if cmd == "backends":
         return actions.backends_view(out)
     if cmd == "login":
-        return actions.login(out)
+        mode = next(
+            (m for m in actions.LOGIN_MODES[1:] if getattr(args, m.replace("-", "_"), False)), "claude"
+        )
+        return actions.login(out, mode)
     if cmd == "signin":
         return actions.signin(out)
     if cmd == "serve":

@@ -366,7 +366,7 @@ def _drive(
             state.stop_reason = state.stop_reason or "submitted"
         sync_state(state, ws, [it.critique for it in state.iterations if it.critique])
         write_artifacts(files, state)
-        _final(state, files, ws, deps, bus, handlers)
+        _final(state, files, ws, deps, bus, handlers, stop)
         _brief(state, files, ws, llm, bus)
         state.status = "finished"
         state.usage = {**state.usage, **llm.usage}
@@ -548,6 +548,7 @@ def _final(
     deps: Deps,
     bus: EventBus,
     handlers: Mapping[str, Handler],
+    stop: threading.Event | None = None,
 ) -> None:
     """Run the higher-fidelity re-check of the finalists (Section 9); failures degrade the run.
 
@@ -565,12 +566,31 @@ def _final(
         Events.
     handlers : mapping
         The run's tool handlers, used by the default final check.
+    stop : threading.Event, optional
+        Set by ``request_stop``; the default final check then skips its optional items.
     """
     if not ws.cfg.run_final or ws.submitted is None or state.validation:
         return
     fn = deps.final_check
     if fn is None and (default := default_final_check()) is not None:
-        fn = lambda w, sub: default(w, sub, handlers=handlers)  # noqa: E731
+
+        def on_step(status: str, tool: str, info: dict[str, Any]) -> None:
+            """Publish one final-check tool call (``final_step`` events, for live progress).
+
+            Parameters
+            ----------
+            status : {"started", "finished", "failed"}
+                Step status.
+            tool : str
+                Tool name.
+            info : dict
+                ``candidate_id``, ``potential``, ``mode`` and, at the end, ``wall_s``.
+            """
+            bus.emit(state.run_id, "final_step", status, {"tool": tool, **info})  # type: ignore[arg-type]
+
+        fn = lambda w, sub: default(  # noqa: E731
+            w, sub, handlers=handlers, on_step=on_step, should_stop=stop.is_set if stop else None
+        )
     if fn is None:
         state.errors.append(
             ErrorRecord(step="final_calculation", code="unavailable", message="Final check not implemented.")
