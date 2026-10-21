@@ -1,6 +1,6 @@
 """``ProgressEvent`` bus, event history on disk, and replay (OR-7, DL-10, UI-9).
 
-Owner: A. One process-wide ``EventBus`` carries every run's events. Each event is appended to
+One process-wide ``EventBus`` carries every run's events. Each event is appended to
 ``runs/<run_id>/events.jsonl`` and fanned out to subscribers (the HTTP SSE stream, the CLI
 renderer). When a process first publishes to a run, the run's history is loaded from disk so
 a resumed run keeps its earlier events.

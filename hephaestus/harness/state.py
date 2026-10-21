@@ -1,7 +1,4 @@
-"""``Workspace`` to ``RunState`` sync, snapshots and resume (OR-5, OR-6, DL-1, DL-2, DL-10).
-
-Owner: A.
-"""
+"""``Workspace`` to ``RunState`` sync, snapshots and resume (OR-5, OR-6, DL-1, DL-2, DL-10)."""
 
 from __future__ import annotations
 

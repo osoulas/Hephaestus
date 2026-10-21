@@ -1,6 +1,6 @@
 """Outer order: parse, campaign, final re-check, brief (OR-1, OR-6, OR-8).
 
-Owner: A. ``run`` is the single entry point the Python API, HTTP API and CLI call. Every
+``run`` is the single entry point the Python API, HTTP API and CLI call. Every
 dependency (models, tool handlers, final check) can be injected so tests run offline.
 """
 

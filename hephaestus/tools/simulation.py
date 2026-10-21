@@ -1,4 +1,1 @@
-"""Relaxation, energy above hull, phonons with mode mapping, and MD (Section 5).
-
-Owner: B.
-"""
+"""Relaxation, energy above hull, phonons with mode mapping, and MD (Section 5)."""

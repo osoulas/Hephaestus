@@ -1,6 +1,6 @@
 """Independent reviewer: critique and LLM confidence (Section 7).
 
-Owner: A. Code fixes the facts (best of round, checks, rubric); one structured LLM call adds
+Code fixes the facts (best of round, checks, rubric); one structured LLM call adds
 findings, a next composition, a stop recommendation and the reviewer's own confidence. The
 answer is validated (SC-4 to SC-7, SC-9) and asked for again once; if the LLM fails, a
 minimal critique with the code facts is recorded (SC-10).
