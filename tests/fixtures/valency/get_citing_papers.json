@@ -1,0 +1,26 @@
+{
+  "paper_id": "2101.00001v2",
+  "openalex_work_id": "https://openalex.org/W1",
+  "total_citing_papers": 3,
+  "results": [
+    {
+      "openalex_work_id": "https://openalex.org/W2",
+      "title": "Revisiting the gap of Sn-doped SrTiO3",
+      "authors": ["Lee, Fay"],
+      "publication_year": 2023,
+      "cited_by_count": 2,
+      "in_corpus": true,
+      "valency_paper_id": "2310.33333v1"
+    },
+    {
+      "openalex_work_id": "https://openalex.org/W3",
+      "title": "A journal-only follow-up",
+      "authors": ["Kim, H"],
+      "publication_year": 2024,
+      "cited_by_count": 40,
+      "in_corpus": false,
+      "valency_paper_id": null
+    }
+  ],
+  "warnings": []
+}
