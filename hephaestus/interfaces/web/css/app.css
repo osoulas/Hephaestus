@@ -2739,3 +2739,16 @@ details.issues[open] > summary {
 .log-entry.reasoning.expandable:hover .expand-hint {
   color: var(--ink);
 }
+
+/* while a run is live, finished phases turn green */
+.stepper.live .step.done {
+  border-color: color-mix(in srgb, var(--good) 45%, var(--hairline));
+  background: color-mix(in srgb, var(--good) 6%, var(--surface));
+}
+.stepper.live .step.done::before {
+  background: var(--good);
+}
+.stepper.live .step.done .step-mark {
+  background: var(--good);
+  color: #fff;
+}
