@@ -27,6 +27,7 @@ from hephaestus.core.types import (
 from hephaestus.harness.agent import Campaign, NoveltyFn
 from hephaestus.harness.brief import assemble_brief
 from hephaestus.harness.brief_pdf import export_pdf
+from hephaestus.harness.compute_brief import assemble_compute_brief
 from hephaestus.harness.goal import apply_stability_options, parse_goal, validate_spec
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot, sync_state, write_artifacts
 from hephaestus.llm.base import LLM, LoggedLLM, make_llm
@@ -714,6 +715,42 @@ def _brief(state: RunState, files: RunFiles, ws: Workspace, llm: LLM, bus: Event
     except Exception as exc:
         state.errors.append(ErrorRecord(step="brief_pdf", code="export_failed", message=str(exc)[:300]))
     state.brief = brief
+    compute = write_compute_brief(state, ws, files)
     bus.emit(
-        state.run_id, "brief_generator", "finished", {"pdf": brief.pdf_path, "cited": brief.cited_paper_ids}
+        state.run_id,
+        "brief_generator",
+        "finished",
+        {"pdf": brief.pdf_path, "cited": brief.cited_paper_ids, "compute": compute},
     )
+
+
+def write_compute_brief(state: RunState, ws: Workspace, files: RunFiles) -> bool:
+    """Write the computational brief and its PDF; a failure degrades the run (Section 10).
+
+    Parameters
+    ----------
+    state : RunState
+        Run state with the submission; errors are added to it.
+    ws : Workspace
+        Workspace.
+    files : RunFiles
+        Run paths.
+
+    Returns
+    -------
+    bool
+        True when the Markdown was written.
+    """
+    try:
+        md = assemble_compute_brief(state, ws).markdown
+        atomic_write_text(files.compute_brief_md, md)
+    except Exception as exc:
+        state.errors.append(ErrorRecord(step="compute_brief", code="failed", message=str(exc)[:300]))
+        return False
+    try:
+        export_pdf(md, files.compute_brief_pdf, state.run_id, state.raw_goal)
+    except Exception as exc:
+        state.errors.append(
+            ErrorRecord(step="compute_brief_pdf", code="export_failed", message=str(exc)[:300])
+        )
+    return True

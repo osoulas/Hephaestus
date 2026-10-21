@@ -554,7 +554,7 @@ The UI talks to the backend over HTTP plus one event stream. All bodies are JSON
 | `GET /runs/{run_id}/events` | none | stream of ProgressEvent (server-sent events) | Drives the live view (UI-3, UI-5, UI-6). |
 | `GET /runs/{run_id}` | none | RunState | Full state for refresh or replay. |
 | `GET /runs/{run_id}/structure/{candidate_id}` | none | CIF text | For the 3D viewer (UI-7). |
-| `GET /runs/{run_id}/brief` | query: format (md or pdf) | file | UI-8. |
+| `GET /runs/{run_id}/brief` | query: format (md or pdf), kind (lab or compute) | file | UI-8. |
 | `POST /runs/{run_id}/stop` | none | {stopping: true} | UI-10. |
 | `POST /replay/{run_id}` | {speed (float, default 1)} | {replay\_id} | Re-emits a stored run's events with no network (UI-9). |
 | `GET /auth/valency` | query: start (bool) | {signed\_in, needs\_signin, access\_token\_expired, pending, url, error} | `?start=true` opens the browser sign-in (UI-11). |

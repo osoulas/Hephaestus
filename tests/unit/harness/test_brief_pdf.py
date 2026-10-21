@@ -22,3 +22,12 @@ def test_eb10_blocks_and_inline_markup() -> None:
     markup = inline("Make SrTiO3 (inferred) [[2]](https://x.org) and Al3+")
     assert "SrTiO<sub>3</sub>" in markup and "<super><a href" in markup and "Al3+" in markup
     assert '<font color="#8a5a00"><b>inferred</b></font>' in markup
+
+
+def test_eb10_code_blocks_and_non_formulas() -> None:
+    """Code blocks become one block; "HSE06" and "MP2020" are not subscripted like formulas."""
+    from hephaestus.harness.brief_pdf import _formulas, parse_blocks
+
+    blocks = parse_blocks("# Computational brief: X\n\n```\nSr1 Ti1 O3\n1.0\n```\n\ntext")
+    assert [b["kind"] for b in blocks] == ["h1", "code", "p"] and blocks[1]["text"] == "Sr1 Ti1 O3\n1.0"
+    assert _formulas("HSE06 and MP2020 on SrTiO3") == "HSE06 and MP2020 on SrTiO<sub>3</sub>"

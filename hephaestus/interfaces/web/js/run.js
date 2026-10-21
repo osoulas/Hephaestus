@@ -43,8 +43,9 @@ export function mountRun(root, id, tab, hooks) {
     paperQuery: "",
     openAbstracts: new Set(),
     collapsedRounds: new Set(),
-    brief: null,
-    briefLoading: false,
+    briefs: {}, // kind ("lab" | "compute") -> Markdown
+    briefLoading: null, // kind being fetched
+    briefKind: stored("heph-brief-kind", "lab"),
     notFound: false,
     replaySpeed: stored("heph-replay-speed", 4),
     replayInfo: null, // {source, total_events, speed} for a replay
@@ -302,7 +303,7 @@ export function mountRun(root, id, tab, hooks) {
       case "structure":
         return `${base}|${model.candidateIds.join(",")}|${ui.selected}|${model.useState}`;
       case "brief":
-        return `${base}|${model.phase.brief}|${ui.brief ? ui.brief.length : 0}|${ui.briefLoading}`;
+        return `${base}|${model.phase.brief}|${ui.briefKind}|${(ui.briefs[ui.briefKind] || "").length}|${ui.briefLoading}`;
       case "spec":
         return `${base}|${model.spec ? 1 : 0}`;
       case "literature":
@@ -1543,44 +1544,72 @@ export function mountRun(root, id, tab, hooks) {
     if (!ready) {
       return h("section.card", null, model.phase.brief === "active" ? empty("doc", "Writing the brief…", "Numbers come only from stored results; a number check blocks anything else.") : empty("doc", "No brief yet", "The lab brief is written after the final re-check."));
     }
-    if (ui.brief == null) {
-      if (!ui.briefLoading) {
-        ui.briefLoading = true;
-        api(`/runs/${encodeURIComponent(model.isReplay ? sourceId() : id)}/brief`, { text: true })
-          .then((md) => (ui.brief = md))
-          .catch(() => (ui.brief = (model.state && model.state.brief && model.state.brief.markdown) || ""))
+    const kind = ui.briefKind === "compute" ? "compute" : "lab";
+    const rid = model.isReplay ? sourceId() : id;
+    const md = ui.briefs[kind];
+    const kindSwitch = h(
+      "div.segmented.brief-kind",
+      { role: "group", "aria-label": "Brief" },
+      [
+        ["lab", "flask", "Lab"],
+        ["compute", "cpu", "Computational"],
+      ].map(([k, ic, text]) =>
+        h(
+          "button",
+          {
+            type: "button",
+            "aria-pressed": String(k === kind),
+            title: k === "lab" ? "How to make and test it" : "How to check it with DFT first",
+            onclick: () => {
+              ui.briefKind = k;
+              store("heph-brief-kind", k);
+              schedule();
+            },
+          },
+          icon(ic),
+          text,
+        ),
+      ),
+    );
+    if (md == null) {
+      if (ui.briefLoading !== kind) {
+        ui.briefLoading = kind;
+        api(`/runs/${encodeURIComponent(rid)}/brief?kind=${kind}`, { text: true })
+          .then((text) => (ui.briefs[kind] = text))
+          .catch(() => (ui.briefs[kind] = kind === "lab" ? (model.state && model.state.brief && model.state.brief.markdown) || "" : ""))
           .finally(() => {
-            ui.briefLoading = false;
+            ui.briefLoading = null;
             schedule();
           });
       }
-      return h("section.card", null, empty("doc", "Loading the brief…"));
+      return h("div.brief-wrap", null, kindSwitch, h("section.card", null, empty("doc", "Loading the brief…")));
     }
-    const { html, headings } = renderMarkdown(ui.brief);
+    if (!md) return h("div.brief-wrap", null, kindSwitch, h("section.card", null, empty("doc", "No computational brief", "It is written with the lab brief once the run has a candidate.")));
+    const { html, headings } = renderMarkdown(md);
     const doc = h("article.card.doc");
     doc.innerHTML = html; // escaped by renderMarkdown
     decorateBrief(doc);
-    const rid = model.isReplay ? sourceId() : id;
-    const cited = (model.state && model.state.brief && model.state.brief.cited_paper_ids) || [];
+    const file = `${rid}_${kind === "compute" ? "compute_" : ""}brief`;
+    const cited = kind === "lab" ? (model.state && model.state.brief && model.state.brief.cited_paper_ids) || [] : [];
     return h(
       "div.brief-layout",
       null,
-      doc,
+      h("div.brief-wrap", null, kindSwitch, doc),
       h(
         "aside.toc",
         null,
         h(
           "div",
           { style: { display: "grid", gap: "8px" } },
-          h("button.btn", { onclick: () => download(`${rid}_brief.md`, stripCodes(ui.brief), "text/markdown") }, icon("download"), "Markdown"),
-          h("a.btn.primary", { href: `/runs/${encodeURIComponent(rid)}/brief?format=pdf`, download: `${rid}_brief.pdf` }, icon("download"), "PDF"),
+          h("button.btn", { onclick: () => download(`${file}.md`, stripCodes(md), "text/markdown") }, icon("download"), "Markdown"),
+          h("a.btn.primary", { href: `/runs/${encodeURIComponent(rid)}/brief?format=pdf&kind=${kind}`, download: `${file}.pdf` }, icon("download"), "PDF"),
           h("button.btn", { onclick: () => window.print() }, icon("printer"), "Print"),
           h(
             "button.btn",
             {
               onclick: async () => {
                 try {
-                  await navigator.clipboard.writeText(stripCodes(ui.brief));
+                  await navigator.clipboard.writeText(stripCodes(md));
                   toast("Brief copied as Markdown.");
                 } catch (e) {
                   toast("Copy failed: your browser blocked clipboard access.", "critical");

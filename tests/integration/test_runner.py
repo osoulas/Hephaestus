@@ -91,6 +91,7 @@ def test_sys1_goal_to_brief_unattended(tmp_path: Path) -> None:
         "events.jsonl",
         "llm_log.jsonl",
         "brief.md",
+        "compute_brief.md",
         "iter_1/candidates.json",
         "iter_1/critique.json",
         "iter_2/c2-1/sim.json",

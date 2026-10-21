@@ -66,7 +66,7 @@ Everything the UI and CLI show comes from `ProgressEvent`s:
 | `orchestrator` | finished, per round | `{round, best, stop, rule, gate_note, scores, llm_scores}` | Rounds table, confidence chart (UI-5, UI-15) |
 | `orchestrator` | finished, at the end | `{submitted, rule, usage}` | Submission |
 | `final_calculation` | started / finished / failed | `{candidates}` / `{verdict, checks, notes}` | Validation panel |
-| `brief_generator` | started / finished | `{}` / `{pdf, cited}` | "Brief ready": fetch `/runs/{id}/brief` |
+| `brief_generator` | started / finished | `{}` / `{pdf, cited, compute}` | "Brief ready": fetch `/runs/{id}/brief` (and `?kind=compute`) |
 | `run` | finished / failed | `{status, stop_reason, best, errors}` | End of run |
 
 **Tool events.** These have one `started` and one `finished` (or `failed`) per call. Calls can run
@@ -119,7 +119,7 @@ Base URL `http://127.0.0.1:8000`; interactive docs at `/docs`. Bodies are JSON i
 | `GET /runs/{id}` | | `RunState` + `running` |
 | `GET /runs/{id}/events` | `?history=true` | SSE stream (below) |
 | `GET /runs/{id}/structure/{candidate_id}` | | CIF text (3D viewer, UI-7) |
-| `GET /runs/{id}/brief` | `?format=md\|pdf` | Markdown or PDF; 404 until written |
+| `GET /runs/{id}/brief` | `?format=md\|pdf&kind=lab\|compute` | Markdown or PDF of the lab brief, or of the computational brief (DFT settings, workflow, starting POSCAR; built on demand for older runs); 404 until written |
 | `POST /runs/{id}/stop?mode=campaign\|all` | | `{stopping, mode}`: `campaign` ends the search (re-check and brief still run); `all` ends the run after the current calculation |
 | `POST /runs/{id}/resume` | | `{run_id, resumed}`; 409 if finished or running |
 | `POST /replay/{id}` | `{speed}` (0 = no pauses) | `{replay_id}` |

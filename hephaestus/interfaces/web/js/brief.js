@@ -18,6 +18,13 @@ const SECTIONS = {
   "iteration-history": { icon: "log", tone: "slate" },
   "literature-support": { icon: "book", tone: "blue" },
   "scope-and-assumptions": { icon: "info", tone: "slate" },
+  // computational brief
+  "starting-point": { icon: "atom", tone: "ember" },
+  "calculation-settings": { icon: "sliders", tone: "slate" },
+  workflow: { icon: "cpu", tone: "ember" },
+  "screening-results-to-check": { icon: "gauge", tone: "blue" },
+  "starting-structure": { icon: "cube", tone: "violet" },
+  "methods-to-compare-against": { icon: "book", tone: "blue" },
 };
 
 const GLANCE_ICONS = {
@@ -26,6 +33,11 @@ const GLANCE_ICONS = {
   "stable?": "shield",
   "final re-check": "gate",
   "first experiment": "play",
+  "what to compute": "cpu",
+  "starting structure": "cube",
+  "level of theory": "sliders",
+  "deciding calculation": "gate",
+  "first calculation": "play",
 };
 
 /**
@@ -46,8 +58,10 @@ export function decorateBrief(doc) {
 function titleBlock(doc) {
   const h1 = doc.querySelector(":scope > h1");
   if (!h1) return;
-  const name = h1.innerHTML.replace(/^Lab brief:\s*/, "");
-  const head = h("header.brief-head", null, h("div.brief-eyebrow", null, icon("doc"), "Lab brief"));
+  const m = h1.innerHTML.match(/^(Lab brief|Computational brief):\s*/);
+  const kind = m ? m[1] : "Lab brief";
+  const name = m ? h1.innerHTML.slice(m[0].length) : h1.innerHTML;
+  const head = h("header.brief-head", null, h("div.brief-eyebrow", null, icon(kind === "Lab brief" ? "doc" : "cpu"), kind));
   const title = h("h1.brief-title");
   title.innerHTML = name; // already escaped Markdown output
   head.append(title);
@@ -76,7 +90,7 @@ function glance(doc) {
     if (lk === "stable?") tone = /unstable|not checked/.test(value.textContent) ? "warning" : "good";
     grid.append(
       h(
-        `div.glance-tile${lk === "first experiment" ? ".wide.next" : ""}${tone ? "." + tone : ""}`,
+        `div.glance-tile${lk === "first experiment" || lk === "first calculation" ? ".wide.next" : ""}${tone ? "." + tone : ""}`,
         null,
         h("div.glance-key", null, icon(GLANCE_ICONS[lk] || "info"), key),
         value,
@@ -120,10 +134,10 @@ function decorateSection(sec) {
     else if (key.startsWith("watch for")) p.classList.add("callout-watch");
     else if (/^(confirmed|weakened|overturned)\./.test(key)) p.classList.add("verdict-line", `v-${key.split(".")[0]}`);
   }
-  if (kind === "synthesis-route" || kind === "characterisation-plan") {
+  if (kind === "synthesis-route" || kind === "characterisation-plan" || kind === "workflow") {
     for (const ol of sec.querySelectorAll(":scope > ol")) ol.classList.add("steps");
   }
-  if (kind === "literature-support") {
+  if (kind === "literature-support" || kind === "methods-to-compare-against") {
     for (const ol of sec.querySelectorAll(":scope > ol")) ol.classList.add("refs");
   }
   if (kind === "scope-and-assumptions") sec.classList.add("quiet");
