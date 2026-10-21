@@ -13,6 +13,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from hephaestus.core.concurrency import KeyedLocks
 from hephaestus.core.config import cache_root, runs_root
 
 M = TypeVar("M", bound=BaseModel)
@@ -171,6 +172,9 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+_IN_FLIGHT = KeyedLocks()
+
+
 def cache_key(namespace: str, inputs: Any, version: str = "") -> str:
     """Hash of a namespace, canonical JSON inputs and a version (DL-3).
 
@@ -201,6 +205,8 @@ def cached(
 ) -> Any:
     """Return a stored result for exactly these inputs, or compute and store it (DL-3, SYS-8).
 
+    Concurrent calls with identical inputs compute once: the others wait and read the result.
+
     Parameters
     ----------
     namespace : str
@@ -221,13 +227,14 @@ def cached(
     """
     key = cache_key(namespace, inputs, version)
     path = (root or cache_root()) / namespace / key[:2] / f"{key}.json"
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))["result"]
-        except (json.JSONDecodeError, KeyError):
-            pass
-    result = compute()
-    atomic_write_text(
-        path, json.dumps({"namespace": namespace, "version": version, "result": result}, default=str)
-    )
-    return result
+    with _IN_FLIGHT.hold(str(path)):  # a second caller with the same inputs waits, then reads
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))["result"]
+            except (json.JSONDecodeError, KeyError):
+                pass
+        result = compute()
+        atomic_write_text(
+            path, json.dumps({"namespace": namespace, "version": version, "result": result}, default=str)
+        )
+        return result

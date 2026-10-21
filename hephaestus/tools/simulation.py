@@ -1,13 +1,15 @@
 """Relaxation, energy above hull, phonons with mode mapping, MD and property predictions (Sections 5, 6).
 
-Every model call runs under ``GPU_LOCK`` (SE-15); MEGNet in ``properties.py`` must use the same
-lock. Relaxations and competing phases are cached by their exact inputs (DL-3). Potentials are
+Model calls on a GPU run one at a time under ``GPU_LOCK`` (SE-15): concurrent CUDA use from
+several threads can crash the process. On CPU, calls for different structures run in parallel. Relaxations and competing phases are cached by their exact inputs (DL-3). Potentials are
 created by the factories in ``FACTORIES``, which tests replace with toy calculators.
 See ``docs/stability_check.md`` for why dynamic stability uses mode mapping.
 """
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import itertools
 import math
 import os
@@ -23,7 +25,24 @@ from hephaestus.core.types import ErrorRecord, Lattice, PhononResult, PropertyPr
 from hephaestus.tools.registry import PROPERTY_KEYS, CandidateState, ToolError, Workspace, register
 
 GPU_LOCK = threading.RLock()
-"""One model call at a time across the process: MACE and MEGNet share it (SE-15)."""
+"""One GPU model call at a time across the process: MACE and MEGNet share it (SE-15)."""
+
+
+def model_lock(calc: Any) -> Any:
+    """Return the lock a model call needs: ``GPU_LOCK`` on CUDA, nothing on CPU.
+
+    Parameters
+    ----------
+    calc : Calculator
+        ASE calculator; its ``device`` attribute (if any) says where it runs.
+
+    Returns
+    -------
+    context manager
+        ``GPU_LOCK`` or a no-op.
+    """
+    return GPU_LOCK if "cuda" in str(getattr(calc, "device", "")) else contextlib.nullcontext()
+
 
 FMAX_RANGE = (0.002, 0.1)
 MAX_STEPS = 500
@@ -118,6 +137,8 @@ FACTORIES: dict[str, Factory] = {
     "chgnet": _chgnet,
 }
 _LOADED: dict[tuple[str, str, str], Calc] = {}
+_LOAD_LOCK = threading.Lock()
+_THREAD = threading.local()
 
 
 def resolve_device(device: str) -> str:
@@ -144,7 +165,7 @@ def resolve_device(device: str) -> str:
 
 
 def load_potential(name: str, device: str = "auto", dtype: str = "float32") -> Calc:
-    """Load a potential once per process and reuse it (SE-2).
+    """Load a potential once per process and reuse it (SE-2); one calculator per thread.
 
     Parameters
     ----------
@@ -168,10 +189,18 @@ def load_potential(name: str, device: str = "auto", dtype: str = "float32") -> C
     if name not in FACTORIES:
         raise ToolError(f"Unknown potential {name!r}; use one of {sorted(FACTORIES)}.")
     key = (name, resolve_device(device), dtype)
-    if key not in _LOADED:
-        with GPU_LOCK:
+    with _LOAD_LOCK:
+        if key not in _LOADED:
             _LOADED[key] = FACTORIES[name](key[1], dtype)
-    return _LOADED[key]
+        base = _LOADED[key]
+    # ASE calculators keep per-call results on the object, so each thread gets its own shallow
+    # copy that shares the loaded model weights but not the results.
+    mine = _THREAD.__dict__.setdefault("calcs", {})
+    if (key, id(base)) not in mine:
+        c = copy.copy(base)
+        c.results, c.atoms = {}, None
+        mine[(key, id(base))] = c
+    return mine[(key, id(base))]
 
 
 def potential_version(name: str) -> str:
@@ -359,7 +388,7 @@ def relax_atoms(
     if fix_symmetry:
         work.set_constraint(FixSymmetry(work, symprec=SYMPREC))
     target = FrechetCellFilter(work) if relax_cell else work
-    with GPU_LOCK:
+    with model_lock(calc):
         opt = FIRE(target, logfile=None)
         converged = bool(opt.run(fmax=fmax, steps=max_steps))
         energy = float(work.get_potential_energy()) / len(work)
@@ -679,7 +708,7 @@ def analyse_phonons(atoms: Any, calc: Calc, dims: list[int]) -> dict[str, Any]:
     ph = _phonopy(atoms, dims)
     ph.generate_displacements(distance=PHONON_DISPLACEMENT_A)
     forces = []
-    with GPU_LOCK:
+    with model_lock(calc):
         for sc in ph.supercells_with_displacements:
             a = Atoms(sc.symbols, cell=sc.cell, scaled_positions=sc.scaled_positions, pbc=True)
             a.calc = calc
@@ -736,7 +765,7 @@ def mode_map(
 
     ph = analysis["phonopy"]
     best = None
-    with GPU_LOCK:
+    with model_lock(calc):
         for amp in MODE_MAP_AMPLITUDES:
             mod = ph.run_modulations(np.diag(dims), [[analysis["q"], analysis["band"], amp, 0.0]])
             cell = mod.modulated_supercells[0]
@@ -894,7 +923,7 @@ def md_check(
     thermalize_momenta(work, temperature_K=temperature_K, rng=rng)
     start = work.get_positions().copy()
     steps = max(1, round(duration_ps * 1000 / MD_TIMESTEP_FS))
-    with GPU_LOCK:
+    with model_lock(calc):
         dyn = Langevin(
             work, MD_TIMESTEP_FS * units.fs, temperature_K=temperature_K, friction=0.02, fixcm=False, rng=rng
         )
@@ -1014,7 +1043,7 @@ def relax(ws: Workspace, candidate_id: str, potential: str, fmax: float) -> dict
     cs.e_hull = cs.e_form = cs.phonon = cs.md = cs.elastic = None
     cs.decomposes_to, cs.hull_stale, cs.phonon_details, cs.predictions = [], False, {}, {}
     cs.wall_time_s += r["wall_time_s"]
-    ws.compute_s += r["wall_time_s"]
+    ws.add_compute(r["wall_time_s"])
     if not cs.converged:
         cs.errors.append(
             ErrorRecord(
@@ -1076,7 +1105,7 @@ def hull(ws: Workspace, candidate_id: str) -> dict[str, Any]:
     cs.e_hull, cs.e_form, cs.decomposes_to, cs.hull_stale = e_hull, e_form, products, False
     wall = round(time.monotonic() - t0, 2)
     cs.wall_time_s += wall
-    ws.compute_s += wall
+    ws.add_compute(wall)
     thr = ws.spec.stability_thresholds.e_hull_max_eV_per_atom
     return {
         "candidate_id": candidate_id,
@@ -1151,7 +1180,7 @@ def phonons(ws: Workspace, candidate_id: str, mode: str) -> dict[str, Any]:
     cs.phonon_details = {"verdict": res["verdict"], "mode_mapping_rounds": res["rounds"]}
     wall = round(time.monotonic() - t0, 2)
     cs.wall_time_s += wall
-    ws.compute_s += wall
+    ws.add_compute(wall)
     return {
         "candidate_id": candidate_id,
         "mode": mode,
@@ -1198,7 +1227,7 @@ def run_md(ws: Workspace, candidate_id: str, duration_ps: float) -> dict[str, An
     )
     cs.md = res
     wall = round(time.monotonic() - t0, 2)
-    ws.compute_s += wall
+    ws.add_compute(wall)
     return {
         "candidate_id": candidate_id,
         "stable": res["stable"],
@@ -1382,7 +1411,7 @@ def elastic_tensor(
             strained.set_cell(cell0 @ (np.eye(3) + strain_matrix(e)), scale_atoms=True)
             relaxed, _, _, _ = relax_atoms(strained, calc, fmax=fmax, relax_cell=False)
             relaxed.calc = calc
-            with GPU_LOCK:
+            with model_lock(calc):
                 stresses.append(relaxed.get_stress(voigt=True))
         C[:, j] = np.polyfit(np.asarray(strains), np.asarray(stresses), 1)[0]
     C = 0.5 * (C + C.T) * EV_PER_A3_TO_GPA
@@ -1637,7 +1666,7 @@ def predict_property(ws: Workspace, candidate_id: str, property: str) -> dict[st
                     )
             wall = round(time.monotonic() - t0, 2)
             cs.wall_time_s += wall
-            ws.compute_s += wall
+            ws.add_compute(wall)
         if property not in cs.predictions:
             raise ToolError(
                 f"{property} is undefined for this structure (mechanically unstable or degenerate)."

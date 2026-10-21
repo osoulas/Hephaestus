@@ -66,6 +66,7 @@ class RunConfig(BaseModel):
     confidence_threshold: int = 72
     max_tool_calls: int = 90
     time_budget_s: float = 900.0
+    max_parallel_tools: int = 4  # tool calls on different candidates run at once
     # LLM access (OR-11)
     llm_backend: Literal["auto", "api", "claude-code"] = "auto"
     llm_model: str = Field(default_factory=default_model)
