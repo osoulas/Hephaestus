@@ -242,11 +242,20 @@ def test_parser_questions_panel() -> None:
 
 
 def test_logo_block_letters_or_wordmark() -> None:
-    """Wide terminals get six rows of block letters; narrow ones a one-line wordmark."""
-    from hephaestus.interfaces.cli.theme import LOGO_WIDTH, logo
+    """Wide terminals get the block letters with the anvil, then without it, then a one-line wordmark."""
+    from hephaestus.interfaces.cli.theme import ANVIL_GAP, ANVIL_WIDTH, LOGO_WIDTH, logo
 
-    wide = logo(LOGO_WIDTH + 10).plain.splitlines()
-    assert len(wide) == 6 and all("█" in row for row in wide[:5])
+    full = logo(LOGO_WIDTH + 4 + ANVIL_GAP + ANVIL_WIDTH).plain.splitlines()
+    assert (
+        len(full) == 6 and full[0].endswith("████████████████████╗") and full[5].endswith("╚══════════════╝")
+    )
+    assert all(len(row) <= LOGO_WIDTH + 4 + ANVIL_GAP + ANVIL_WIDTH for row in full)
+    letters = logo(LOGO_WIDTH + 10).plain.splitlines()
+    assert (
+        len(letters) == 6
+        and all("█" in row for row in letters[:5])
+        and not letters[0].endswith("████████████████████╗")
+    )
     narrow = logo(60).plain
     assert "\n" not in narrow and "H E P H A E S T U S" in narrow
 
