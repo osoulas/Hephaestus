@@ -3,7 +3,7 @@
 
 import { api, streamEvents } from "./api.js";
 import { columnChart, confidenceChart, confidenceLegend, scoreRing } from "./chart.js";
-import { ago, check, cid as cidText, cidLong, cidTag, clamp, download, duration, empty, formula, h, icon, label, num, pill, pm, store, stored, toast } from "./dom.js";
+import { ago, check, cid as cidText, cidLong, cidTag, clamp, download, stripCodes, duration, empty, formula, h, icon, label, num, pill, pm, store, stored, toast } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
 import { PHASES, RunModel, toolKind } from "./model.js";
 import { CONFIG_GROUPS, configName, modelName, specGrid, targetText } from "./spec.js";
@@ -1436,7 +1436,7 @@ export function mountRun(root, id, tab, hooks) {
         h(
           "div",
           { style: { display: "grid", gap: "8px" } },
-          h("button.btn", { onclick: () => download(`${rid}_brief.md`, ui.brief, "text/markdown") }, icon("download"), "Markdown"),
+          h("button.btn", { onclick: () => download(`${rid}_brief.md`, stripCodes(ui.brief), "text/markdown") }, icon("download"), "Markdown"),
           pdf ? h("a.btn", { href: `/runs/${encodeURIComponent(rid)}/brief?format=pdf`, download: `${rid}_brief.pdf` }, icon("download"), "PDF") : null,
           h("button.btn", { onclick: () => window.print() }, icon("printer"), "Print"),
           h(
@@ -1444,7 +1444,7 @@ export function mountRun(root, id, tab, hooks) {
             {
               onclick: async () => {
                 try {
-                  await navigator.clipboard.writeText(ui.brief);
+                  await navigator.clipboard.writeText(stripCodes(ui.brief));
                   toast("Brief copied as Markdown.");
                 } catch (e) {
                   toast("Copy failed: your browser blocked clipboard access.", "critical");
