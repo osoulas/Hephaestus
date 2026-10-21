@@ -140,9 +140,11 @@ def kickoff_message(spec: SearchSpec, cfg: RunConfig) -> str:
         "reference_value": spec.reference_value.model_dump() if spec.reference_value else None,
     }
     budget = {
-        "review_rounds": cfg.max_iterations,
-        "tool_calls": cfg.max_tool_calls,
-        "wall_time_s": cfg.time_budget_s,
+        "review_rounds": cfg.max_iterations or "no limit",
+        "tool_calls": cfg.max_tool_calls or "no limit",
+        "wall_time_s": cfg.time_budget_s or "no limit",
+        "energy_above_hull": "on" if cfg.run_hull else "off for this run: do not call it",
+        "phonons": "on" if cfg.run_phonons else "off for this run: do not call it",
         "screening_potential": cfg.potential,
         "band_gap_fidelity": cfg.band_gap_fidelity,
         "require_novel": cfg.require_novel,

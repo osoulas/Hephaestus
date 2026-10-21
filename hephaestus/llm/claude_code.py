@@ -384,7 +384,7 @@ class ClaudeCodeLLM:
             mcp_servers={SERVER: server},
             allowed_tools=[f"mcp__{SERVER}__{t['name']}" for t in tools],
             effort="high",
-            max_turns=campaign.ws.cfg.max_tool_calls + 40,
+            max_turns=campaign.ws.cfg.max_tool_calls + 40 if campaign.ws.cfg.max_tool_calls else None,
         )
         async with ClaudeSDKClient(opts) as client:
             prompt = kickoff

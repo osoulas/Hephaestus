@@ -9,7 +9,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from hephaestus.core.config import RunConfig
+from hephaestus.core.config import RunConfig, budget_limit
 from hephaestus.core.types import Critique, Insight, Quantity, SearchSpec
 from hephaestus.tools.registry import CandidateState, Workspace
 
@@ -24,6 +24,7 @@ STOP_RULES = [
 ]
 PLATEAU_POINTS = 5
 PLATEAU_ROUNDS = 3
+RUBRIC_MAX = {"property": 30, "thermo": 20, "dynamic": 20, "reliability": 15, "novelty_synthesis": 15}
 
 
 def target_met(value: float, spec: SearchSpec) -> bool:
@@ -101,7 +102,7 @@ def distance_to_target(value: float | None, spec: SearchSpec) -> float:
     return abs(value - t)
 
 
-def check_target(cs: CandidateState, spec: SearchSpec) -> dict[str, bool]:
+def check_target(cs: CandidateState, spec: SearchSpec) -> dict[str, bool | None]:
     """Code target check: property on two readings plus both stability verdicts (SC-1, SC-2, SE-13).
 
     Parameters
@@ -115,20 +116,21 @@ def check_target(cs: CandidateState, spec: SearchSpec) -> dict[str, bool]:
     -------
     dict
         ``target_met_central``, ``target_met_conservative``, ``thermo_stable``, ``dyn_stable``,
-        ``all_passed``. Missing results count as not passed.
+        ``all_passed``. Missing results count as not passed; a stability check turned off for
+        the run is ``None`` and does not count towards ``all_passed``.
     """
     pred = cs.predictions.get(spec.target_property)
     central = pred is not None and target_met(pred.value.value, spec)
     conservative = pred is not None and target_met(pessimistic(pred.value, spec), spec)
-    thr = spec.stability_thresholds.e_hull_max_eV_per_atom
-    thermo = cs.e_hull is not None and not cs.hull_stale and cs.e_hull <= thr
+    st = spec.stability_thresholds
+    thermo = cs.e_hull is not None and not cs.hull_stale and cs.e_hull <= st.e_hull_max_eV_per_atom
     dyn = cs.phonon is not None and cs.phonon.stable
     return {
         "target_met_central": central,
         "target_met_conservative": conservative,
-        "thermo_stable": thermo,
-        "dyn_stable": dyn,
-        "all_passed": central and thermo and dyn,
+        "thermo_stable": thermo if st.thermodynamic else None,
+        "dyn_stable": dyn if st.dynamic else None,
+        "all_passed": central and (thermo or not st.thermodynamic) and (dyn or not st.dynamic),
     }
 
 
@@ -152,9 +154,10 @@ def missing_steps(cs: CandidateState, spec: SearchSpec) -> list[str]:
         out.append("build_structure")
     if cs.energy_eV_per_atom is None:
         out.append("relax")
-    if cs.e_hull is None or cs.hull_stale:
+    st = spec.stability_thresholds
+    if st.thermodynamic and (cs.e_hull is None or cs.hull_stale):
         out.append("energy_above_hull")
-    if cs.phonon is None:
+    if st.dynamic and cs.phonon is None:
         out.append("phonons")
     if spec.target_property not in cs.predictions:
         out.append(f"predict_property({spec.target_property})")
@@ -297,6 +300,7 @@ def score_rubric(
     Property 30 (30 conservative, 15 central only); thermodynamic 20 (20 at half the E_hull
     threshold, 10 at the threshold); dynamic 20; reliability 15 (5 each: converged, potential
     domain, property-model domain); novelty and synthesis 15 (8 no prior report, 7 route).
+    A stability check turned off for the run is left out and the score rescaled to 0 to 100.
 
     Parameters
     ----------
@@ -336,7 +340,13 @@ def score_rubric(
         "reliability": reliability,
         "novelty_synthesis": (8 if novelty_hits == 0 else 0) + (7 if synthesis_route else 0),
     }
-    return sum(breakdown.values()), breakdown
+    # A stability check turned off for the run is left out, and the rest scaled back to 100
+    st = spec.stability_thresholds
+    off = [k for k, on in (("thermo", st.thermodynamic), ("dynamic", st.dynamic)) if not on]
+    for k in off:
+        del breakdown[k]
+    available = 100 - sum(RUBRIC_MAX[k] for k in off)
+    return round(100 * sum(breakdown.values()) / available), breakdown
 
 
 @dataclass
@@ -395,7 +405,7 @@ def target_met_gate(critique: Critique, all_passed: bool, threshold: int) -> tup
 
 def should_stop(
     critiques: list[Critique],
-    best_checks: list[dict[str, bool]],
+    best_checks: list[dict[str, bool | None]],
     cfg: RunConfig,
     elapsed_s: float,
     user_stop: bool = False,
@@ -423,15 +433,15 @@ def should_stop(
     latest = critiques[-1]
     met, gate_note = target_met_gate(latest, best_checks[-1]["all_passed"], cfg.confidence_threshold)
     scores = [c.score for c in critiques[-PLATEAU_ROUNDS:]]
-    unstable = [not c["dyn_stable"] for c in best_checks[-2:]]
+    unstable = [c["dyn_stable"] is False for c in best_checks[-2:]]
     fired = [
         ("user_stop", user_stop),
-        ("max_rounds", len(critiques) >= cfg.max_iterations),
+        ("max_rounds", len(critiques) >= budget_limit(cfg.max_iterations)),
         ("target_met", met),
         ("reviewer_stop", latest.stop_recommended and bool(latest.stop_reason)),
         ("plateau", len(scores) == PLATEAU_ROUNDS and max(scores) - min(scores) < PLATEAU_POINTS),
         ("persistent_instability", len(unstable) == 2 and all(unstable)),
-        ("wall_time", elapsed_s >= cfg.time_budget_s),
+        ("wall_time", elapsed_s >= budget_limit(cfg.time_budget_s)),
     ]
     rule = next((name for name, hit in fired if hit), None)
     return StopDecision(rule=rule, gate_note=gate_note)
@@ -467,7 +477,7 @@ def submission_gate(
         ("thermo_stable", "not thermodynamically stable"),
         ("dyn_stable", "not dynamically stable"),
     ]:
-        if not checks[key]:
+        if checks[key] is False:  # None: the check is turned off for the run
             reasons.append(label)
     if ws.cfg.require_novel and novelty_hits != 0:
         reasons.append(

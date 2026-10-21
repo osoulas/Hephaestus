@@ -22,6 +22,7 @@ from typing import Any
 
 from pymatgen.core import Composition
 
+from hephaestus.core.config import budget_limit
 from hephaestus.core.types import SearchSpec, Submission, ValidationCheck, ValidationReport
 from hephaestus.harness.gates import pessimistic, target_met
 from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
@@ -180,10 +181,9 @@ def _must_steps(fws: Workspace, handlers: Mapping[str, Handler], fin: _Finalist)
     ]
     if cfg.run_phonons:
         steps.append(("phonons", {"candidate_id": cid, "mode": "full"}))
-    steps += [
-        ("energy_above_hull", {"candidate_id": cid}),
-        ("predict_property", {"candidate_id": cid, "property": fws.spec.target_property}),
-    ]
+    if cfg.run_hull:
+        steps.append(("energy_above_hull", {"candidate_id": cid}))
+    steps.append(("predict_property", {"candidate_id": cid, "property": fws.spec.target_property}))
     supercell = None
     for name, args in steps:
         out, err = _call(fws, handlers, name, args)
@@ -540,7 +540,7 @@ def validate_finalists(
     """
     times: dict[str, float] = {}
     handlers = _timed(handlers if handlers is not None else load_default_handlers(), times, on_step, clock)
-    budget = ws.cfg.final_time_budget_s if time_budget_s is None else time_budget_s
+    budget = budget_limit(ws.cfg.final_time_budget_s if time_budget_s is None else time_budget_s)
     start = clock()
     remaining = lambda: budget - (clock() - start)  # noqa: E731
     fws = ws.model_copy(deep=True)
@@ -594,7 +594,7 @@ def validate_finalists(
         optional(f"runner-up {rid} (FC-6)", check_runner_up, cost=must_cost)
     optional("MD (FC-5)", lambda: run_md(fws, handlers, winner), cost=MD_COST_FACTOR * relax_s)
     second = ws.cfg.cross_check_potential
-    if second:
+    if second and ws.cfg.run_hull:
         optional(
             "second potential (FC-3)",
             lambda: cross_check(fws, handlers, winner, second),

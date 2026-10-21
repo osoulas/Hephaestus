@@ -13,6 +13,8 @@
   "phonon_gate": "mode_map",
   "distortion_threshold_meV": 2.0,
   "run_phonons": true,
+  "run_hull": true,
+  "e_hull_max_eV_per_atom": null,
   "device": "auto",
   "dtype": "float32",
   "final_dtype": "float64",

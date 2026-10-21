@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from hephaestus.core.concurrency import KeyedLocks, RWLock
+from hephaestus.core.config import budget_limit
 from hephaestus.core.events import BUS, EventBus
 from hephaestus.core.types import Critique, ErrorRecord, Submission
 from hephaestus.harness import gates as G
@@ -137,7 +138,7 @@ class Campaign:
         self.handlers = dict(HANDLERS if handlers is None else handlers)
         self.bus = bus
         self.critiques: list[Critique] = list(critiques or [])
-        self.best_checks: list[dict[str, bool]] = []
+        self.best_checks: list[dict[str, bool | None]] = []
         for c in self.critiques:
             self.best_checks.append(
                 {
@@ -145,7 +146,9 @@ class Campaign:
                     "target_met_conservative": c.target_met_conservative,
                     "thermo_stable": c.thermo_stable,
                     "dyn_stable": c.dyn_stable,
-                    "all_passed": c.target_met_central and c.thermo_stable and c.dyn_stable,
+                    "all_passed": c.target_met_central
+                    and c.thermo_stable is not False
+                    and c.dyn_stable is not False,
                 }
             )
         self.novelty_fn = novelty_fn if novelty_fn is not None else default_novelty_fn()
@@ -190,10 +193,9 @@ class Campaign:
             True when the campaign must end now.
         """
         cfg = self.ws.cfg
-        return (
-            self.ws.tool_calls >= cfg.max_tool_calls + HARD_EXTRA_CALLS
-            or self.elapsed_s >= HARD_TIME_FACTOR * cfg.time_budget_s
-        )
+        return self.ws.tool_calls >= budget_limit(
+            cfg.max_tool_calls
+        ) + HARD_EXTRA_CALLS or self.elapsed_s >= HARD_TIME_FACTOR * budget_limit(cfg.time_budget_s)
 
     def _update_submit_reason(self) -> None:
         """Set ``submit_reason`` when the user stopped, or a budget ran out (OR-8 to OR-10)."""
@@ -201,9 +203,9 @@ class Campaign:
             return
         if self.stop_event.is_set():
             self.submit_reason = "user_stop"
-        elif self.ws.tool_calls >= self.ws.cfg.max_tool_calls:
+        elif self.ws.tool_calls >= budget_limit(self.ws.cfg.max_tool_calls):
             self.submit_reason = "tool_budget"
-        elif self.elapsed_s >= self.ws.cfg.time_budget_s:
+        elif self.elapsed_s >= budget_limit(self.ws.cfg.time_budget_s):
             self.submit_reason = "wall_time"
         if self.submit_reason and not self.stop_rule:
             self.stop_rule = self.submit_reason
@@ -538,7 +540,7 @@ class Campaign:
             "candidates": [G.facts(self.ws, cid) for cid in self.ws.candidates],
             "budget": {
                 "tool_calls_used": self.ws.tool_calls,
-                "max_tool_calls": self.ws.cfg.max_tool_calls,
+                "max_tool_calls": self.ws.cfg.max_tool_calls or "no limit",
                 "compute_s": round(self.ws.compute_s, 1),
                 "elapsed_s": round(self.elapsed_s, 1),
             },

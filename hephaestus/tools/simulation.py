@@ -1084,8 +1084,10 @@ def hull(ws: Workspace, candidate_id: str) -> dict[str, Any]:
     Raises
     ------
     ToolError
-        If not relaxed, or the hull cannot be built.
+        If not relaxed, the hull cannot be built, or the hull is turned off for the run.
     """
+    if not ws.cfg.run_hull:
+        raise ToolError("Energy above hull is turned off for this run (run_hull=false).")
     cs = ws.get(candidate_id)
     _needs_relax(cs)
     assert cs.potential and cs.structure and cs.energy_eV_per_atom is not None
