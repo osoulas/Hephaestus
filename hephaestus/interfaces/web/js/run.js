@@ -6,7 +6,7 @@ import { columnChart, confidenceChart, confidenceLegend, scoreRing } from "./cha
 import { ago, check, download, duration, empty, formula, h, icon, label, num, pill, pm, toast } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
 import { PHASES, RunModel, toolKind } from "./model.js";
-import { modelName, specGrid, targetText } from "./spec.js";
+import { CONFIG_GROUPS, configName, modelName, specGrid, targetText } from "./spec.js";
 import { CrystalViewer, elementStyle, parseCif } from "./viewer.js";
 
 const TABS = [
@@ -40,6 +40,8 @@ export function mountRun(root, id, tab, hooks) {
     follow: true,
     selected: null,
     paperQuery: "",
+    openAbstracts: new Set(),
+    collapsedRounds: new Set(),
     brief: null,
     briefLoading: false,
     notFound: false,
@@ -104,7 +106,7 @@ export function mountRun(root, id, tab, hooks) {
 
   if (!model.isReplay) loadState();
   connect();
-  const ticker = setInterval(() => model.running && renderHead(), 1000);
+  const ticker = setInterval(() => model.running && tick(), 1000);
   const onTheme = () => viewer && viewer.draw();
   window.addEventListener("themechange", onTheme);
 
@@ -165,6 +167,9 @@ export function mountRun(root, id, tab, hooks) {
     }
     const content = ui.notFound && !model.events.length ? notFound() : TAB_RENDER[ui.tab]();
     body.replaceChildren(content);
+    syncAnimations(body);
+    tick();
+    if (ui.tab === "literature") markLongAbstracts();
     root.scrollTop = keepScroll;
     if (ui.tab === "activity" && ui.follow && model.running && model.ended === false && atBottom && keepScroll > 0) root.scrollTop = root.scrollHeight;
   }
@@ -186,10 +191,30 @@ export function mountRun(root, id, tab, hooks) {
   }
 
   function renderHead() {
-    const sig = `${model.status}|${JSON.stringify(model.phase)}|${model.round}|${model.toolCount}|${model.best}|${ui.tab}|${model.running ? Math.floor((model.elapsed || 0) / 1) : model.elapsed}|${model.resumable}|${ui.replaySpeed}|${model.paperList.length}|${model.candidateIds.length}|${model.log.length}`;
-    if (sig === lastHeadSig) return;
+    const fs = model.finalStep;
+    const sig = `${model.status}|${JSON.stringify(model.phase)}|${model.round}|${model.toolCount}|${model.best}|${ui.tab}|${model.running}|${model.resumable}|${ui.replaySpeed}|${model.paperList.length}|${model.candidateIds.length}|${model.log.length}|${fs ? fs.seq + fs.status : ""}`;
+    if (sig === lastHeadSig) return tick();
     lastHeadSig = sig;
     head.replaceChildren(headContent());
+    syncAnimations(head);
+    tick();
+  }
+
+  // Update the live counters in place, so nothing is re-rendered (and no animation restarts) each second.
+  function tick() {
+    const cfg = model.config || (model.state && model.state.config) || {};
+    for (const el of root.querySelectorAll("[data-tick]")) {
+      const kind = el.dataset.tick;
+      if (kind === "elapsed") {
+        el.textContent = model.elapsed != null ? `${duration(model.elapsed)} elapsed` : "";
+      } else if (kind === "campaign" || kind === "final") {
+        const used = kind === "campaign" ? model.span(model.campaignStart, model.campaignEnd) : model.span(model.finalStart, model.finalEnd);
+        const max = kind === "campaign" ? cfg.time_budget_s || 900 : cfg.final_time_budget_s || 600;
+        setMeter(el, used || 0, max, `${duration(used || 0)} / ${duration(max)}`);
+      } else if (kind === "finalstep" && model.finalStep && model.finalStep.status === "started") {
+        el.textContent = duration((Date.now() - new Date(model.finalStep.started)) / 1000);
+      }
+    }
   }
 
   function headContent() {
@@ -231,14 +256,13 @@ export function mountRun(root, id, tab, hooks) {
         h("button.btn", { onclick: replay }, icon("replay"), "Replay"),
       );
     }
-    const elapsed = model.elapsed;
     const meta = [
       h("span.mono", null, id),
       model.isReplay ? pill(`Replay of ${sourceId()}`, "info", "replay") : null,
       cfg.llm_model ? h("span", null, modelName(cfg.llm_model)) : null,
       model.backend && model.backend !== cfg.llm_model ? h("span", null, model.backend === "claude-code" ? "Claude Code" : model.backend === "api" ? "Anthropic API" : model.backend) : null,
       model.startTime ? h("span", null, `Started ${ago(model.startTime)}`) : model.state ? h("span", null, `Created ${ago(model.state.created_at)}`) : null,
-      elapsed != null ? h("span.num", null, `${duration(elapsed)} elapsed`) : null,
+      model.startTime ? h("span.num", { dataset: { tick: "elapsed" } }) : null,
       cfg.require_novel ? pill("Novel only", "info", "star") : null,
     ].filter(Boolean);
     const metaWithSeps = [];
@@ -289,7 +313,9 @@ export function mountRun(root, id, tab, hooks) {
       },
       final: {
         pending: cfg.run_final === false ? "Off" : "Not started",
-        active: `Re-checking with ${cfg.final_potential || "the final potential"}…`,
+        active: model.finalStep
+          ? h("span", null, finalStepName(model.finalStep), model.finalStep.status === "started" ? h("span", null, " · ", h("span.num", { dataset: { tick: "finalstep" } })) : null)
+          : `Re-checking with ${cfg.final_potential || "the final potential"}…`,
         done: model.final && model.final.verdict ? label(model.final.verdict) : finalFromState() || "Done",
         failed: "Failed (run continues)",
         skipped: "Skipped",
@@ -491,17 +517,16 @@ export function mountRun(root, id, tab, hooks) {
   function budgetCard(cfg) {
     const maxCalls = cfg.max_tool_calls || 90;
     const used = model.toolCount || (model.state && model.state.usage ? 0 : 0);
-    const budgetS = cfg.time_budget_s || 900;
-    const el = model.elapsed || 0;
     const rounds = model.roundRows.length;
-    const meter = (lab, v, max, text) => {
-      const frac = Math.min(1, v / max);
-      return h(
+    const meter = (lab, v, max, text, tickKind) => {
+      const el = h(
         "div.meter",
-        null,
-        h("div.meter-top", null, h("span.secondary", null, lab), h("span.num", null, text)),
-        h("div.meter-track", null, h(`div.meter-fill${frac > 0.9 ? ".critical" : frac > 0.7 ? ".warning" : ""}`, { style: { width: `${frac * 100}%` } })),
+        tickKind ? { dataset: { tick: tickKind } } : null,
+        h("div.meter-top", null, h("span.secondary", null, lab), h("span.num.meter-text", null, text)),
+        h("div.meter-track", null, h("div.meter-fill")),
       );
+      setMeter(el, v, max, text);
+      return el;
     };
     const usage = (model.state && model.state.usage) || {};
     return h(
@@ -513,7 +538,10 @@ export function mountRun(root, id, tab, hooks) {
         { style: { display: "grid", gap: "14px" } },
         meter("Tool calls", used, maxCalls, `${used} / ${maxCalls}`),
         meter("Review rounds", rounds, cfg.max_iterations || 3, `${rounds} / ${cfg.max_iterations || 3}`),
-        meter("Wall time", el, budgetS, `${duration(el)} / ${duration(budgetS)}`),
+        meter("Campaign time", 0, cfg.time_budget_s || 900, "", "campaign"),
+        model.finalStart || model.phase.final === "active"
+          ? meter("Final re-check time", 0, cfg.final_time_budget_s || 600, "", "final")
+          : null,
         usage.input_tokens || usage.output_tokens
           ? h("div.muted", { style: { fontSize: "12px" } }, `${(usage.input_tokens || 0).toLocaleString()} input · ${(usage.output_tokens || 0).toLocaleString()} output tokens`)
           : null,
@@ -675,6 +703,22 @@ export function mountRun(root, id, tab, hooks) {
           h("div.log-side", null, e.status === "finished" ? verdictPill(p.verdict) : null, time),
         );
       }
+      case "finalstep": {
+        const i = e.info || {};
+        const dur = e.finished ? (new Date(e.finished) - new Date(e.started)) / 1000 : null;
+        return h(
+          "div.log-entry",
+          null,
+          h(`div.log-icon.${e.status === "failed" ? "error" : "sim"}`, null, icon(e.tool === "phonons" ? "wave" : e.tool === "predict_property" ? "gauge" : "atom")),
+          h(
+            "div.log-main",
+            null,
+            h("div.log-line", null, h("strong", null, "Final re-check"), h("span.log-summary", null, finalStepName(e), i.potential ? ` · ${i.potential}` : "")),
+            e.status === "failed" ? h("div.log-result.error", null, "Failed") : null,
+          ),
+          h("div.log-side", null, dur != null ? h("span", null, dur < 60 ? `${dur.toFixed(1)} s` : duration(dur)) : h("span.spinner"), time),
+        );
+      }
       case "brief":
         return h(
           "div.log-entry",
@@ -795,7 +839,7 @@ export function mountRun(root, id, tab, hooks) {
               ),
             ),
             p.relevance ? h("div.relevance", null, `Relevance ${Math.round(p.relevance * 100)}%`, h("div.meter-track", null, h("div.meter-fill", { style: { width: `${p.relevance * 100}%` } }))) : h("div"),
-            p.abstract ? h("p.paper-abstract", { style: { margin: 0 } }, p.abstract) : null,
+            p.abstract ? abstractBlock(p) : null,
           ),
         )
       : [empty("book", papers.length ? "No paper matches" : "No papers yet", papers.length ? "" : "Papers appear as the orchestrator searches Valency Bond.")];
@@ -867,6 +911,38 @@ export function mountRun(root, id, tab, hooks) {
     );
   }
 
+  function abstractBlock(p) {
+    const open = ui.openAbstracts.has(p.paper_id);
+    const text = h(`p.paper-abstract${open ? "" : ".clamp"}`, null, p.abstract);
+    const btn = h(
+      "button.link.abstract-toggle",
+      {
+        hidden: true,
+        onclick: () => {
+          const now = !ui.openAbstracts.has(p.paper_id);
+          if (now) ui.openAbstracts.add(p.paper_id);
+          else ui.openAbstracts.delete(p.paper_id);
+          text.classList.toggle("clamp", !now);
+          btn.textContent = now ? "Show less" : "Show more";
+        },
+      },
+      open ? "Show less" : "Show more",
+    );
+    return h("div.paper-abstract-wrap", null, text, btn);
+  }
+
+  // Show "Show more" only where the abstract is longer than its three lines.
+  function markLongAbstracts() {
+    requestAnimationFrame(() => {
+      for (const wrap of body.querySelectorAll(".paper-abstract-wrap")) {
+        const text = wrap.querySelector(".paper-abstract");
+        const btn = wrap.querySelector(".abstract-toggle");
+        const long = !text.classList.contains("clamp") || text.scrollHeight > text.clientHeight + 1;
+        btn.hidden = !long;
+      }
+    });
+  }
+
   function trendFromCalls() {
     const call = [...model.calls.values()].reverse().find((c) => c.tool === "publication_trend" && c.result && c.result.papers_per_year);
     return call ? call.result.papers_per_year : null;
@@ -894,10 +970,30 @@ export function mountRun(root, id, tab, hooks) {
       [...byRound.entries()].map(([r, cands]) => {
         const review = reviews.find((x) => x.round === r);
         const row = rounds.find((x) => x.round === r);
-        return h(
-          "section.round-block",
-          null,
-          h("div.round-head", null, h("h3", null, `Round ${r}`), h("span.muted", null, `${cands.length} candidate${cands.length === 1 ? "" : "s"}`, row && row.best ? ` · best ${row.best}` : "")),
+        const collapsed = ui.collapsedRounds.has(r);
+        const content = h("div.round-content", { hidden: collapsed });
+        const chevron = icon("chevron", "round-chevron");
+        const toggle = () => {
+          const now = !ui.collapsedRounds.has(r);
+          if (now) ui.collapsedRounds.add(r);
+          else ui.collapsedRounds.delete(r);
+          content.hidden = now;
+          headBtn.setAttribute("aria-expanded", String(!now));
+        };
+        const headBtn = h(
+          "button.round-head",
+          { "aria-expanded": String(!collapsed), onclick: toggle, title: "Collapse or expand this round" },
+          h("span.round-title", null, chevron, h("h3", null, `Round ${r}`)),
+          h(
+            "span.muted",
+            null,
+            `${cands.length} candidate${cands.length === 1 ? "" : "s"}`,
+            row && row.best ? ` · best ${row.best}` : "",
+            row && row.score != null ? ` · rubric ${row.score}` : "",
+            row && row.llm != null ? ` · reviewer ${row.llm}` : "",
+          ),
+        );
+        content.append(
           h(
             "div.card",
             null,
@@ -951,8 +1047,9 @@ export function mountRun(root, id, tab, hooks) {
               ),
             ),
           ),
-          review ? h("section.card", { style: { marginTop: "12px" } }, h("div.card-body", null, reviewBlock(review, row && row.gateNote))) : null,
         );
+        if (review) content.append(h("section.card", { style: { marginTop: "12px" } }, h("div.card-body", null, reviewBlock(review, row && row.gateNote))));
+        return h("section.round-block", null, headBtn, content);
       }),
     );
   }
@@ -1250,11 +1347,8 @@ export function mountRun(root, id, tab, hooks) {
     const spec = model.spec;
     const groups = cfg
       ? [
-          ["Campaign", ["max_iterations", "max_tool_calls", "time_budget_s", "max_parallel_tools", "confidence_threshold"]],
-          ["Model access", ["llm_backend", "llm_model"]],
-          ["Science", ["band_gap_fidelity", "require_novel", "potential", "final_potential", "cross_check_potential", "phonon_mode", "phonon_gate", "distortion_threshold_meV", "run_phonons", "max_atoms"]],
-          ["Final re-check", ["run_final", "final_time_budget_s", "final_dtype"]],
-          ["Compute", ["device", "dtype", "seed", "offline"]],
+          ["Model access", ["llm_backend", "llm_model", "require_novel"]],
+          ...CONFIG_GROUPS.map((g) => [g.name, Object.keys(g.fields)]),
         ]
       : [];
     return h(
@@ -1281,7 +1375,7 @@ export function mountRun(root, id, tab, hooks) {
               "div",
               null,
               h("div.field-label", { style: { marginBottom: "8px" } }, title),
-              h("dl.kv", null, keys.filter((k) => k in cfg).map((k) => [h("dt", null, CONFIG_NAMES[k] || label(k)), h("dd.mono", null, fmtConfig(k, cfg[k]))])),
+              h("dl.kv", null, keys.filter((k) => k in cfg).map((k) => [h("dt", null, k === "llm_backend" ? "Model access" : k === "llm_model" ? "Model" : k === "require_novel" ? "Novel materials only" : configName(k)), h("dd.mono", null, fmtConfig(k, cfg[k]))])),
             ),
           ),
         ),
@@ -1451,6 +1545,55 @@ function resultLine(c) {
   }
 }
 
+const FINAL_STEP_NAMES = {
+  relax: "Re-relax",
+  phonons: "Full phonons",
+  energy_above_hull: "Hull",
+  predict_property: "Target property",
+  build_structure: "Build structure",
+  run_md: "MD",
+};
+
+/**
+ * Name of a final-check step, e.g. "Full phonons · c3-1".
+ * @param {{tool: string, info?: object}} e Final step entry.
+ * @returns {string}
+ */
+function finalStepName(e) {
+  const cid = e.info && e.info.candidate_id;
+  const who = cid === "ref" ? "reference" : cid;
+  return `${FINAL_STEP_NAMES[e.tool] || label(e.tool)}${who ? ` · ${who}` : ""}`;
+}
+
+/**
+ * Set a meter's fill and text; over budget shows full and red.
+ * @param {HTMLElement} el A `.meter`.
+ * @param {number} used Used amount.
+ * @param {number} max Budget.
+ * @param {string} text Label.
+ */
+function setMeter(el, used, max, text) {
+  const frac = max > 0 ? used / max : 0;
+  const fill = el.querySelector(".meter-fill");
+  fill.style.width = `${Math.min(1, frac) * 100}%`;
+  fill.className = `meter-fill${frac >= 1 ? " critical" : frac > 0.8 ? " warning" : ""}`;
+  const t = el.querySelector(".meter-text");
+  if (t) t.textContent = text;
+}
+
+const ANIMATION_MS = { spinner: 800, step: 1800, dot: 1600 };
+
+/**
+ * Keep looping animations in phase across re-renders, so a re-render does not restart them.
+ * @param {HTMLElement} el Freshly rendered subtree.
+ */
+function syncAnimations(el) {
+  const now = performance.now();
+  for (const n of el.querySelectorAll(".spinner")) n.style.animationDelay = `-${now % ANIMATION_MS.spinner}ms`;
+  for (const n of el.querySelectorAll(".dot.live")) n.style.animationDelay = `-${now % ANIMATION_MS.dot}ms`;
+  for (const n of el.querySelectorAll(".step.active")) n.style.setProperty("--sync", `-${now % ANIMATION_MS.step}ms`);
+}
+
 /**
  * A stat tile.
  * @param {string} lab Label.
@@ -1472,32 +1615,6 @@ function verdictPill(v) {
   return pill(label(v), k, k === "good" ? "shield" : "alert");
 }
 
-const CONFIG_NAMES = {
-  max_iterations: "Review rounds",
-  max_tool_calls: "Tool-call budget",
-  time_budget_s: "Time budget",
-  max_parallel_tools: "Parallel tool calls",
-  confidence_threshold: "Stop threshold",
-  llm_backend: "Model access",
-  llm_model: "Model",
-  band_gap_fidelity: "Band gap fidelity",
-  require_novel: "Novel materials only",
-  potential: "Screening potential",
-  final_potential: "Final potential",
-  cross_check_potential: "Cross-check potential",
-  phonon_mode: "Phonon mode",
-  phonon_gate: "Phonon gate",
-  distortion_threshold_meV: "Mode-mapping threshold (meV/atom)",
-  run_phonons: "Run phonons",
-  max_atoms: "Max atoms",
-  run_final: "Final re-check",
-  final_time_budget_s: "Final time budget",
-  final_dtype: "Final precision",
-  device: "Device",
-  dtype: "Screening precision",
-  seed: "Seed",
-  offline: "Offline",
-};
 
 const CHECK_NAMES = {
   e_hull_eV_per_atom: "Energy above hull (eV/atom)",

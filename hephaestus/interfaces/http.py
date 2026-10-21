@@ -343,6 +343,17 @@ def create_app(
         """
         return RunConfig().model_dump(mode="json")
 
+    @app.get("/config/schema")
+    def config_schema() -> dict[str, Any]:
+        """JSON schema of ``RunConfig``, so the UI can offer every option (OR-4).
+
+        Returns
+        -------
+        dict
+            ``RunConfig.model_json_schema()``.
+        """
+        return RunConfig.model_json_schema()
+
     # ------------------------------------------------------------------ parse and runs
 
     @app.post("/parse")
