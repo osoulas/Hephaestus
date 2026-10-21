@@ -94,6 +94,62 @@ class LLM(Protocol):
         ...
 
 
+class CampaignHost(Protocol):
+    """What a backend that drives its own loop needs from the harness's ``Campaign``."""
+
+    ws: Any
+    usage: dict[str, int]
+
+    def call_tool(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """Run one tool call through budget, events and gates.
+
+        Parameters
+        ----------
+        name : str
+            Tool name.
+        args : dict
+            Tool input.
+
+        Returns
+        -------
+        tuple
+            ``(result, is_error)``.
+        """
+        ...
+
+    def emit_agent(self, kind: str, text: str) -> None:
+        """Publish the orchestrator's text or thinking.
+
+        Parameters
+        ----------
+        kind : {"text", "thinking"}
+            Block kind.
+        text : str
+            Content.
+        """
+        ...
+
+    def hard_limit_hit(self) -> bool:
+        """Whether the campaign must end now.
+
+        Returns
+        -------
+        bool
+            True at the hard limit.
+        """
+        ...
+
+    def nudge(self) -> str:
+        """Message for a model that stopped before submitting.
+
+        Returns
+        -------
+        str
+            Next user message.
+        """
+        ...
+
+
 def api_credentials_present() -> bool:
     """Whether Anthropic API credentials are in the environment.
 

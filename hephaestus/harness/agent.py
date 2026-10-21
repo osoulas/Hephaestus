@@ -316,6 +316,19 @@ class Campaign:
                 self.errors.append(ErrorRecord(step="snapshot", code="write_failed", message=str(exc)[:300]))
         return result, is_error
 
+    def nudge(self) -> str:
+        """Message for a model that stopped calling tools before submitting.
+
+        Returns
+        -------
+        str
+            A submit instruction when one is due, else a prompt to continue.
+        """
+        self._update_submit_reason()
+        if self.submit_reason:
+            return self._submit_instruction()
+        return "Continue the campaign with tool calls. When you are done, call submit_final."
+
     def _submit_instruction(self) -> str:
         """Tell the orchestrator to submit now.
 
@@ -672,13 +685,7 @@ class Campaign:
                 nudges += 1
                 if nudges > MAX_NUDGES:
                     return
-                self._update_submit_reason()
-                msg = (
-                    self._submit_instruction()
-                    if self.submit_reason
-                    else "Continue the campaign with tool calls. When you are done, call submit_final."
-                )
-                self.messages.append({"role": "user", "content": msg})
+                self.messages.append({"role": "user", "content": self.nudge()})
                 continue
             nudges = 0
             blocks = []
