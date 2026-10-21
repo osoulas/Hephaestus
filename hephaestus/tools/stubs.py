@@ -377,7 +377,7 @@ def relax(ws: Workspace, candidate_id: str, potential: str, fmax: float) -> dict
     cs.space_group, cs.potential_in_domain, cs.domain_note = "Pm-3m", True, "All elements in MPtrj."
     cs.e_hull = cs.e_form = cs.phonon = None
     cs.predictions = {}
-    ws.compute_s += 1.0
+    ws.add_compute(1.0)
     return {
         "candidate_id": candidate_id,
         "potential": potential,

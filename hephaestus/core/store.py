@@ -13,10 +13,10 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from hephaestus.core.concurrency import KeyedLocks
 from hephaestus.core.config import cache_root, runs_root
 
 M = TypeVar("M", bound=BaseModel)
-T = TypeVar("T")
 
 
 def new_run_id() -> str:
@@ -172,76 +172,83 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+_IN_FLIGHT = KeyedLocks()
+
+
 class CacheMiss(KeyError):
-    """Raised by ``cached`` when an entry is missing and the run is offline (SYS-8)."""
+    """Raised by ``cached`` on a miss when the run is offline (SYS-8)."""
 
 
-def cache_key(namespace: str, key: Any, version: str = "") -> str:
-    """Return the cache key: a hash of the namespace, the exact inputs and a version (DL-3).
+def cache_key(namespace: str, inputs: Any, version: str = "") -> str:
+    """Hash of a namespace, canonical JSON inputs and a version (DL-3).
 
     Parameters
     ----------
     namespace : str
-        Cache namespace, e.g. ``"mp"``, ``"valency"``, ``"llm"``.
-    key : Any
-        JSON-serialisable inputs; dict key order does not matter.
+        ``llm``, ``valency``, ``mp``, ``relax`` ...
+    inputs : Any
+        JSON-serialisable inputs; dict keys are sorted.
     version : str
-        Tool, model or schema version; changing it invalidates old entries.
+        Model or tool version, so a new version misses the old cache.
 
     Returns
     -------
     str
-        64-character SHA-256 hex digest.
+        Hex SHA-256.
     """
-    canon = json.dumps({"ns": namespace, "key": key, "v": version}, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+    blob = json.dumps([namespace, inputs, version], sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def cached(
     namespace: str,
-    key: Any,
-    compute: Callable[[], T],
-    *,
+    inputs: Any,
+    compute: Callable[[], Any],
     version: str = "",
-    offline: bool = False,
     root: Path | None = None,
-) -> T:
-    """Return a cached value, computing and storing it on a miss (DL-3, SYS-8).
+    offline: bool = False,
+) -> Any:
+    """Return a stored result for exactly these inputs, or compute and store it (DL-3, SYS-8).
+
+    Concurrent calls with identical inputs compute once: the others wait and read the result.
 
     Parameters
     ----------
     namespace : str
-        Cache namespace; entries live in ``<root>/<namespace>/``.
-    key : Any
-        JSON-serialisable exact inputs of the call.
+        Cache folder under the cache root.
+    inputs : Any
+        JSON-serialisable inputs that fully determine the result.
     compute : callable
-        Zero-argument function producing a JSON-serialisable value; called only on a miss.
+        Produces a JSON-serialisable result on a miss.
     version : str
-        Version string folded into the key.
-    offline : bool
-        When true, a miss raises ``CacheMiss`` instead of calling ``compute``.
+        Model or tool version.
     root : pathlib.Path, optional
-        Cache folder; defaults to ``cache_root()``.
+        Cache root; defaults to ``cache_root()``.
+    offline : bool
+        When true, a miss raises ``CacheMiss`` instead of calling ``compute`` (offline replay).
 
     Returns
     -------
     Any
-        The cached or freshly computed value (as it round-trips through JSON).
+        The cached or freshly computed result.
 
     Raises
     ------
     CacheMiss
         If the entry is missing and ``offline`` is true.
     """
-    h = cache_key(namespace, key, version)
-    path = (root or cache_root()) / namespace / h[:2] / f"{h}.json"
-    if path.exists():
-        try:
-            return load_json(path)["value"]  # type: ignore[no-any-return]
-        except (json.JSONDecodeError, KeyError):
-            pass  # a torn or foreign file is recomputed
-    if offline:
-        raise CacheMiss(f"{namespace}: not cached and the run is offline")
-    value = compute()
-    atomic_write_text(path, json.dumps({"key": key, "version": version, "value": value}) + "\n")
-    return load_json(path)["value"]  # type: ignore[no-any-return]
+    key = cache_key(namespace, inputs, version)
+    path = (root or cache_root()) / namespace / key[:2] / f"{key}.json"
+    with _IN_FLIGHT.hold(str(path)):  # a second caller with the same inputs waits, then reads
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))["result"]
+            except (json.JSONDecodeError, KeyError):
+                pass
+        if offline:
+            raise CacheMiss(f"{namespace}: not cached and the run is offline")
+        result = compute()
+        atomic_write_text(
+            path, json.dumps({"namespace": namespace, "version": version, "result": result}, default=str)
+        )
+        return result

@@ -12,8 +12,10 @@ import json
 import threading
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from hephaestus.core.concurrency import KeyedLocks, RWLock
 from hephaestus.core.events import BUS, EventBus
 from hephaestus.core.types import Critique, ErrorRecord, Submission
 from hephaestus.harness import gates as G
@@ -22,6 +24,7 @@ from hephaestus.harness.reviewer import review_round
 from hephaestus.harness.state import resume_summary
 from hephaestus.llm.base import LLM, LLMError
 from hephaestus.tools.registry import (
+    EXCLUSIVE_TOOLS,
     HANDLERS,
     RUN_CONTROL_TOOLS,
     TOOLS,
@@ -29,6 +32,7 @@ from hephaestus.tools.registry import (
     ToolError,
     Workspace,
     execute,
+    lock_key,
 )
 
 NoveltyFn = Callable[[Workspace, str], dict[str, Any]]
@@ -150,6 +154,10 @@ class Campaign:
         self.clock = clock
         self._t0 = clock() - elapsed_offset_s
         self.stop_event = threading.Event()
+        self._rw = RWLock()  # shared: per-candidate calls; exclusive: run control, snapshots
+        self._cand_locks = KeyedLocks()
+        self._book = threading.Lock()  # budget counter, call IDs, submit reason
+        self._call_seq = 0
         self.submit_reason: str | None = None
         self.stop_rule: str | None = None
         self.errors: list[ErrorRecord] = []
@@ -266,7 +274,18 @@ class Campaign:
     # ------------------------------------------------------------------ tools
 
     def call_tool(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-        """Run one tool call with budget, events, gates and a snapshot. Never raises.
+        """Run one tool call with budget, events, gates and a snapshot. Never raises. Thread-safe.
+
+        Concurrency rules, whichever backend issues the calls and from whichever thread:
+
+        - calls on the same candidate run one at a time;
+        - calls on different candidates, and literature and database lookups, run in parallel;
+        - ``propose_candidate``, ``candidate_status``, ``request_review`` and ``submit_final`` run
+          with no other call in flight, because they read or change every candidate;
+        - snapshots are taken with no call in flight, so they are never torn.
+
+        Identical expensive work (the same structure relaxed twice) is computed once, by the
+        cache's per-key lock.
 
         Parameters
         ----------
@@ -282,21 +301,75 @@ class Campaign:
         is_error : bool
             Whether the call failed.
         """
-        if self.hard_limit_hit():
-            return {"error": "Hard limit reached; the campaign is ending."}, True
+        if name in EXCLUSIVE_TOOLS:
+            with self._rw.write():
+                out = self._call_tool(name, args)
+                self._snapshot()
+            return out
+        with self._rw.read(), self._cand_locks.hold(lock_key(name, args)):
+            out = self._call_tool(name, args)
+        with self._rw.write():
+            self._snapshot()
+        return out
+
+    def _snapshot(self) -> None:
+        """Persist the run; the caller holds the exclusive lock."""
+        if self.snapshot:
+            try:
+                self.snapshot(self)
+            except Exception as exc:
+                self.errors.append(ErrorRecord(step="snapshot", code="write_failed", message=str(exc)[:300]))
+
+    def _call_tool(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """Run one tool call; the caller holds the right locks.
+
+        Parameters
+        ----------
+        name : str
+            Tool name.
+        args : dict
+            Tool input.
+
+        Returns
+        -------
+        result : dict
+            Tool result.
+        is_error : bool
+            Whether the call failed.
+        """
+        with self._book:
+            if self.ws.submitted:
+                return {
+                    "error": "A submission was already accepted; the campaign is over. Make no more calls."
+                }, True
+            if self.hard_limit_hit():
+                return {"error": "Hard limit reached; the campaign is ending."}, True
+            self.ws.tool_calls += 1
+            self._call_seq += 1
+            call_id = self._call_seq
         round_at_start = self.ws.round
-        started = {"tool": name, "input": args, **self.candidate_fields(args.get("candidate_id"))}
+        started = {
+            "tool": name,
+            "call_id": call_id,
+            "input": args,
+            **self.candidate_fields(args.get("candidate_id")),
+        }
         self.bus.emit(self.ws.run_id, "tool", "started", started, iteration=round_at_start)
-        self.ws.tool_calls += 1
         if name in RUN_CONTROL_TOOLS:
             result, is_error = self._run_control(name, args)
         else:
             result, is_error = execute(self.ws, name, args, self.handlers)
-        self._update_submit_reason()
-        if self.submit_reason and name != "submit_final" and not self.ws.submitted:
-            result = {**result, "instruction": self._submit_instruction()}
+        with self._book:
+            self._update_submit_reason()
+            if self.submit_reason and name != "submit_final" and not self.ws.submitted:
+                result = {**result, "instruction": self._submit_instruction()}
         cid = args.get("candidate_id") or (result.get("candidate_id") if isinstance(result, dict) else None)
-        payload: dict[str, Any] = {"tool": name, "input": args, **self.candidate_fields(cid)}
+        payload: dict[str, Any] = {
+            "tool": name,
+            "call_id": call_id,
+            "input": args,
+            **self.candidate_fields(cid),
+        }
         if name == "request_review" and not is_error:
             payload["review"] = result
         else:
@@ -309,12 +382,63 @@ class Campaign:
         self.bus.emit(
             self.ws.run_id, "tool", "failed" if is_error else "finished", payload, iteration=round_at_start
         )
-        if self.snapshot:
-            try:
-                self.snapshot(self)
-            except Exception as exc:
-                self.errors.append(ErrorRecord(step="snapshot", code="write_failed", message=str(exc)[:300]))
         return result, is_error
+
+    def run_batch(self, calls: list[tuple[str, dict[str, Any]]]) -> list[tuple[dict[str, Any], bool]]:
+        """Run one turn's tool calls, in parallel where the concurrency rules allow.
+
+        Calls are split at each exclusive tool, which runs alone in its place. Between those,
+        calls are grouped by candidate: a group runs in the order given (so build, relax and hull
+        for one candidate may share a turn), and different groups run at the same time, up to
+        ``cfg.max_parallel_tools``. Lookups without a candidate each form their own group.
+
+        Parameters
+        ----------
+        calls : list of tuple
+            ``(name, args)`` in the order the model gave them.
+
+        Returns
+        -------
+        list of tuple
+            ``(result, is_error)`` for each call, in the same order.
+        """
+        results: list[tuple[dict[str, Any], bool] | None] = [None] * len(calls)
+        segment: list[int] = []
+
+        def run_group(idx: list[int]) -> None:
+            """Run one group of calls in order.
+
+            Parameters
+            ----------
+            idx : list of int
+                Call indices.
+            """
+            for i in idx:
+                results[i] = self.call_tool(*calls[i])
+
+        def flush() -> None:
+            """Run the pending non-exclusive calls, grouped by candidate."""
+            groups: dict[Any, list[int]] = {}
+            for i in segment:
+                key = lock_key(*calls[i])
+                groups.setdefault(key if key is not None else ("lookup", i), []).append(i)
+            workers = max(1, min(self.ws.cfg.max_parallel_tools, len(groups)))
+            if workers == 1:
+                for idx in groups.values():
+                    run_group(idx)
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    list(pool.map(run_group, groups.values()))
+            segment.clear()
+
+        for i, (name, _) in enumerate(calls):
+            if name in EXCLUSIVE_TOOLS:
+                flush()
+                results[i] = self.call_tool(*calls[i])
+            else:
+                segment.append(i)
+        flush()
+        return [r for r in results if r is not None]
 
     def nudge(self) -> str:
         """Message for a model that stopped calling tools before submitting.
@@ -689,8 +813,8 @@ class Campaign:
                 continue
             nudges = 0
             blocks = []
-            for call in turn.tool_calls:
-                result, is_error = self.call_tool(call.name, call.input)
+            outcomes = self.run_batch([(c.name, c.input) for c in turn.tool_calls])
+            for call, (result, is_error) in zip(turn.tool_calls, outcomes, strict=True):
                 block: dict[str, Any] = {
                     "type": "tool_result",
                     "tool_use_id": call.id,

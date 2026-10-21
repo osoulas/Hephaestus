@@ -8,6 +8,7 @@ The contract between the harness and the tools; see ``docs/TOOLS.md``. Every han
 from __future__ import annotations
 
 import importlib
+import threading
 import traceback
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -32,7 +33,50 @@ from hephaestus.tools.prototypes import MP_STRUCTURE_TYPE, PROTOTYPES
 
 Handler = Callable[..., dict[str, Any]]
 HANDLERS: dict[str, Handler] = {}
-TOOL_MODULES = ["literature", "materials_project", "structures", "simulation", "properties"]
+TOOL_MODULES = ["literature", "materials_project", "structures", "simulation"]
+PROPERTY_KEYS = [
+    "band_gap",
+    "bulk_modulus",
+    "shear_modulus",
+    "youngs_modulus",
+    "poisson_ratio",
+    "pugh_ratio",
+    "cauchy_pressure",
+    "anisotropy_index",
+    "zener_ratio",
+    "sound_velocity_longitudinal",
+    "sound_velocity_transverse",
+    "sound_velocity_mean",
+    "debye_temperature",
+    "formation_energy",
+    "density",
+]
+"""Properties ``predict_property`` accepts; units and errors are in ``simulation.PROPERTY_REGISTRY``."""
+
+
+EXCLUSIVE_TOOLS = {"propose_candidate", "candidate_status", "request_review", "submit_final"}
+"""Tools that read or change every candidate: they run with no other call in flight."""
+_COUNTER_LOCK = threading.Lock()
+
+
+def lock_key(name: str, args: dict[str, Any]) -> str | None:
+    """Return the candidate a call works on, which no other call may touch at the same time.
+
+    Parameters
+    ----------
+    name : str
+        Tool name.
+    args : dict
+        Tool input.
+
+    Returns
+    -------
+    str or None
+        ``candidate_id`` for per-candidate tools; ``None`` for literature and database lookups,
+        which only add to shared collections and may run alongside anything.
+    """
+    cid = args.get("candidate_id")
+    return str(cid) if cid else None
 
 
 class ToolError(Exception):
@@ -102,6 +146,7 @@ class CandidateState(BaseModel):
     density_g_cm3: float | None = None
     domain_note: str = ""
     potential_in_domain: bool | None = None
+    elastic: dict[str, Any] | None = None  # tensor (GPa), Born stability, derived properties
     e_hull: float | None = None
     e_form: float | None = None
     decomposes_to: list[str] = Field(default_factory=list)
@@ -131,6 +176,17 @@ class Workspace(BaseModel):
     tool_calls: int = 0
     compute_s: float = 0.0
     submitted: Submission | None = None
+
+    def add_compute(self, seconds: float) -> None:
+        """Add compute time to the budget counter; safe from parallel tool calls.
+
+        Parameters
+        ----------
+        seconds : float
+            Wall time of a compute step, s.
+        """
+        with _COUNTER_LOCK:
+            self.compute_s += seconds
 
     def get(self, candidate_id: str) -> CandidateState:
         """Return a candidate's state or raise a ``ToolError`` for the LLM.
@@ -417,14 +473,14 @@ TOOLS: list[dict[str, Any]] = [
         "Short NVT MD at the operating temperature; stable if no atom drifts more than 1 Å.",
         {"candidate_id": CID, "duration_ps": {"type": "number"}},
     ),
-    # Properties (C)
+    # Properties
     _tool(
         "predict_property",
-        "Predict a property on the current structure with its uncertainty and a domain flag.",
-        {
-            "candidate_id": CID,
-            "property": _enum("band_gap", "bulk_modulus", "shear_modulus", "formation_energy", "density"),
-        },
+        "Predict a property on the current structure with its uncertainty and a domain flag. Mechanical "
+        "properties (moduli, Poisson and Pugh ratios, Cauchy pressure, anisotropy, sound velocities, Debye "
+        "temperature) come from one elastic-tensor calculation with the candidate's potential; any of them "
+        "returns all the others under 'related', plus the Born mechanical-stability check.",
+        {"candidate_id": CID, "property": _enum(*PROPERTY_KEYS)},
     ),
     # Run control (A)
     _tool(
