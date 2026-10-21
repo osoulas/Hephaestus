@@ -336,6 +336,26 @@ def paper_url(p: Paper) -> str | None:
     return None
 
 
+def id_label(pid: str) -> str:
+    """Readable label for a paper ID: "PubMed 37460465", "arXiv 0804.1681v1".
+
+    Parameters
+    ----------
+    pid : str
+        Paper ID.
+
+    Returns
+    -------
+    str
+        Label.
+    """
+    if pid.isdigit():
+        return f"PubMed {pid}"
+    if re.match(r"^(arxiv:)?\d{4}\.\d{4,5}(v\d+)?$", pid, re.I):
+        return f"arXiv {pid.split(':')[-1]}"
+    return pid
+
+
 def link_citations(text: str, papers: dict[str, Paper], order: list[str] | None = None) -> str:
     """Turn ``[paper_id]`` (or ``[id1, id2]``) into numbered links, e.g. ``[[1]](url)`` (EB-7).
 
@@ -988,7 +1008,7 @@ def assemble_brief(state: RunState, ws: Workspace, llm: LLM | None = None) -> tu
         head = (
             f"{n}. **{p.title}**" + (f" — {authors}" if authors else "") + (f" ({p.year})" if p.year else "")
         )
-        link = f" [{pid}]({url})" if url else f" {pid}"
+        link = f" [{id_label(pid)}]({url})" if url else f" {id_label(pid)}"
         why = f" {link_citations(notes[pid], ws.papers, order)}" if pid in notes else ""
         refs.append(head + "." + link + why)
     rendered["Literature support"] = "\n".join(refs) or "No papers cited."

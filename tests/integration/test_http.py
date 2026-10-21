@@ -99,7 +99,7 @@ def test_ui2_ui3_ui8_parse_run_stream_and_brief(client: TestClient) -> None:
     assert state["status"] == "finished" and state["best"] == "c2-1" and state["running"] is False
     brief = client.get(f"/runs/{run_id}/brief")
     assert brief.status_code == 200 and "## Scope and assumptions" in brief.text
-    assert client.get(f"/runs/{run_id}/brief", params={"format": "pdf"}).status_code == 404
+    assert client.get(f"/runs/{run_id}/brief", params={"format": "pdf"}).status_code == 200
     assert client.get(f"/runs/{run_id}/structure/c2-1").status_code == 404  # stub tools store no atoms
     assert client.get(f"/runs/{run_id}/structure/zz").status_code == 404
     assert [r["run_id"] for r in client.get("/runs").json()] == [run_id]
@@ -271,3 +271,14 @@ def test_ui9_stopped_replay_resumes_where_it_stopped(client: TestClient) -> None
     events = stream(client, rid)
     assert [e["seq"] for e in events] == [e["seq"] for e in stored]
     assert client.post(f"/replay/{rid}/resume").status_code == 409  # finished
+
+
+def test_eb10_brief_downloads_as_pdf(client: TestClient) -> None:
+    """A finished run's brief is written as a PDF, and the endpoint serves it."""
+    run_id = client.post("/runs", json={"raw_goal": scripts.GOAL}).json()["run_id"]
+    stream(client, run_id)
+    state = client.get(f"/runs/{run_id}").json()
+    assert state["brief"]["pdf_path"].endswith("brief.pdf")
+    r = client.get(f"/runs/{run_id}/brief", params={"format": "pdf"})
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert r.content.startswith(b"%PDF") and len(r.content) > 5000

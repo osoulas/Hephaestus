@@ -534,7 +534,10 @@ def create_app(
         """
         exp = get_experiment(run_id)
         if format == "pdf":
-            pdf = exp.brief_pdf
+            try:
+                pdf = exp.brief_pdf
+            except Exception as exc:
+                raise HTTPException(500, f"Could not render the PDF: {exc}") from exc
             if pdf is None:
                 raise HTTPException(404, f"Run {run_id} has no PDF brief.")
             return FileResponse(pdf, media_type="application/pdf", filename=f"{run_id}_brief.pdf")

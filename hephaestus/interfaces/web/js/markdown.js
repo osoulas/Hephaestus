@@ -31,7 +31,7 @@ function inline(t) {
   t = t.replace(/\[((?:[^[\]]|\[[^[\]]*\])+)\]\(([^)\s]+)\)/g, (_, txt, url) => {
     const safe = /^(https?:|#|\/|mailto:)/i.test(url) ? url : "#";
     const ext = /^https?:/i.test(safe) ? ' target="_blank" rel="noopener"' : "";
-    const n = txt.match(/^\[?(\d+)\]?$/);
+    const n = txt.match(/^\[(\d+)\]$/); // "[4]" is a citation; a bare ID such as 37460465 is a link
     return keep(n ? `<a class="cite" href="${safe}"${ext}>[${n[1]}]</a>` : `<a href="${safe}"${ext}>${formulas(txt)}</a>`);
   });
   t = formulas(t)
