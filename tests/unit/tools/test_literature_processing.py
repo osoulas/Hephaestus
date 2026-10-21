@@ -197,3 +197,11 @@ def test_lm12_year_from_structured_first_available() -> None:
         "dates": {"first_available": {"value": "2011-09-30", "precision": "day"}},
     }
     assert _to_paper(raw, "semantic", 0.5).year == 2011  # type: ignore[union-attr]
+
+
+def test_lm14_value_must_equal_written_number() -> None:
+    """An integer in the abstract does not accept nearby values, and extra precision is not invented."""
+    assert not value_in_abstract(2.7, "Samples were annealed for 3 h.")
+    assert not value_in_abstract(3.24, "a gap of 3.2 eV")
+    assert value_in_abstract(3.0, "annealed for 3 h")
+    assert value_in_abstract(-0.5, "lowered by 0.5 eV")
