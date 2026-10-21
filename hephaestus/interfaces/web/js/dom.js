@@ -225,6 +225,39 @@ export function formula(f) {
 }
 
 /**
+ * Display form of a candidate ID: "c1-2" becomes "1-2" (round 1, candidate 2).
+ * The engine keeps "c1-2"; only what the UI shows changes.
+ * @param {string|null|undefined} id Candidate ID.
+ * @returns {string}
+ */
+export function cid(id) {
+  if (!id) return "–";
+  if (id === "ref") return "reference";
+  const m = String(id).match(/^c(\d+)-(\d+)(.*)$/);
+  return m ? `${m[1]}-${m[2]}${m[3]}` : String(id);
+}
+
+/**
+ * Long form of a candidate ID for tooltips: "Round 1 · Candidate 2".
+ * @param {string} id Candidate ID.
+ * @returns {string}
+ */
+export function cidLong(id) {
+  const m = String(id || "").match(/^c(\d+)-(\d+)/);
+  return m ? `Round ${m[1]} · Candidate ${m[2]}` : String(id || "");
+}
+
+/**
+ * A candidate ID as shown in the UI, with its long form on hover.
+ * @param {string} id Candidate ID.
+ * @param {string} [cls] Element and classes, e.g. "span.cand-id".
+ * @returns {HTMLElement}
+ */
+export function cidTag(id, cls = "span.cid") {
+  return h(cls, { title: cidLong(id) }, cid(id));
+}
+
+/**
  * Format a number with sensible precision.
  * @param {number|null|undefined} v Value.
  * @param {number} [digits] Significant decimals.

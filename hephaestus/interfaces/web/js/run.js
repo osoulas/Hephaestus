@@ -3,7 +3,7 @@
 
 import { api, streamEvents } from "./api.js";
 import { columnChart, confidenceChart, confidenceLegend, scoreRing } from "./chart.js";
-import { ago, check, clamp, download, duration, empty, formula, h, icon, label, num, pill, pm, store, stored, toast } from "./dom.js";
+import { ago, check, cid as cidText, cidLong, cidTag, clamp, download, duration, empty, formula, h, icon, label, num, pill, pm, store, stored, toast } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
 import { PHASES, RunModel, toolKind } from "./model.js";
 import { CONFIG_GROUPS, configName, modelName, specGrid, targetText } from "./spec.js";
@@ -435,7 +435,7 @@ export function mountRun(root, id, tab, hooks) {
         failed: "Failed: see Overview",
         pending: "Not started",
         active: `Round ${Math.max(model.round, 1)} of ${cfg.max_iterations ?? "?"} · ${model.toolCount} tool calls`,
-        done: `${model.roundRows.length} round${model.roundRows.length === 1 ? "" : "s"}${model.submitted ? ` · submitted ${model.submitted.candidate_id}` : ""}`,
+        done: `${model.roundRows.length} round${model.roundRows.length === 1 ? "" : "s"}${model.submitted ? ` · submitted ${cidText(model.submitted.candidate_id)}` : ""}`,
       },
       final: {
         pending: cfg.run_final === false ? "Off" : "Not started",
@@ -579,7 +579,7 @@ export function mountRun(root, id, tab, hooks) {
       h(
         "div.hero-sub",
         null,
-        h("span.mono.muted", null, best),
+        cidTag(best, "span.muted"),
         c.space_group ? pill(c.space_group, "outline") : null,
         c.novelty ? pill(label(c.novelty), c.novelty === "novel" ? "info" : null) : null,
         verdict ? verdictPill(verdict) : null,
@@ -610,7 +610,7 @@ export function mountRun(root, id, tab, hooks) {
       rule ? `Stopped: ${label(rule).toLowerCase()}` : null,
       `submit gate ${sub.gate_passed ? "passed" : sub.accept_not_met ? "not met (accepted)" : "failed"}`,
       `picked by ${sub.picked_by}`,
-      sub.runner_up_id ? `runner-up ${sub.runner_up_id}` : null,
+      sub.runner_up_id ? `runner-up ${cidText(sub.runner_up_id)}` : null,
     ].filter(Boolean);
     return h("div.hero-foot", null, parts.join(" · "));
   }
@@ -636,7 +636,7 @@ export function mountRun(root, id, tab, hooks) {
           h(
             "tbody",
             null,
-            rows.map((r) => h("tr", null, h("td", null, r.round), h("td.mono", null, r.best || "–"), h("td.num", null, r.score ?? "–"), h("td.num", null, r.llm ?? "–"), h("td", null, r.stop ? label(r.rule || "yes") : r.gateNote ? "Blocked" : "No"))),
+            rows.map((r) => h("tr", null, h("td", null, r.round), h("td", null, r.best ? cidTag(r.best) : "–"), h("td.num", null, r.score ?? "–"), h("td.num", null, r.llm ?? "–"), h("td", null, r.stop ? label(r.rule || "yes") : r.gateNote ? "Blocked" : "No"))),
           ),
         ),
       );
@@ -811,7 +811,7 @@ export function mountRun(root, id, tab, hooks) {
           h(
             "div.log-main",
             null,
-            h("div.log-line", null, h("strong", null, `Round ${r.round} decided`), h("span.log-summary", null, r.best ? `best ${r.best}` : "")),
+            h("div.log-line", null, h("strong", null, `Round ${r.round} decided`), h("span.log-summary", null, r.best ? `best ${cidText(r.best)}` : "")),
             h(
               "div.log-result",
               null,
@@ -831,8 +831,8 @@ export function mountRun(root, id, tab, hooks) {
           h(
             "div.log-main",
             null,
-            h("div.log-line", null, h("strong", null, "Submitted"), s ? h("span.log-summary", null, formula(model.candidate(s.candidate_id).composition || s.candidate_id), ` (${s.candidate_id})`) : h("span.log-summary", null, "nothing")),
-            s ? h("div.log-result", null, `Gate ${s.gate_passed ? "passed" : "failed"} · picked by ${s.picked_by}${s.runner_up_id ? ` · runner-up ${s.runner_up_id}` : ""}`) : null,
+            h("div.log-line", null, h("strong", null, "Submitted"), s ? h("span.log-summary", null, formula(model.candidate(s.candidate_id).composition || cidText(s.candidate_id)), ` (${cidText(s.candidate_id)})`) : h("span.log-summary", null, "nothing")),
+            s ? h("div.log-result", null, `Gate ${s.gate_passed ? "passed" : "failed"} · picked by ${s.picked_by}${s.runner_up_id ? ` · runner-up ${cidText(s.runner_up_id)}` : ""}`) : null,
           ),
           h("div.log-side", null, s ? check(s.gate_passed, "Gate passed", "Gate failed") : null, time),
         );
@@ -1133,7 +1133,7 @@ export function mountRun(root, id, tab, hooks) {
             "span.muted",
             null,
             `${cands.length} candidate${cands.length === 1 ? "" : "s"}`,
-            row && row.best ? ` · best ${row.best}` : "",
+            row && row.best ? ` · best ${cidText(row.best)}` : "",
             row && row.score != null ? ` · rubric ${row.score}` : "",
             row && row.llm != null ? ` · reviewer ${row.llm}` : "",
           ),
@@ -1175,8 +1175,8 @@ export function mountRun(root, id, tab, hooks) {
                       h(
                         "td",
                         null,
-                        h("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, c.candidate_id === best ? h("span.star", { title: "Best candidate" }, icon("star")) : null, h("span.cand-formula", null, formula(c.composition || c.candidate_id))),
-                        h("div.cand-id", null, c.candidate_id),
+                        h("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, c.candidate_id === best ? h("span.star", { title: "Best candidate" }, icon("star")) : null, h("span.cand-formula", null, formula(c.composition || cidText(c.candidate_id)))),
+                        cidTag(c.candidate_id, "div.cand-id"),
                       ),
                       h("td", null, c.space_group || (c.proposal && label(c.proposal.structure_type)) || "–"),
                       h("td.num", null, c.value != null ? pm(c.value, c.uncertainty, c.units) : "–"),
@@ -1221,8 +1221,8 @@ export function mountRun(root, id, tab, hooks) {
               render();
             },
           },
-          h("span", { style: { display: "flex", alignItems: "center", gap: "6px" } }, x === model.best ? h("span.star", null, icon("star")) : null, h("span.cand-formula", null, formula(cc.composition || x))),
-          h("span.cand-id", null, x),
+          h("span", { style: { display: "flex", alignItems: "center", gap: "6px" } }, x === model.best ? h("span.star", null, icon("star")) : null, h("span.cand-formula", null, formula(cc.composition || cidText(x)))),
+          cidTag(x, "span.cand-id"),
         );
       }),
     );
@@ -1324,7 +1324,7 @@ export function mountRun(root, id, tab, hooks) {
             `div.verdict.${kind}`,
             null,
             h("div.verdict-icon", null, icon(kind === "good" ? "check" : kind === "critical" ? "x" : "alert")),
-            h("div", null, h("div.verdict-title", null, `${label(r.verdict)}: `, formula(model.candidate(r.candidate_id).composition || r.candidate_id), h("span.muted.mono", { style: { fontSize: "13px", marginLeft: "8px" } }, r.candidate_id)), h("div.secondary", null, text)),
+            h("div", null, h("div.verdict-title", null, `${label(r.verdict)}: `, formula(model.candidate(r.candidate_id).composition || cidText(r.candidate_id)), h("span.muted", { style: { fontSize: "13px", marginLeft: "8px" }, title: cidLong(r.candidate_id) }, cidText(r.candidate_id))), h("div.secondary", null, text)),
           ),
           r.checks && r.checks.length
             ? h(
@@ -1369,8 +1369,8 @@ export function mountRun(root, id, tab, hooks) {
               "dl.kv",
               null,
               [
-                ["Winner", h("span", null, formula(model.candidate(sub.candidate_id).composition || ""), " ", h("span.mono.muted", null, sub.candidate_id))],
-                ["Runner-up", sub.runner_up_id ? h("span", null, formula(model.candidate(sub.runner_up_id).composition || ""), " ", h("span.mono.muted", null, sub.runner_up_id)) : "–"],
+                ["Winner", h("span", null, formula(model.candidate(sub.candidate_id).composition || ""), " ", cidTag(sub.candidate_id, "span.muted"))],
+                ["Runner-up", sub.runner_up_id ? h("span", null, formula(model.candidate(sub.runner_up_id).composition || ""), " ", cidTag(sub.runner_up_id, "span.muted")) : "–"],
                 ["Submit gate", check(sub.gate_passed, "Passed", "Failed")],
                 sub.accept_not_met ? ["Accepted not met", "Yes"] : null,
                 ["Picked by", label(sub.picked_by)],
@@ -1541,7 +1541,7 @@ export function mountRun(root, id, tab, hooks) {
       h(
         "div.score-pair",
         null,
-        h("div.score-item", null, scoreRing(r.score, "var(--series-1)"), h("div", null, h("div.score-name", null, "Code rubric"), h("div.muted.score-sub", null, `best ${r.best_of_round || "–"}`))),
+        h("div.score-item", null, scoreRing(r.score, "var(--series-1)"), h("div", null, h("div.score-name", null, "Code rubric"), h("div.muted.score-sub", null, `best ${cidText(r.best_of_round)}`))),
         h("div.score-item", null, scoreRing(r.llm_confidence, "var(--series-2)"), h("div", null, h("div.score-name", null, "Reviewer"), h("div.muted.score-sub", null, "own confidence"))),
       ),
       h(
@@ -1640,11 +1640,11 @@ function summary(c) {
     case "request_review":
       return i.summary || "";
     case "submit_final":
-      return `${i.candidate_id}${i.runner_up_id ? ` (runner-up ${i.runner_up_id})` : ""}`;
+      return `${cidText(i.candidate_id)}${i.runner_up_id ? ` (runner-up ${cidText(i.runner_up_id)})` : ""}`;
     case "predict_property":
-      return `${i.candidate_id}${comp ? ` ${comp}` : ""} · ${label(i.property)}`;
+      return `${cidText(i.candidate_id)}${comp ? ` ${comp}` : ""} · ${label(i.property)}`;
     default:
-      return i.candidate_id ? `${i.candidate_id}${comp ? ` ${comp}` : ""}` : Object.values(i).slice(0, 2).join(" · ");
+      return i.candidate_id ? `${cidText(i.candidate_id)}${comp ? ` ${comp}` : ""}` : Object.values(i).slice(0, 2).join(" · ");
   }
 }
 
@@ -1670,7 +1670,7 @@ function resultLine(c) {
     case "lookup_materials_project":
       return `${r.n_entries ?? 0} entries${r.default_polymorph ? ` · default ${r.default_polymorph}` : ""}${r.note ? ` · ${r.note}` : ""}`;
     case "propose_candidate":
-      return r.accepted ? `Accepted as ${r.candidate_id}${r.tolerance_factor ? ` · tolerance factor ${num(r.tolerance_factor)}` : ""}` : `Rejected: ${(r.reasons || []).join("; ")}`;
+      return r.accepted ? `Accepted as ${cidText(r.candidate_id)}${r.tolerance_factor ? ` · tolerance factor ${num(r.tolerance_factor)}` : ""}` : `Rejected: ${(r.reasons || []).join("; ")}`;
     case "build_structure":
       return `${r.n_atoms} atoms from ${r.source}${r.supercell ? ` · ${r.supercell.join("×")} supercell` : ""}`;
     case "relax":
@@ -1711,8 +1711,8 @@ const FINAL_STEP_NAMES = {
  * @returns {string}
  */
 function finalStepName(e) {
-  const cid = e.info && e.info.candidate_id;
-  const who = cid === "ref" ? "reference" : cid;
+  const id = e.info && e.info.candidate_id;
+  const who = id ? cidText(id) : null;
   return `${FINAL_STEP_NAMES[e.tool] || label(e.tool)}${who ? ` · ${who}` : ""}`;
 }
 
