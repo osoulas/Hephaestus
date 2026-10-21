@@ -113,7 +113,7 @@ Base URL `http://127.0.0.1:8000`; interactive docs at `/docs`. Bodies are JSON i
 
 | Endpoint | Body / query | Response |
 | --- | --- | --- |
-| `POST /parse` | `{raw_goal, answers?, llm_backend?, llm_model?, require_novel?, band_gap_fidelity?}` | `{spec, questions, errors, parser}` |
+| `POST /parse` | `{raw_goal, answers?, llm_backend?, llm_model?, require_novel?, band_gap_model?}` | `{spec, questions, errors, parser}` |
 | `POST /runs` | `{spec, config}` or `{raw_goal, answers?, config}` | `201 {run_id}`; 409 busy; 503 backend not ready |
 | `GET /runs` | | `[{run_id, raw_goal, status, best, stop_reason, created_at, running}]` newest first |
 | `GET /runs/{id}` | | `RunState` + `running` |

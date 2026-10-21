@@ -5,7 +5,7 @@ import { api, ApiError } from "./api.js";
 import { ago, append, cid, cidLong, h, icon, label, pill, store, stored, toast, wordmark } from "./dom.js";
 import { openConnectDialog } from "./auth.js";
 import { mountRun } from "./run.js";
-import { CONFIG_GROUPS, TOP_LEVEL_SETTINGS, modelName, specGrid } from "./spec.js";
+import { CONFIG_GROUPS, POTENTIALS, PROFILES, TOP_LEVEL_SETTINGS, VALUE_NAMES, modelName, potentialName, specGrid } from "./spec.js";
 
 const main = document.getElementById("main");
 const sidebar = document.getElementById("sidebar");
@@ -105,11 +105,11 @@ function renderSidebar() {
   sidebar.replaceChildren(
     h(
       "a.brand",
-      { href: "#/new", title: "Hephaestus: new experiment" },
+      { href: "#/new", title: "Hephaestus: new run" },
       wordmark(),
       h("div.brand-tag", { title: "forged in simulation · checked by code · grounded in the literature" }, "self-designing experiments for materials discovery"),
     ),
-    h("div.sidebar-actions", null, h("a.btn.primary", { href: "#/new" }, icon("plus"), "New experiment")),
+    h("div.sidebar-actions", null, h("a.btn.primary", { href: "#/new" }, icon("plus"), "New run")),
     h("div.sidebar-section", null, "Runs", h("span.num", null, app.runs.length || "")),
     list,
     statusPanel(),
@@ -292,7 +292,7 @@ function mountComposer(root) {
           llm_backend: cfg.llm_backend,
           llm_model: cfg.llm_model,
           require_novel: cfg.require_novel,
-          band_gap_fidelity: cfg.band_gap_fidelity,
+          band_gap_model: cfg.band_gap_model,
         },
       });
     } catch (e) {
@@ -390,7 +390,7 @@ function mountComposer(root) {
       h(
         "div.composer-hero",
         null,
-        h("div.eyebrow", null, icon("flame"), "New experiment"),
+        h("div.eyebrow", null, icon("flame"), "New run"),
         h("h1", null, "What material should we design?"),
         h(
           "p",
@@ -499,8 +499,31 @@ function mountComposer(root) {
     const d = app.defaults || {};
     if (value === d[key] || (value === "" && d[key] == null)) delete st.overrides[key];
     else st.overrides[key] = value;
-    if (["band_gap_fidelity"].includes(key)) st.parsed = null; // changes the parsed target
+    if (key === "band_gap_model") st.parsed = null; // changes the parsed target's scale
     persist();
+  }
+
+  const current = () => ({ ...(app.defaults || {}), ...st.overrides });
+
+  function activeProfile() {
+    const c = current();
+    const d = app.defaults || {};
+    const keys = new Set(PROFILES.flatMap((p) => Object.keys(p.values)));
+    for (const p of PROFILES) {
+      if ([...keys].every((k) => c[k] === (k in p.values ? p.values[k] : d[k]))) return p.id;
+    }
+    return "custom";
+  }
+
+  function applyProfile(p) {
+    const d = app.defaults || {};
+    for (const k of new Set(PROFILES.flatMap((x) => Object.keys(x.values)))) setOverride(k, k in p.values ? p.values[k] : d[k]);
+    draw();
+  }
+
+  function bandGapLabel(id) {
+    const m = ((app.models && app.models.band_gap_models) || []).find((x) => x.id === id);
+    return m ? m.label.replace("MEGNet multi-fidelity · ", "MEGNet ") : id;
   }
 
   function settingControl(key, prop, meta) {
@@ -511,112 +534,189 @@ function mountComposer(root) {
     const enumValues = prop.enum || (prop.anyOf || []).flatMap((x) => x.enum || []);
     const type = prop.type || (prop.anyOf || []).map((x) => x.type).find((t) => t && t !== "null");
     const nullable = (prop.anyOf || []).some((x) => x.type === "null");
+    const set = (v) => {
+      setOverride(key, v);
+      draw();
+    };
     let control;
-    if (type === "boolean") {
-      control = h(
-        "label.switch",
-        null,
-        h("input", { type: "checkbox", checked: Boolean(value), onchange: (e) => (setOverride(key, e.target.checked), draw()) }),
-        value ? "On" : "Off",
-      );
-    } else if (enumValues.length) {
+    let note = hint;
+    if (key === "band_gap_model") {
+      const models = (app.models && app.models.band_gap_models) || enumValues.map((id) => ({ id, label: id, description: "" }));
+      const sel = models.find((m) => m.id === value);
+      note = sel ? sel.description : hint;
+      control = h("select.select", { onchange: (e) => set(e.target.value) }, models.map((m) => h("option", { value: m.id, selected: m.id === value }, m.label)));
+    } else if (key.endsWith("potential")) {
+      const options = [...new Set([...POTENTIALS, ...(value ? [value] : [])])];
       control = h(
         "select.select",
-        { onchange: (e) => (setOverride(key, e.target.value), draw()) },
-        enumValues.map((v) => h("option", { value: v, selected: v === value }, String(v))),
+        { onchange: (e) => set(e.target.value === "" ? null : e.target.value) },
+        nullable ? h("option", { value: "", selected: value == null }, "None") : null,
+        options.map((v) => h("option", { value: v, selected: v === value }, potentialName(v))),
       );
+    } else if (type === "boolean") {
+      control = h("label.switch", null, h("input", { type: "checkbox", checked: Boolean(value), onchange: (e) => set(e.target.checked) }), value ? "On" : "Off");
+    } else if (enumValues.length && enumValues.length <= 3) {
+      control = h(
+        "div.segmented.seg-fill",
+        { role: "group", "aria-label": name },
+        enumValues.map((v) => h("button", { type: "button", "aria-pressed": String(v === value), onclick: () => set(v) }, VALUE_NAMES[v] || String(v))),
+      );
+    } else if (enumValues.length) {
+      control = h("select.select", { onchange: (e) => set(e.target.value) }, enumValues.map((v) => h("option", { value: v, selected: v === value }, VALUE_NAMES[v] || String(v))));
     } else if (type === "integer" || type === "number") {
       const scale = unit === "min" ? 60 : 1;
-      control = h("input.input.num", {
-        type: "number",
-        min: 0,
-        step: type === "integer" ? 1 : "any",
-        value: value == null ? "" : +(value / scale).toFixed(2),
-        onchange: (e) => {
-          const raw = e.target.value;
-          if (raw === "") setOverride(key, d[key]);
-          else setOverride(key, type === "integer" ? Math.round(Number(raw)) : Number(raw) * scale);
-          draw();
-        },
-      });
+      control = h(
+        "div.unit-input",
+        null,
+        h("input.input.num", {
+          type: "number",
+          min: 0,
+          step: type === "integer" ? 1 : "any",
+          value: value == null ? "" : +(value / scale).toFixed(2),
+          onchange: (e) => {
+            const raw = e.target.value;
+            if (raw === "") set(d[key]);
+            else set(type === "integer" ? Math.round(Number(raw)) : Number(raw) * scale);
+          },
+        }),
+        unit ? h("span.unit", null, unit) : null,
+      );
     } else {
-      control = h("input.input.mono", {
-        value: value ?? "",
-        placeholder: nullable ? "none" : "",
-        list: key.includes("potential") ? "potential-options" : null,
-        onchange: (e) => (setOverride(key, e.target.value.trim() || (nullable ? null : d[key])), draw()),
-      });
+      control = h("input.input.mono", { value: value ?? "", placeholder: nullable ? "none" : "", onchange: (e) => set(e.target.value.trim() || (nullable ? null : d[key])) });
     }
     const def = d[key];
-    const defText = unit === "min" && typeof def === "number" ? `${+(def / 60).toFixed(2)} min` : def == null ? "none" : String(def);
+    const defText = unit === "min" && typeof def === "number" ? `${+(def / 60).toFixed(2)} min` : key.endsWith("potential") ? potentialName(def) : key === "band_gap_model" ? bandGapLabel(def) : def == null ? "none" : VALUE_NAMES[def] || String(def);
     return h(
-      "label.field.setting",
+      "div.field.setting",
       { class: changed ? "changed" : "" },
-      h("span.field-label", null, name, unit === "min" ? h("span.muted", null, " (min)") : null, changed ? h("span.changed-dot", { title: `Default: ${defText}` }) : null),
+      h(
+        "span.field-label",
+        null,
+        name,
+        changed ? h("span.changed-dot", { title: `Changed from the default (${defText})` }) : null,
+        changed ? h("button.link.reset-one", { type: "button", onclick: () => set(def), title: `Back to ${defText}` }, "Reset") : null,
+      ),
       control,
-      h("span.field-hint", null, hint, changed ? h("span", null, ` Default: ${defText}.`) : null),
+      note ? h("span.field-hint", null, note) : null,
     );
   }
 
   function settingsPanel() {
     const schema = app.schema && app.schema.properties;
     if (!schema || !app.defaults) return null;
-    const used = new Set();
-    const groups = CONFIG_GROUPS.map((g) => {
-      const fields = Object.entries(g.fields).filter(([k]) => schema[k]);
-      fields.forEach(([k]) => used.add(k));
-      return { name: g.name, fields };
-    });
-    const other = Object.keys(schema).filter((k) => !used.has(k) && !TOP_LEVEL_SETTINGS.has(k));
-    if (other.length) groups.push({ name: "Other", fields: other.map((k) => [k, [label(k), schema[k].title || ""]]) });
-    const nChanged = Object.keys(st.overrides).filter((k) => k in app.defaults).length;
-    const open = Boolean(stored("heph-options", {}).advancedOpen);
-    return h(
-      "details.advanced",
-      {
-        open,
-        ontoggle: (e) => store("heph-options", { ...stored("heph-options", {}), advancedOpen: e.currentTarget.open }),
-      },
+    const expert = Boolean(stored("heph-expert", false));
+    const open = new Set(stored("heph-open-groups", []));
+    const c = current();
+    const profile = activeProfile();
+    const nChanged = Object.keys(st.overrides).filter((k) => k in app.defaults && !TOP_LEVEL_SETTINGS.has(k)).length;
+
+    const profileRow = h(
+      "div.profile-row",
+      null,
       h(
-        "summary",
-        null,
-        icon("chevron"),
-        "All settings",
-        nChanged ? h("span.pill.info", { style: { marginLeft: "8px" } }, `${nChanged} changed`) : h("span.muted", { style: { fontWeight: 500, marginLeft: "6px" } }, "· defaults"),
-      ),
-      h(
-        "datalist",
-        { id: "potential-options" },
-        ["mace-mp-0-small", "mace-mp-0-medium", "mace-mp-0-large", "chgnet"].map((v) => h("option", { value: v })),
-      ),
-      groups.map((g) =>
+        "div.profiles",
+        { role: "radiogroup", "aria-label": "Run profile" },
+        PROFILES.map((p) =>
+          h(
+            `button.profile${profile === p.id ? ".on" : ""}`,
+            { type: "button", role: "radio", "aria-checked": String(profile === p.id), onclick: () => applyProfile(p) },
+            h("span.profile-name", null, p.name),
+            h("span.profile-hint", null, p.hint),
+          ),
+        ),
         h(
-          "div.settings-group",
-          null,
-          h("div.settings-group-name", null, g.name),
-          h("div.advanced-grid", null, g.fields.map(([k, meta]) => settingControl(k, schema[k], meta))),
+          `div.profile.custom${profile === "custom" ? ".on" : ""}`,
+          { "aria-hidden": "true" },
+          h("span.profile-name", null, "Custom"),
+          h("span.profile-hint", null, "Your own budget; open a section below to adjust."),
         ),
       ),
-      nChanged
-        ? h(
-            "div",
-            { style: { marginTop: "14px" } },
-            h(
+    );
+
+    const groups = CONFIG_GROUPS.map((g) => {
+      const fields = Object.entries(g.fields).filter(([k, meta]) => schema[k] && (expert || !meta[3]));
+      const changedHere = Object.keys(g.fields).filter((k) => k in st.overrides);
+      const isOpen = open.has(g.id);
+      const toggle = () => {
+        if (isOpen) open.delete(g.id);
+        else open.add(g.id);
+        store("heph-open-groups", [...open]);
+        draw();
+      };
+      return h(
+        `section.setting-group${isOpen ? ".open" : ""}`,
+        null,
+        h(
+          "button.group-head",
+          { type: "button", "aria-expanded": String(isOpen), onclick: toggle },
+          h("span.group-icon", null, icon(g.icon)),
+          h("span.group-text", null, h("span.group-name", null, g.name), h("span.group-summary", null, g.summary(c, bandGapLabel))),
+          changedHere.length ? h("span.pill.info", null, `${changedHere.length} changed`) : null,
+          icon("chevron", "group-chevron"),
+        ),
+        isOpen
+          ? h(
+              "div.group-body",
+              null,
+              h("div.group-grid", null, fields.map(([k, meta]) => settingControl(k, schema[k], meta))),
+              changedHere.length
+                ? h(
+                    "button.link.reset-group",
+                    {
+                      type: "button",
+                      onclick: () => {
+                        for (const k of changedHere) delete st.overrides[k];
+                        persist();
+                        draw();
+                      },
+                    },
+                    `Reset ${g.name.toLowerCase()}`,
+                  )
+                : null,
+            )
+          : null,
+      );
+    });
+
+    return h(
+      "div.setup.span-2",
+      null,
+      h("div.setup-head", null, h("span.field-label", null, "How hard should it search?")),
+      profileRow,
+      h("div.setting-groups", null, groups),
+      h(
+        "div.setup-foot",
+        null,
+        h(
+          "label.switch",
+          null,
+          h("input", {
+            type: "checkbox",
+            checked: expert,
+            onchange: (e) => {
+              store("heph-expert", e.target.checked);
+              draw();
+            },
+          }),
+          "Show expert settings",
+        ),
+        nChanged
+          ? h(
               "button.btn.sm",
               {
-                onclick: (e) => {
-                  e.preventDefault();
-                  st.overrides = {};
+                type: "button",
+                onclick: () => {
+                  for (const k of Object.keys(st.overrides)) if (!TOP_LEVEL_SETTINGS.has(k)) delete st.overrides[k];
                   st.parsed = null;
                   persist();
                   draw();
                 },
               },
               icon("reset"),
-              "Reset to defaults",
-            ),
-          )
-        : null,
+              "Reset all to defaults",
+            )
+          : null,
+      ),
     );
   }
 

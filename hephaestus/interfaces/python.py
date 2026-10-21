@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hephaestus.core.config import MODELS, RunConfig, runs_root
+from hephaestus.core.config import BAND_GAP_MODELS, MODELS, RunConfig, runs_root
 from hephaestus.core.events import BUS, EventBus
 from hephaestus.core.store import atomic_write_text, load_model, new_run_id
 from hephaestus.core.types import ProgressEvent, RunState, SearchSpec
@@ -992,14 +992,23 @@ def backend_ready(backend: str, status: dict[str, Any] | None = None) -> tuple[b
 
 
 def models() -> dict[str, Any]:
-    """List the selectable Claude models and the default (OR-11, UI-12).
+    """List the selectable Claude models and band gap models, with defaults (OR-11, UI-12).
 
     Returns
     -------
     dict
-        ``{models, default}``.
+        ``{models, default, band_gap_models, band_gap_default}``; each band gap model has
+        ``id``, ``label`` and ``description``.
     """
-    return {"models": list(MODELS), "default": RunConfig().llm_model}
+    return {
+        "models": list(MODELS),
+        "default": RunConfig().llm_model,
+        "band_gap_models": [
+            {"id": k, "label": v["label"], "description": v["description"]}
+            for k, v in BAND_GAP_MODELS.items()
+        ],
+        "band_gap_default": RunConfig().band_gap_model,
+    }
 
 
 def device_status() -> dict[str, Any]:
