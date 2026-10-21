@@ -5,7 +5,7 @@ import { api, ApiError } from "./api.js";
 import { ago, append, brandMark, h, icon, label, pill, store, stored, toast } from "./dom.js";
 import { openConnectDialog } from "./auth.js";
 import { mountRun } from "./run.js";
-import { modelName, specGrid } from "./spec.js";
+import { CONFIG_GROUPS, TOP_LEVEL_SETTINGS, modelName, specGrid } from "./spec.js";
 
 const main = document.getElementById("main");
 const sidebar = document.getElementById("sidebar");
@@ -236,7 +236,7 @@ function themeButton() {
 // ------------------------------------------------------------------ composer
 
 /**
- * The goal composer: goal, model access, model, novelty, advanced budgets; parse, answer, run.
+ * The goal composer: goal, model access, model, novelty and every other run setting; parse, answer, run.
  * @param {HTMLElement} root Mount point.
  * @returns {{unmount: () => void, onHealth: (h: object) => void}}
  */
@@ -247,11 +247,7 @@ function mountComposer(root) {
     backend: saved.backend || "auto",
     model: saved.model || null,
     novel: Boolean(saved.novel),
-    fidelity: saved.fidelity || "hse",
-    iterations: saved.iterations || null,
-    toolCalls: saved.toolCalls || null,
-    minutes: saved.minutes || null,
-    runFinal: saved.runFinal ?? true,
+    overrides: saved.overrides || {}, // RunConfig fields changed from the defaults
     busy: false,
     parsed: null,
     answers: {},
@@ -262,11 +258,8 @@ function mountComposer(root) {
       backend: st.backend,
       model: st.model,
       novel: st.novel,
-      fidelity: st.fidelity,
-      iterations: st.iterations,
-      toolCalls: st.toolCalls,
-      minutes: st.minutes,
-      runFinal: st.runFinal,
+      overrides: st.overrides,
+      advancedOpen: stored("heph-options", {}).advancedOpen,
     });
 
   const view = h("div.composer");
@@ -274,16 +267,13 @@ function mountComposer(root) {
 
   const config = () => {
     const d = app.defaults || {};
+    const known = Object.fromEntries(Object.entries(st.overrides).filter(([k]) => k in d));
     return {
       ...d,
+      ...known,
       llm_backend: st.backend,
       llm_model: st.model || (app.models && app.models.default) || d.llm_model,
       require_novel: st.novel,
-      band_gap_fidelity: st.fidelity,
-      max_iterations: Number(st.iterations || d.max_iterations || 3),
-      max_tool_calls: Number(st.toolCalls || d.max_tool_calls || 90),
-      time_budget_s: Number(st.minutes || (d.time_budget_s || 900) / 60) * 60,
-      run_final: st.runFinal,
     };
   };
 
@@ -394,24 +384,6 @@ function mountComposer(root) {
       return st.backend === "api" ? "No API key yet." : "Claude Code is signed out.";
     })();
 
-    const numberField = (lab, key, placeholder, hint) =>
-      h(
-        "label.field",
-        null,
-        h("span.field-label", null, lab),
-        h("input.input.num", {
-          type: "number",
-          min: 1,
-          value: st[key] ?? "",
-          placeholder: String(placeholder),
-          oninput: (e) => {
-            st[key] = e.target.value || null;
-            persist();
-          },
-        }),
-        hint ? h("span.field-hint", null, hint) : null,
-      );
-
     view.replaceChildren();
     append(view, [
       h(
@@ -516,56 +488,135 @@ function mountComposer(root) {
           ),
           h("span.field-hint", null, "Rejects compositions with an ICSD-backed Materials Project entry or a prior report."),
         ),
-        h(
-          "details.advanced",
-          { open: Boolean(saved.advancedOpen) },
-          h("summary", { onclick: (e) => store("heph-options", { ...stored("heph-options", {}), advancedOpen: !e.currentTarget.parentElement.open }) }, icon("chevron"), "Budgets and fidelity"),
-          h(
-            "div.advanced-grid",
-            null,
-            numberField("Review rounds", "iterations", d.max_iterations ?? 3, "Maximum rounds"),
-            numberField("Tool-call budget", "toolCalls", d.max_tool_calls ?? 90, "Calls before it must submit"),
-            numberField("Time budget (min)", "minutes", Math.round((d.time_budget_s ?? 900) / 60), "Wall clock for the campaign"),
-            h(
-              "label.field",
-              null,
-              h("span.field-label", null, "Band gap fidelity"),
-              h(
-                "select.select",
-                {
-                  onchange: (e) => {
-                    st.fidelity = e.target.value;
-                    st.parsed = null;
-                    persist();
-                  },
-                },
-                h("option", { value: "hse", selected: st.fidelity === "hse" }, "HSE (±0.65 eV)"),
-                h("option", { value: "pbe", selected: st.fidelity === "pbe" }, "PBE (runs ~1.6 eV low)"),
-              ),
-            ),
-            h(
-              "div.field",
-              null,
-              h("span.field-label", null, "Final re-check"),
-              h(
-                "label.switch",
-                null,
-                h("input", {
-                  type: "checkbox",
-                  checked: st.runFinal,
-                  onchange: (e) => {
-                    st.runFinal = e.target.checked;
-                    persist();
-                  },
-                }),
-                "Higher-fidelity re-check",
-              ),
-            ),
-          ),
-        ),
+        settingsPanel(),
       ),
     ]);
     if (!st.goal) requestAnimationFrame(() => textarea.focus());
+  }
+
+  function setOverride(key, value) {
+    const d = app.defaults || {};
+    if (value === d[key] || (value === "" && d[key] == null)) delete st.overrides[key];
+    else st.overrides[key] = value;
+    if (["band_gap_fidelity"].includes(key)) st.parsed = null; // changes the parsed target
+    persist();
+  }
+
+  function settingControl(key, prop, meta) {
+    const d = app.defaults || {};
+    const [name, hint, unit] = meta;
+    const value = key in st.overrides ? st.overrides[key] : d[key];
+    const changed = key in st.overrides;
+    const enumValues = prop.enum || (prop.anyOf || []).flatMap((x) => x.enum || []);
+    const type = prop.type || (prop.anyOf || []).map((x) => x.type).find((t) => t && t !== "null");
+    const nullable = (prop.anyOf || []).some((x) => x.type === "null");
+    let control;
+    if (type === "boolean") {
+      control = h(
+        "label.switch",
+        null,
+        h("input", { type: "checkbox", checked: Boolean(value), onchange: (e) => (setOverride(key, e.target.checked), draw()) }),
+        value ? "On" : "Off",
+      );
+    } else if (enumValues.length) {
+      control = h(
+        "select.select",
+        { onchange: (e) => (setOverride(key, e.target.value), draw()) },
+        enumValues.map((v) => h("option", { value: v, selected: v === value }, String(v))),
+      );
+    } else if (type === "integer" || type === "number") {
+      const scale = unit === "min" ? 60 : 1;
+      control = h("input.input.num", {
+        type: "number",
+        min: 0,
+        step: type === "integer" ? 1 : "any",
+        value: value == null ? "" : +(value / scale).toFixed(2),
+        onchange: (e) => {
+          const raw = e.target.value;
+          if (raw === "") setOverride(key, d[key]);
+          else setOverride(key, type === "integer" ? Math.round(Number(raw)) : Number(raw) * scale);
+          draw();
+        },
+      });
+    } else {
+      control = h("input.input.mono", {
+        value: value ?? "",
+        placeholder: nullable ? "none" : "",
+        list: key.includes("potential") ? "potential-options" : null,
+        onchange: (e) => (setOverride(key, e.target.value.trim() || (nullable ? null : d[key])), draw()),
+      });
+    }
+    const def = d[key];
+    const defText = unit === "min" && typeof def === "number" ? `${+(def / 60).toFixed(2)} min` : def == null ? "none" : String(def);
+    return h(
+      "label.field.setting",
+      { class: changed ? "changed" : "" },
+      h("span.field-label", null, name, unit === "min" ? h("span.muted", null, " (min)") : null, changed ? h("span.changed-dot", { title: `Default: ${defText}` }) : null),
+      control,
+      h("span.field-hint", null, hint, changed ? h("span", null, ` Default: ${defText}.`) : null),
+    );
+  }
+
+  function settingsPanel() {
+    const schema = app.schema && app.schema.properties;
+    if (!schema || !app.defaults) return null;
+    const used = new Set();
+    const groups = CONFIG_GROUPS.map((g) => {
+      const fields = Object.entries(g.fields).filter(([k]) => schema[k]);
+      fields.forEach(([k]) => used.add(k));
+      return { name: g.name, fields };
+    });
+    const other = Object.keys(schema).filter((k) => !used.has(k) && !TOP_LEVEL_SETTINGS.has(k));
+    if (other.length) groups.push({ name: "Other", fields: other.map((k) => [k, [label(k), schema[k].title || ""]]) });
+    const nChanged = Object.keys(st.overrides).filter((k) => k in app.defaults).length;
+    const open = Boolean(stored("heph-options", {}).advancedOpen);
+    return h(
+      "details.advanced",
+      {
+        open,
+        ontoggle: (e) => store("heph-options", { ...stored("heph-options", {}), advancedOpen: e.currentTarget.open }),
+      },
+      h(
+        "summary",
+        null,
+        icon("chevron"),
+        "All settings",
+        nChanged ? h("span.pill.info", { style: { marginLeft: "8px" } }, `${nChanged} changed`) : h("span.muted", { style: { fontWeight: 500, marginLeft: "6px" } }, "· defaults"),
+      ),
+      h(
+        "datalist",
+        { id: "potential-options" },
+        ["mace-mp-0-small", "mace-mp-0-medium", "mace-mp-0-large", "chgnet"].map((v) => h("option", { value: v })),
+      ),
+      groups.map((g) =>
+        h(
+          "div.settings-group",
+          null,
+          h("div.settings-group-name", null, g.name),
+          h("div.advanced-grid", null, g.fields.map(([k, meta]) => settingControl(k, schema[k], meta))),
+        ),
+      ),
+      nChanged
+        ? h(
+            "div",
+            { style: { marginTop: "14px" } },
+            h(
+              "button.btn.sm",
+              {
+                onclick: (e) => {
+                  e.preventDefault();
+                  st.overrides = {};
+                  st.parsed = null;
+                  persist();
+                  draw();
+                },
+              },
+              icon("reset"),
+              "Reset to defaults",
+            ),
+          )
+        : null,
+    );
   }
 
   function blockers() {
@@ -661,9 +712,14 @@ function mountComposer(root) {
 
 async function boot() {
   renderSidebar();
-  const [defaults, models] = await Promise.all([api("/config/defaults").catch(() => null), api("/models").catch(() => null)]);
+  const [defaults, models, schema] = await Promise.all([
+    api("/config/defaults").catch(() => null),
+    api("/models").catch(() => null),
+    api("/config/schema").catch(() => null),
+  ]);
   app.defaults = defaults;
   app.models = models;
+  app.schema = schema;
   window.addEventListener("hashchange", route);
   route();
   refreshRuns();

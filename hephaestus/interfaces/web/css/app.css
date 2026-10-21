@@ -597,6 +597,7 @@ button.link {
 .field {
   display: grid;
   gap: 6px;
+  align-content: start;
 }
 .field-label {
   font-size: 12px;
@@ -1006,6 +1007,7 @@ button.link {
   background: linear-gradient(90deg, var(--ember) 0%, var(--ember) 40%, var(--surface-3) 40%);
   background-size: 250% 100%;
   animation: progress 1.8s ease-in-out infinite;
+  animation-delay: var(--sync, 0ms);
 }
 .step.failed::before {
   background: var(--critical);
@@ -1105,6 +1107,7 @@ button.link {
 .grid {
   display: grid;
   gap: 16px;
+  align-content: start;
 }
 .grid.cols-2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2280,4 +2283,81 @@ table.data tr.best td:first-child {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-3);
+}
+
+/* settings */
+.settings-group {
+  margin-top: 16px;
+}
+.settings-group-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.settings-group .advanced-grid {
+  margin-top: 8px;
+}
+.setting .field-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.changed-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--focus);
+  margin-left: 4px;
+}
+
+/* abstracts: three lines, then "Show more" */
+.paper-abstract-wrap {
+  grid-column: 1 / -1;
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+.paper-abstract {
+  margin: 0;
+}
+.paper-abstract.clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.abstract-toggle {
+  font-size: 12.5px;
+}
+
+/* collapsible rounds */
+button.round-head {
+  width: 100%;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+button.round-head:hover {
+  background: var(--surface-2);
+}
+.round-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.round-chevron {
+  transition: transform 0.15s;
+  transform: rotate(90deg);
+  color: var(--ink-3);
+}
+button.round-head[aria-expanded="false"] .round-chevron {
+  transform: none;
+}
+.round-content[hidden] {
+  display: none;
 }

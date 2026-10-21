@@ -61,3 +61,61 @@ export function modelName(m) {
   const t = String(m || "").match(/^claude-(\w+)-(\d+)-(\d+)/);
   return t ? `${t[1][0].toUpperCase()}${t[1].slice(1)} ${t[2]}.${t[3]}` : m;
 }
+
+/** Run settings by group, with display names and hints; keys follow RunConfig (OR-4). */
+export const CONFIG_GROUPS = [
+  {
+    name: "Campaign",
+    fields: {
+      max_iterations: ["Review rounds", "Rounds before it must submit."],
+      max_tool_calls: ["Tool-call budget", "Calls before it is told to submit."],
+      time_budget_s: ["Campaign time budget", "Wall clock for the search. When it runs out, the best candidate goes to the final re-check.", "min"],
+      max_parallel_tools: ["Parallel tool calls", "Calls on different candidates that run at once."],
+      confidence_threshold: ["Stop threshold", "Code rubric and reviewer must both reach this to stop on target."],
+    },
+  },
+  {
+    name: "Science",
+    fields: {
+      band_gap_fidelity: ["Band gap fidelity", "HSE (±0.65 eV) or PBE (runs about 1.6 eV low)."],
+      potential: ["Screening potential", "Machine-learned potential for every candidate."],
+      final_potential: ["Final potential", "Larger potential for the final re-check."],
+      cross_check_potential: ["Cross-check potential", "Optional second potential in the final re-check. Empty for none."],
+      phonon_mode: ["Phonon mode", "Fast or full phonons during screening."],
+      phonon_gate: ["Phonon gate", "Mode mapping freezes in soft modes; strict fails any imaginary mode."],
+      distortion_threshold_meV: ["Mode-mapping threshold (meV/atom)", "Energy drop that counts as a real instability."],
+      run_phonons: ["Run phonons", "Dynamic stability check."],
+      max_atoms: ["Max atoms", "Largest supercell built."],
+    },
+  },
+  {
+    name: "Final re-check",
+    fields: {
+      run_final: ["Final re-check", "Re-check the winner and runner-up at higher fidelity."],
+      final_time_budget_s: ["Final time budget", "Optional extras are skipped when they would not fit; the core re-check always runs.", "min"],
+      final_dtype: ["Final precision", "Floating-point precision for the re-check."],
+    },
+  },
+  {
+    name: "Compute",
+    fields: {
+      device: ["Device", "auto uses a GPU when one is available."],
+      dtype: ["Screening precision", "float32 is about 3× faster on consumer GPUs."],
+      seed: ["Seed", "For disorder configurations and anything random."],
+      offline: ["Offline", "Use cached results only; make no network requests."],
+    },
+  },
+];
+
+/** Settings chosen above the advanced section, not inside it. */
+export const TOP_LEVEL_SETTINGS = new Set(["llm_backend", "llm_model", "require_novel"]);
+
+/**
+ * Display name of a setting.
+ * @param {string} key RunConfig field.
+ * @returns {string}
+ */
+export function configName(key) {
+  for (const g of CONFIG_GROUPS) if (g.fields[key]) return g.fields[key][0];
+  return label(key);
+}

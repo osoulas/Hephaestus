@@ -64,6 +64,12 @@ export class RunModel {
     this.phase = { parse: "pending", campaign: "pending", final: "pending", brief: "pending" };
     this.startTime = null;
     this.lastTime = null;
+    this.campaignStart = null; // first orchestrator start
+    this.campaignEnd = null; // submission, final check start or run end
+    this.finalStart = null;
+    this.finalEnd = null;
+    this.finalStep = null; // latest final-check tool call
+    this._openFinal = null;
     this.round = 0;
     this.toolCount = 0;
     this.errors = 0;
@@ -98,6 +104,9 @@ export class RunModel {
     } else {
       this.running = false;
       this.runResult = p;
+      const t = new Date(e.time);
+      if (this.campaignStart && !this.campaignEnd) this.campaignEnd = t;
+      if (this.finalStart && !this.finalEnd) this.finalEnd = t;
       if (e.status === "failed") {
         this.errors += (p.errors || []).length || 1;
         const stuck = PHASES.find((ph) => this.phase[ph.key] !== "done" && this.phase[ph.key] !== "skipped");
@@ -132,6 +141,8 @@ export class RunModel {
     if (e.status === "started") {
       if (this.phase.parse === "pending") this.phase.parse = "done";
       this.phase.campaign = "active";
+      if (!this.campaignStart) this.campaignStart = new Date(e.time);
+      this.campaignEnd = null; // a resume continues the campaign
       this.backend = p.backend;
       this.model = p.model;
       return;
@@ -153,6 +164,7 @@ export class RunModel {
     }
     if (p.submitted !== undefined) {
       this.submitted = p.submitted;
+      this.campaignEnd = new Date(e.time);
       this.phase.campaign = "done";
       this.log.push({ type: "submit", seq: e.seq, submitted: p.submitted, rule: p.rule, usage: p.usage, time: e.time });
     }
@@ -210,14 +222,47 @@ export class RunModel {
       this.finalStarted = true;
       this.phase.campaign = "done";
       this.phase.final = "active";
+      this.finalStart = new Date(e.time);
+      if (!this.campaignEnd) this.campaignEnd = this.finalStart;
     } else if (e.status === "finished") {
       this.final = p;
       this.phase.final = "done";
+      this.finalEnd = new Date(e.time);
     } else {
       this.final = { error: p.error };
       this.phase.final = "failed";
+      this.finalEnd = new Date(e.time);
     }
     this.log.push({ type: "final", seq: e.seq, status: e.status, payload: p, time: e.time });
+  }
+
+  on_final_step(e, p) {
+    if (e.status === "started") {
+      const entry = { type: "finalstep", seq: e.seq, tool: p.tool, info: p, status: "started", time: e.time, started: e.time };
+      this.log.push(entry);
+      this._openFinal = entry;
+      this.finalStep = entry;
+      return;
+    }
+    const entry = this._openFinal && this._openFinal.tool === p.tool ? this._openFinal : null;
+    if (entry) {
+      entry.status = e.status;
+      entry.info = p;
+      entry.finished = e.time;
+      this._openFinal = null;
+    }
+  }
+
+  /**
+   * Seconds spent in a phase, live while it runs.
+   * @param {Date|null} start Start.
+   * @param {Date|null} end End, or null while running.
+   * @returns {number|null}
+   */
+  span(start, end) {
+    if (!start) return null;
+    const stop = end || (this.running ? new Date() : this.lastTime);
+    return Math.max(0, (stop - start) / 1000);
   }
 
   on_brief_generator(e, p) {
