@@ -25,6 +25,7 @@ from reportlab.platypus import (
     Flowable,
     KeepTogether,
     Paragraph,
+    Preformatted,
     SimpleDocTemplate,
     Spacer,
     Table,
@@ -57,6 +58,12 @@ SECTION_TONES = {
     "Characterisation plan": "blue",
     "Risks and fallbacks": "red",
     "Literature support": "blue",
+    "Starting point": "ember",
+    "Calculation settings": "slate",
+    "Workflow": "ember",
+    "Screening results to check": "blue",
+    "Starting structure": "violet",
+    "Methods to compare against": "blue",
 }
 SEVERITY = {
     "critical": ("#b02a2a", "#f9e4e4"),
@@ -64,6 +71,104 @@ SEVERITY = {
     "minor": ("#8a5a00", "#fdf2d9"),
 }
 FORMULA = re.compile(r"\b(?:[A-Z][a-z]?(?:\d+(?:\.\d+)?)?){2,}\b")
+ELEMENTS = set(
+    [
+        "H",
+        "He",
+        "Li",
+        "Be",
+        "B",
+        "C",
+        "N",
+        "O",
+        "F",
+        "Ne",
+        "Na",
+        "Mg",
+        "Al",
+        "Si",
+        "P",
+        "S",
+        "Cl",
+        "Ar",
+        "K",
+        "Ca",
+        "Sc",
+        "Ti",
+        "V",
+        "Cr",
+        "Mn",
+        "Fe",
+        "Co",
+        "Ni",
+        "Cu",
+        "Zn",
+        "Ga",
+        "Ge",
+        "As",
+        "Se",
+        "Br",
+        "Kr",
+        "Rb",
+        "Sr",
+        "Y",
+        "Zr",
+        "Nb",
+        "Mo",
+        "Tc",
+        "Ru",
+        "Rh",
+        "Pd",
+        "Ag",
+        "Cd",
+        "In",
+        "Sn",
+        "Sb",
+        "Te",
+        "I",
+        "Xe",
+        "Cs",
+        "Ba",
+        "La",
+        "Ce",
+        "Pr",
+        "Nd",
+        "Pm",
+        "Sm",
+        "Eu",
+        "Gd",
+        "Tb",
+        "Dy",
+        "Ho",
+        "Er",
+        "Tm",
+        "Yb",
+        "Lu",
+        "Hf",
+        "Ta",
+        "W",
+        "Re",
+        "Os",
+        "Ir",
+        "Pt",
+        "Au",
+        "Hg",
+        "Tl",
+        "Pb",
+        "Bi",
+        "Po",
+        "At",
+        "Rn",
+        "Fr",
+        "Ra",
+        "Ac",
+        "Th",
+        "Pa",
+        "U",
+        "Np",
+        "Pu",
+    ]
+)
 
 
 # ---------------------------------------------------------------------- fonts
@@ -191,8 +296,9 @@ def _formulas(text: str) -> str:
             Marked-up formula, or the text unchanged.
         """
         f = m.group(0)
-        if not re.search(r"\d", f) or len(re.findall(r"[A-Z]", f)) < 2:
-            return f
+        symbols = re.findall(r"[A-Z][a-z]?", f)
+        if not re.search(r"\d", f) or len(symbols) < 2 or not set(symbols) <= ELEMENTS:
+            return f  # not a formula: "XRD", "HSE06", "MP2020"
         return re.sub(r"(\d+(?:\.\d+)?)", r"<sub>\1</sub>", f)
 
     return FORMULA.sub(sub, text)
@@ -212,7 +318,7 @@ def parse_blocks(md: str) -> list[dict[str, Any]]:
     Returns
     -------
     list of dict
-        ``{"kind": "h1"|"h2"|"p"|"ul"|"ol"|"table"|"quote", ...}``.
+        ``{"kind": "h1"|"h2"|"p"|"ul"|"ol"|"table"|"quote"|"code", ...}``.
     """
     lines = md.replace("\r\n", "\n").split("\n")
     out: list[dict[str, Any]] = []
@@ -239,6 +345,14 @@ def parse_blocks(md: str) -> list[dict[str, Any]]:
         line = lines[i]
         if not line.strip():
             i += 1
+        elif line.startswith("```"):
+            i += 1
+            code: list[str] = []
+            while i < len(lines) and not lines[i].startswith("```"):
+                code.append(lines[i])
+                i += 1
+            i += 1
+            out.append({"kind": "code", "text": "\n".join(code)})
         elif line.startswith("# "):
             out.append({"kind": "h1", "text": line[2:].strip()})
             i += 1
@@ -276,7 +390,7 @@ def parse_blocks(md: str) -> list[dict[str, Any]]:
             while (
                 i < len(lines)
                 and lines[i].strip()
-                and not re.match(r"^(#{1,2} |>)", lines[i])
+                and not re.match(r"^(#{1,2} |>|```)", lines[i])
                 and not list_re.match(lines[i])
                 and not ("|" in lines[i] and i + 1 < len(lines) and sep_re.match(lines[i + 1]))
             ):
@@ -357,6 +471,7 @@ class BriefPDF:
                 "tile_key", parent=base, fontName=self.bold, fontSize=7.5, leading=10, textColor=INK_3
             ),
             "tile_val": ParagraphStyle("tile_val", parent=base, fontSize=9, leading=12.5),
+            "code": ParagraphStyle("code", parent=base, fontName="Courier", fontSize=7, leading=8.6),
         }
 
     def p(self, text: str, style: str = "body") -> Paragraph:
@@ -631,6 +746,9 @@ class BriefPDF:
         Path
             The written file.
         """
+        blocks = parse_blocks(md)
+        h1 = next((b["text"] for b in blocks if b["kind"] == "h1"), "")
+        kind = h1.split(":", 1)[0] if ":" in h1 else "Lab brief"  # "Lab brief" or "Computational brief"
         doc = SimpleDocTemplate(
             str(out),
             pagesize=A4,
@@ -638,49 +756,50 @@ class BriefPDF:
             rightMargin=18 * mm,
             topMargin=20 * mm,
             bottomMargin=16 * mm,
-            title="Lab brief",
+            title=kind,
             author="Hephaestus",
             subject=meta.get("goal", ""),
         )
         width = doc.width
         story: list[Any] = []
-        blocks = parse_blocks(md)
         section = ""
         pending_head: Any = None
         for i, b in enumerate(blocks):
-            kind = b["kind"]
-            if kind == "h1":
+            kind_ = b["kind"]
+            if kind_ == "h1":
                 story += [
-                    Paragraph("LAB BRIEF", self.s["eyebrow"]),
+                    Paragraph(kind.upper(), self.s["eyebrow"]),
                     Paragraph(
                         re.sub(
                             r"<sub>(.*?)</sub>",
                             r'<sub rise="3" size="15">\1</sub>',
-                            inline(b["text"].replace("Lab brief: ", ""), self.plain),
+                            inline(b["text"].replace(f"{kind}: ", ""), self.plain),
                         ),
                         self.s["title"],
                     ),
                     Spacer(1, 4),
                 ]
                 continue
-            if kind == "h2":
+            if kind_ == "h2":
                 section = b["text"]
                 story.append(Spacer(1, 10))
                 pending_head = self.heading(section, width)
                 continue
             flows: list[Any] = []
             tone = SECTION_TONES.get(section, "slate")
-            if kind == "quote":
+            if kind_ == "code":
+                flows.append(self.boxed(Preformatted(b["text"], self.s["code"]), "#f4f3f0", width))
+            elif kind_ == "quote":
                 flows.append(self.boxed(self.p(b["text"]), "#f9e4e4", width))
-            elif kind == "ul" and not section and i > 0:
+            elif kind_ == "ul" and not section and i > 0:
                 flows.append(self.glance(b["items"], width))
-            elif kind == "ul":
+            elif kind_ == "ul":
                 flows += self.bullets(b["items"], "small" if section == "Scope and assumptions" else "body")
-            elif kind == "ol":
+            elif kind_ == "ol":
                 flows.append(self.steps(b["items"], tone, width, refs=section == "Literature support"))
-            elif kind == "table":
+            elif kind_ == "table":
                 flows.append(self.table(b["head"], b["rows"], width))
-            elif kind == "p":
+            elif kind_ == "p":
                 text = b["text"]
                 lead = text.lower()
                 if lead.startswith("**approach:**"):
@@ -723,7 +842,7 @@ class BriefPDF:
             canvas.drawString(18 * mm, hgt - 5.8 * mm, "HEPHAESTUS")
             canvas.setFillColor(colors.HexColor("#f0efec"))
             canvas.setFont(self.regular, 8)
-            canvas.drawRightString(w - 18 * mm, hgt - 5.8 * mm, f"Lab brief · {run_id} · {stamp}")
+            canvas.drawRightString(w - 18 * mm, hgt - 5.8 * mm, f"{kind} · {run_id} · {stamp}")
             canvas.setFillColor(INK_3)
             canvas.setFont(self.regular, 7.5)
             canvas.drawString(18 * mm, 9 * mm, "Every computed number comes from the run's stored results.")

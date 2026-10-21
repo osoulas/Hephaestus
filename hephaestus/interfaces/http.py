@@ -556,8 +556,12 @@ def create_app(
         return cif
 
     @app.get("/runs/{run_id}/brief", response_model=None)
-    def brief(run_id: str, format: str = Query("md", pattern="^(md|pdf)$")) -> Any:
-        """Return the brief as Markdown or PDF (UI-8).
+    def brief(
+        run_id: str,
+        format: str = Query("md", pattern="^(md|pdf)$"),
+        kind: str = Query("lab", pattern="^(lab|compute)$"),
+    ) -> Any:
+        """Return the lab or computational brief as Markdown or PDF (UI-8).
 
         Parameters
         ----------
@@ -565,6 +569,8 @@ def create_app(
             Run ID.
         format : {"md", "pdf"}
             File type.
+        kind : {"lab", "compute"}
+            The lab brief, or the computational brief (DFT settings and workflow).
 
         Returns
         -------
@@ -572,21 +578,25 @@ def create_app(
             ``text/markdown`` or ``application/pdf``.
         """
         exp = get_experiment(run_id)
+        name = f"{run_id}_{'compute_' if kind == 'compute' else ''}brief"
         if format == "pdf":
             try:
-                pdf = exp.brief_pdf
+                pdf = exp.compute_brief_pdf if kind == "compute" else exp.brief_pdf
             except Exception as exc:
                 raise HTTPException(500, f"Could not render the PDF: {exc}") from exc
             if pdf is None:
                 raise HTTPException(404, f"Run {run_id} has no PDF brief.")
-            return FileResponse(pdf, media_type="application/pdf", filename=f"{run_id}_brief.pdf")
-        md = exp.brief
+            return FileResponse(pdf, media_type="application/pdf", filename=f"{name}.pdf")
+        try:
+            md = exp.compute_brief if kind == "compute" else exp.brief
+        except Exception as exc:
+            raise HTTPException(500, f"Could not build the brief: {exc}") from exc
         if md is None:
             raise HTTPException(404, f"Run {run_id} has no brief yet.")
         return PlainTextResponse(
             md,
             media_type="text/markdown; charset=utf-8",
-            headers={"Content-Disposition": f'inline; filename="{run_id}_brief.md"'},
+            headers={"Content-Disposition": f'inline; filename="{name}.md"'},
         )
 
     @app.post("/runs/{run_id}/stop")

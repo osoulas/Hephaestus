@@ -100,6 +100,9 @@ def test_ui2_ui3_ui8_parse_run_stream_and_brief(client: TestClient) -> None:
     brief = client.get(f"/runs/{run_id}/brief")
     assert brief.status_code == 200 and "## Scope and assumptions" in brief.text
     assert client.get(f"/runs/{run_id}/brief", params={"format": "pdf"}).status_code == 200
+    compute = client.get(f"/runs/{run_id}/brief", params={"kind": "compute"})
+    assert compute.status_code == 200 and compute.text.startswith("# Computational brief")
+    assert client.get(f"/runs/{run_id}/brief", params={"kind": "compute", "format": "pdf"}).status_code == 200
     assert client.get(f"/runs/{run_id}/structure/c2-1").status_code == 404  # stub tools store no atoms
     assert client.get(f"/runs/{run_id}/structure/zz").status_code == 404
     assert [r["run_id"] for r in client.get("/runs").json()] == [run_id]

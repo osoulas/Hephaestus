@@ -256,8 +256,53 @@ class Experiment:
         pathlib.Path or None
             ``brief.pdf``, or ``None`` before the brief exists.
         """
-        path = self.files.brief_pdf
-        md = self.files.brief_md
+        return self._pdf(self.files.brief_md, self.files.brief_pdf)
+
+    @property
+    def compute_brief(self) -> str | None:
+        """The computational brief's Markdown: DFT settings and workflow for the winner.
+
+        Runs finished before it existed get one built now from their stored results.
+
+        Returns
+        -------
+        str or None
+            ``compute_brief.md``, or ``None`` before the lab brief exists.
+        """
+        path = self.files.compute_brief_md
+        if not path.exists() and self.files.brief_md.exists() and not self.running:
+            state, ws, _ = load_for_resume(self.files)
+            runner.write_compute_brief(state, ws, self.files)
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
+    @property
+    def compute_brief_pdf(self) -> Path | None:
+        """The computational brief's PDF, rendered now if missing or stale.
+
+        Returns
+        -------
+        pathlib.Path or None
+            ``compute_brief.pdf``, or ``None`` before the brief exists.
+        """
+        if self.compute_brief is None:
+            return None
+        return self._pdf(self.files.compute_brief_md, self.files.compute_brief_pdf)
+
+    def _pdf(self, md: Path, path: Path) -> Path | None:
+        """Render a brief's PDF if it is missing or older than its Markdown.
+
+        Parameters
+        ----------
+        md : pathlib.Path
+            The brief's Markdown.
+        path : pathlib.Path
+            Its PDF.
+
+        Returns
+        -------
+        pathlib.Path or None
+            The PDF, or ``None`` when there is no Markdown.
+        """
         if md.exists() and (not path.exists() or path.stat().st_mtime < md.stat().st_mtime):
             from hephaestus.harness.brief_pdf import export_pdf
 

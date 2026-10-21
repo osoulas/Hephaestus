@@ -2296,6 +2296,19 @@ table.data tr.best td:first-child {
   gap: 12px;
   padding: 14px 22px 22px;
 }
+.brief-wrap {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+}
+.brief-kind {
+  justify-self: start;
+}
+.brief-kind svg {
+  width: 14px;
+  height: 14px;
+}
 .stop-dialog {
   width: min(480px, calc(100vw - 32px));
 }
