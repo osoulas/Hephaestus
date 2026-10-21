@@ -72,7 +72,7 @@ where = ["."]
 include = ["hephaestus", "hephaestus.*"]
 
 [tool.setuptools.package-data]
-hephaestus = ["py.typed", "interfaces/web/**/*"]
+hephaestus = ["py.typed", "interfaces/web/**/*", "resources/*.json"]
 
 [tool.pytest.ini_options]
 # The default suite is offline, CPU-only and needs no API key. A later -m on the

@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "description": "Structural templates for hephaestus.tools.prototypes. Each prototype is a reference compound written as Wyckoff orbits: one representative fractional position per orbit (numbers, or fractions such as \"1/3\"), the site label it fills, its role (cation, anion or metal), the coordination number used for Shannon radii, and the reference species. Lattice lengths in angstrom, angles in degrees. space_group is read by pymatgen; ':2' selects origin choice 2.",
+  "prototypes": [
+    {
+      "key": "perovskite_cubic",
+      "name": "Cubic perovskite ABX3",
+      "family": "perovskite",
+      "aliases": ["perovskite", "CaTiO3-type cubic"],
+      "space_group": "Pm-3m",
+      "sg_number": 221,
+      "lattice": {"a": 3.905, "b": 3.905, "c": 3.905, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "SrTiO3 (mp-5229)",
+      "primitive": false,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "1b", "coords": [0.5, 0.5, 0.5], "cn": 12, "ref": "Sr2+"},
+        {"label": "B", "role": "cation", "wyckoff": "1a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Ti4+"},
+        {"label": "X", "role": "anion", "wyckoff": "3d", "coords": [0.5, 0.0, 0.0], "cn": 6, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "perovskite_tetragonal",
+      "name": "Tetragonal perovskite ABX3 (polar)",
+      "family": "perovskite",
+      "aliases": ["BaTiO3-type"],
+      "space_group": "P4mm",
+      "sg_number": 99,
+      "lattice": {"a": 3.9998, "b": 3.9998, "c": 4.018, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "BaTiO3, room temperature (Kwei et al. 1993)",
+      "primitive": false,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "1a", "coords": [0.0, 0.0, 0.0], "cn": 12, "ref": "Ba2+"},
+        {"label": "B", "role": "cation", "wyckoff": "1b", "coords": [0.5, 0.5, 0.482], "cn": 6, "ref": "Ti4+"},
+        {"label": "X", "role": "anion", "wyckoff": "1b", "coords": [0.5, 0.5, 0.016], "cn": 6, "ref": "O2-"},
+        {"label": "X", "role": "anion", "wyckoff": "2c", "coords": [0.5, 0.0, 0.515], "cn": 6, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "perovskite_orthorhombic",
+      "name": "Orthorhombic perovskite ABX3 (a-b+a- tilts)",
+      "family": "perovskite",
+      "aliases": ["GdFeO3-type", "Pnma perovskite", "Pbnm perovskite"],
+      "space_group": "Pnma",
+      "sg_number": 62,
+      "lattice": {"a": 5.616, "b": 7.668, "c": 5.346, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "GdFeO3 (Pbnm data in the Pnma setting)",
+      "primitive": false,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "4c", "coords": [0.0628, 0.25, 0.9847], "cn": 8, "ref": "Gd3+"},
+        {"label": "B", "role": "cation", "wyckoff": "4b", "coords": [0.0, 0.0, 0.5], "cn": 6, "ref": "Fe3+"},
+        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.4707, 0.25, 0.0937], "cn": 6, "ref": "O2-"},
+        {"label": "X", "role": "anion", "wyckoff": "8d", "coords": [0.302, 0.0532, 0.6939], "cn": 6, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "perovskite_rhombohedral",
+      "name": "Rhombohedral perovskite ABX3 (a-a-a- tilts)",
+      "family": "perovskite",
+      "aliases": ["LaAlO3-type", "R-3c perovskite"],
+      "space_group": "R-3c",
+      "sg_number": 167,
+      "lattice": {"a": 5.3647, "b": 5.3647, "c": 13.1114, "alpha": 90.0, "beta": 90.0, "gamma": 120.0},
+      "reference": "LaAlO3",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "6a", "coords": [0.0, 0.0, 0.25], "cn": 12, "ref": "La3+"},
+        {"label": "B", "role": "cation", "wyckoff": "6b", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Al3+"},
+        {"label": "X", "role": "anion", "wyckoff": "18e", "coords": [0.525, 0.0, 0.25], "cn": 6, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "double_perovskite",
+      "name": "Rock-salt ordered double perovskite A2BB'X6",
+      "family": "perovskite",
+      "aliases": ["elpasolite", "A2BB'O6", "ordered double perovskite"],
+      "space_group": "Fm-3m",
+      "sg_number": 225,
+      "lattice": {"a": 8.06, "b": 8.06, "c": 8.06, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "Ba2FeMoO6",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "8c", "coords": [0.25, 0.25, 0.25], "cn": 12, "ref": "Ba2+"},
+        {"label": "B", "role": "cation", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Fe3+"},
+        {"label": "B'", "role": "cation", "wyckoff": "4b", "coords": [0.5, 0.5, 0.5], "cn": 6, "ref": "Mo5+"},
+        {"label": "X", "role": "anion", "wyckoff": "24e", "coords": [0.25, 0.0, 0.0], "cn": 6, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "ruddlesden_popper",
+      "name": "Ruddlesden-Popper n=1 layered perovskite A2BX4",
+      "family": "perovskite",
+      "aliases": ["K2NiF4-type", "RP n=1"],
+      "space_group": "I4/mmm",
+      "sg_number": 139,
+      "lattice": {"a": 3.884, "b": 3.884, "c": 12.6, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "Sr2TiO4",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "4e", "coords": [0.0, 0.0, 0.3553], "cn": 9, "ref": "Sr2+"},
+        {"label": "B", "role": "cation", "wyckoff": "2a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Ti4+"},
+        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.0, 0.5, 0.0], "cn": 6, "ref": "O2-"},
+        {"label": "X", "role": "anion", "wyckoff": "4e", "coords": [0.0, 0.0, 0.1513], "cn": 6, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "antiperovskite",
+      "name": "Antiperovskite X3BA (e.g. Li3OCl)",
+      "family": "perovskite",
+      "aliases": ["anti-perovskite"],
+      "space_group": "Pm-3m",
+      "sg_number": 221,
+      "lattice": {"a": 3.91, "b": 3.91, "c": 3.91, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "Li3OCl",
+      "primitive": false,
+      "sites": [
+        {"label": "M", "role": "cation", "wyckoff": "3d", "coords": [0.5, 0.0, 0.0], "cn": 2, "ref": "Li+"},
+        {"label": "X", "role": "anion", "wyckoff": "1a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "O2-"},
+        {"label": "Y", "role": "anion", "wyckoff": "1b", "coords": [0.5, 0.5, 0.5], "cn": 12, "ref": "Cl-"}
+      ]
+    },
+    {
+      "key": "fluorite",
+      "name": "Fluorite AX2",
+      "family": "fluorite",
+      "aliases": ["CaF2-type"],
+      "space_group": "Fm-3m",
+      "sg_number": 225,
+      "lattice": {"a": 5.463, "b": 5.463, "c": 5.463, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "CaF2",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 8, "ref": "Ca2+"},
+        {"label": "X", "role": "anion", "wyckoff": "8c", "coords": [0.25, 0.25, 0.25], "cn": 4, "ref": "F-"}
+      ]
+    },
+    {
+      "key": "antifluorite",
+      "name": "Antifluorite A2X",
+      "family": "fluorite",
+      "aliases": ["anti-CaF2", "Li2O-type"],
+      "space_group": "Fm-3m",
+      "sg_number": 225,
+      "lattice": {"a": 4.611, "b": 4.611, "c": 4.611, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "Li2O",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "8c", "coords": [0.25, 0.25, 0.25], "cn": 4, "ref": "Li+"},
+        {"label": "X", "role": "anion", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 8, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "pyrochlore",
+      "name": "Pyrochlore A2B2X6X'",
+      "family": "fluorite",
+      "aliases": ["A2B2O7"],
+      "space_group": "Fd-3m:2",
+      "sg_number": 227,
+      "lattice": {"a": 10.185, "b": 10.185, "c": 10.185, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "Gd2Ti2O7 (origin choice 2: A 16d, B 16c)",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "16d", "coords": [0.5, 0.5, 0.5], "cn": 8, "ref": "Gd3+"},
+        {"label": "B", "role": "cation", "wyckoff": "16c", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Ti4+"},
+        {"label": "X", "role": "anion", "wyckoff": "48f", "coords": [0.326, 0.125, 0.125], "cn": 4, "ref": "O2-"},
+        {"label": "X'", "role": "anion", "wyckoff": "8b", "coords": [0.375, 0.375, 0.375], "cn": 4, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "spinel",
+      "name": "Normal spinel AB2X4",
+      "family": "spinel",
+      "aliases": ["MgAl2O4-type"],
+      "space_group": "Fd-3m:2",
+      "sg_number": 227,
+      "lattice": {"a": 8.0806, "b": 8.0806, "c": 8.0806, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "MgAl2O4 (origin choice 2)",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "8a", "coords": [0.125, 0.125, 0.125], "cn": 4, "ref": "Mg2+"},
+        {"label": "B", "role": "cation", "wyckoff": "16d", "coords": [0.5, 0.5, 0.5], "cn": 6, "ref": "Al3+"},
+        {"label": "X", "role": "anion", "wyckoff": "32e", "coords": [0.2624, 0.2624, 0.2624], "cn": 4, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "ilmenite",
+      "name": "Ilmenite ABX3",
+      "family": "corundum",
+      "aliases": ["FeTiO3-type"],
+      "space_group": "R-3",
+      "sg_number": 148,
+      "lattice": {"a": 5.0884, "b": 5.0884, "c": 14.0855, "alpha": 90.0, "beta": 90.0, "gamma": 120.0},
+      "reference": "FeTiO3 (Wechsler & Prewitt 1984)",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "6c", "coords": [0.0, 0.0, 0.3554], "cn": 6, "ref": "Fe2+"},
+        {"label": "B", "role": "cation", "wyckoff": "6c", "coords": [0.0, 0.0, 0.1464], "cn": 6, "ref": "Ti4+"},
+        {"label": "X", "role": "anion", "wyckoff": "18f", "coords": [0.3172, 0.0234, 0.245], "cn": 4, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "corundum",
+      "name": "Corundum A2X3",
+      "family": "corundum",
+      "aliases": ["Al2O3-type", "sesquioxide"],
+      "space_group": "R-3c",
+      "sg_number": 167,
+      "lattice": {"a": 4.7589, "b": 4.7589, "c": 12.991, "alpha": 90.0, "beta": 90.0, "gamma": 120.0},
+      "reference": "alpha-Al2O3",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "12c", "coords": [0.0, 0.0, 0.35216], "cn": 6, "ref": "Al3+"},
+        {"label": "X", "role": "anion", "wyckoff": "18e", "coords": [0.30624, 0.0, 0.25], "cn": 4, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "olivine",
+      "name": "Olivine M1M2TX4",
+      "family": "olivine",
+      "aliases": ["LiFePO4-type", "triphylite", "Mg2SiO4-type", "forsterite"],
+      "space_group": "Pnma",
+      "sg_number": 62,
+      "lattice": {"a": 10.332, "b": 6.01, "c": 4.692, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "LiFePO4 triphylite (Li on M1, Fe on M2); forsterite Mg2SiO4 fills both M sites with Mg",
+      "primitive": false,
+      "sites": [
+        {"label": "M1", "role": "cation", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Li+"},
+        {"label": "M2", "role": "cation", "wyckoff": "4c", "coords": [0.2822, 0.25, 0.9747], "cn": 6, "ref": "Fe2+"},
+        {"label": "T", "role": "cation", "wyckoff": "4c", "coords": [0.095, 0.25, 0.4182], "cn": 4, "ref": "P5+"},
+        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.0968, 0.25, 0.7428], "cn": 4, "ref": "O2-"},
+        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.4571, 0.25, 0.206], "cn": 4, "ref": "O2-"},
+        {"label": "X", "role": "anion", "wyckoff": "8d", "coords": [0.1656, 0.0465, 0.2848], "cn": 4, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "layered_rocksalt",
+      "name": "Layered rock salt ABX2 (alpha-NaFeO2)",
+      "family": "rocksalt",
+      "aliases": ["alpha-NaFeO2-type", "LiCoO2-type", "O3 layered"],
+      "space_group": "R-3m",
+      "sg_number": 166,
+      "lattice": {"a": 2.8156, "b": 2.8156, "c": 14.0542, "alpha": 90.0, "beta": 90.0, "gamma": 120.0},
+      "reference": "LiCoO2",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "3b", "coords": [0.0, 0.0, 0.5], "cn": 6, "ref": "Li+"},
+        {"label": "B", "role": "cation", "wyckoff": "3a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Co3+"},
+        {"label": "X", "role": "anion", "wyckoff": "6c", "coords": [0.0, 0.0, 0.2396], "cn": 6, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "rocksalt",
+      "name": "Rock salt AX",
+      "family": "rocksalt",
+      "aliases": ["NaCl-type", "halite"],
+      "space_group": "Fm-3m",
+      "sg_number": 225,
+      "lattice": {"a": 4.212, "b": 4.212, "c": 4.212, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "MgO",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Mg2+"},
+        {"label": "X", "role": "anion", "wyckoff": "4b", "coords": [0.5, 0.5, 0.5], "cn": 6, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "cesium_chloride",
+      "name": "Caesium chloride AX",
+      "family": "binary",
+      "aliases": ["CsCl-type"],
+      "space_group": "Pm-3m",
+      "sg_number": 221,
+      "lattice": {"a": 4.123, "b": 4.123, "c": 4.123, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "CsCl",
+      "primitive": false,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "1a", "coords": [0.0, 0.0, 0.0], "cn": 8, "ref": "Cs+"},
+        {"label": "X", "role": "anion", "wyckoff": "1b", "coords": [0.5, 0.5, 0.5], "cn": 8, "ref": "Cl-"}
+      ]
+    },
+    {
+      "key": "zincblende",
+      "name": "Zinc blende AX",
+      "family": "binary",
+      "aliases": ["sphalerite", "ZnS-type cubic"],
+      "space_group": "F-43m",
+      "sg_number": 216,
+      "lattice": {"a": 5.409, "b": 5.409, "c": 5.409, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "ZnS",
+      "primitive": true,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 4, "ref": "Zn2+"},
+        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.25, 0.25, 0.25], "cn": 4, "ref": "S2-"}
+      ]
+    },
+    {
+      "key": "wurtzite",
+      "name": "Wurtzite AX",
+      "family": "binary",
+      "aliases": ["ZnO-type", "hexagonal ZnS"],
+      "space_group": "P6_3mc",
+      "sg_number": 186,
+      "lattice": {"a": 3.2498, "b": 3.2498, "c": 5.2066, "alpha": 90.0, "beta": 90.0, "gamma": 120.0},
+      "reference": "ZnO",
+      "primitive": false,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "2b", "coords": ["1/3", "2/3", 0.0], "cn": 4, "ref": "Zn2+"},
+        {"label": "X", "role": "anion", "wyckoff": "2b", "coords": ["1/3", "2/3", 0.3819], "cn": 4, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "rutile",
+      "name": "Rutile AX2",
+      "family": "binary",
+      "aliases": ["TiO2-type rutile"],
+      "space_group": "P4_2/mnm",
+      "sg_number": 136,
+      "lattice": {"a": 4.5937, "b": 4.5937, "c": 2.9587, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "TiO2 rutile",
+      "primitive": false,
+      "sites": [
+        {"label": "A", "role": "cation", "wyckoff": "2a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Ti4+"},
+        {"label": "X", "role": "anion", "wyckoff": "4f", "coords": [0.3048, 0.3048, 0.0], "cn": 3, "ref": "O2-"}
+      ]
+    },
+    {
+      "key": "b2",
+      "name": "B2 ordered alloy AB",
+      "family": "intermetallic",
+      "aliases": ["CsCl-type alloy", "NiAl-type"],
+      "space_group": "Pm-3m",
+      "sg_number": 221,
+      "lattice": {"a": 2.887, "b": 2.887, "c": 2.887, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "NiAl",
+      "primitive": false,
+      "sites": [
+        {"label": "A", "role": "metal", "wyckoff": "1a", "coords": [0.0, 0.0, 0.0], "cn": 8, "ref": "Ni"},
+        {"label": "B", "role": "metal", "wyckoff": "1b", "coords": [0.5, 0.5, 0.5], "cn": 8, "ref": "Al"}
+      ]
+    },
+    {
+      "key": "l12",
+      "name": "L1_2 ordered alloy A3B",
+      "family": "intermetallic",
+      "aliases": ["Cu3Au-type", "L12"],
+      "space_group": "Pm-3m",
+      "sg_number": 221,
+      "lattice": {"a": 3.749, "b": 3.749, "c": 3.749, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "Cu3Au",
+      "primitive": false,
+      "sites": [
+        {"label": "A", "role": "metal", "wyckoff": "3c", "coords": [0.0, 0.5, 0.5], "cn": 12, "ref": "Cu"},
+        {"label": "B", "role": "metal", "wyckoff": "1a", "coords": [0.0, 0.0, 0.0], "cn": 12, "ref": "Au"}
+      ]
+    },
+    {
+      "key": "half_heusler",
+      "name": "Half-Heusler XYZ (C1_b)",
+      "family": "intermetallic",
+      "aliases": ["MgAgAs-type", "C1b"],
+      "space_group": "F-43m",
+      "sg_number": 216,
+      "lattice": {"a": 5.93, "b": 5.93, "c": 5.93, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "TiNiSn",
+      "primitive": true,
+      "sites": [
+        {"label": "X", "role": "metal", "wyckoff": "4b", "coords": [0.5, 0.5, 0.5], "cn": 4, "ref": "Ti"},
+        {"label": "Y", "role": "metal", "wyckoff": "4c", "coords": [0.25, 0.25, 0.25], "cn": 8, "ref": "Ni"},
+        {"label": "Z", "role": "metal", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 4, "ref": "Sn"}
+      ]
+    },
+    {
+      "key": "full_heusler",
+      "name": "Full Heusler X2YZ (L2_1)",
+      "family": "intermetallic",
+      "aliases": ["Cu2MnAl-type", "L21"],
+      "space_group": "Fm-3m",
+      "sg_number": 225,
+      "lattice": {"a": 5.95, "b": 5.95, "c": 5.95, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "Cu2MnAl",
+      "primitive": true,
+      "sites": [
+        {"label": "X", "role": "metal", "wyckoff": "8c", "coords": [0.25, 0.25, 0.25], "cn": 8, "ref": "Cu"},
+        {"label": "Y", "role": "metal", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 8, "ref": "Mn"},
+        {"label": "Z", "role": "metal", "wyckoff": "4b", "coords": [0.5, 0.5, 0.5], "cn": 8, "ref": "Al"}
+      ]
+    }
+  ]
+}

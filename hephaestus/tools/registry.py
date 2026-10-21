@@ -29,6 +29,7 @@ from hephaestus.core.types import (
     StructureRecord,
     Submission,
 )
+from hephaestus.tools.prototypes import MP_STRUCTURE_TYPE, PROTOTYPES
 
 Handler = Callable[..., dict[str, Any]]
 HANDLERS: dict[str, Handler] = {}
@@ -409,18 +410,27 @@ TOOLS: list[dict[str, Any]] = [
     _tool(
         "lookup_materials_project",
         "All Materials Project polymorphs of an exact composition, with the default (most-reported "
-        "experimentally observed near the hull) polymorph.",
+        "experimentally observed near the hull) polymorph, PBE E_hull, formation energy and band gap, "
+        "ICSD report counts, and MP's own phonon minimum where available (information only: the "
+        "phonons tool decides dynamic stability). Solid solutions are not in MP.",
         {"composition": STR},
     ),
     # Candidates and structures (BOOL)
     _tool(
         "propose_candidate",
-        "Register a candidate before any calculation. Code checks hard constraints, charge balance, "
-        "structure type (ABX3 for perovskites), repeats, evidence IDs (retrieved paper_id or mp:<id>) "
-        "and, when required, novelty. Site fractions in multiples of 0.125.",
+        "Register a candidate before any calculation. structure_type is a prototype (perovskites, "
+        "pyrochlore, spinel, fluorite and antifluorite, rock salt, rutile, olivine, Heuslers ...), or "
+        "'mp' to take the structure from Materials Project as-is when no prototype fits (the exact "
+        "composition must be in MP; there is no prototype fallback). "
+        "Code checks hard constraints, charge balance under common oxidation states (declare a risk "
+        "'off-stoichiometric: <reason>' to waive it), that the composition fits the prototype's sites "
+        "(assigned by ionic radius), repeats, evidence IDs (retrieved paper_id or mp:<id>) and, when "
+        "required, novelty. Only ordered compounds for now: every site must hold a single element "
+        "(no doped solid solutions or partial vacancies); for two B-site cations use an ordered "
+        "prototype such as double_perovskite.",
         {
             "composition": STR,
-            "structure_type": _enum("perovskite_cubic"),
+            "structure_type": _enum(*PROTOTYPES, MP_STRUCTURE_TYPE),
             "rationale": STR,
             "evidence_ids": STR_LIST,
             "prior_estimate": NUM_NULL,
@@ -433,7 +443,9 @@ TOOLS: list[dict[str, Any]] = [
         "build_structure",
         "Build the starting structure. source=mp with mp_id builds that polymorph; source=auto uses the "
         "default polymorph when the composition is in MP, else the template; source=template forces the "
-        "prototype (solid solutions). Resets this candidate's later results.",
+        "prototype. A note flags an MP polymorph whose space group differs from the proposed prototype. "
+        "Candidates with structure_type 'mp' cannot use source=template. Resets this candidate's later "
+        "results.",
         {"candidate_id": CID, "source": _enum("auto", "mp", "template"), "mp_id": STR_NULL, "seed": INT},
     ),
     # Simulation (BOOL)

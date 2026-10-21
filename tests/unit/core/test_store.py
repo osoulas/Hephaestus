@@ -117,3 +117,11 @@ def test_dl3_concurrent_identical_inputs_compute_once(tmp_path: Path) -> None:
     for t in threads:
         t.join()
     assert len(calls) == 1
+
+
+def test_sys8_offline_miss_raises(tmp_path: Path) -> None:
+    """Offline, a miss raises instead of computing; a cached entry is still served."""
+    with pytest.raises(store.CacheMiss):
+        store.cached("mp", {"formula": "X"}, lambda: 1, root=tmp_path, offline=True)
+    store.cached("mp", {"formula": "X"}, lambda: 1, root=tmp_path)
+    assert store.cached("mp", {"formula": "X"}, lambda: 2, root=tmp_path, offline=True) == 1
