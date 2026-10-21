@@ -270,20 +270,24 @@ class Experiment:
         str or None
             CIF text, or ``None`` when the run has no structure for that candidate.
         """
-        if not self.files.workspace.exists():
+        if self.files.workspace.exists():
+            cs = load_model(self.files.workspace, Workspace).candidates.get(candidate_id)
+            if cs is not None:
+                cif = _to_cif(cs.structure) or (cs.record.cif if cs.record is not None else None)
+                if _has_atoms(cif):
+                    return cif
+        if not self.exists:
             return None
-        ws = load_model(self.files.workspace, Workspace)
-        cs = ws.candidates.get(candidate_id)
-        if cs is None:
-            return None
-        if cs.structure is not None:
-            try:
-                from pymatgen.core import Structure
-
-                return str(Structure.from_dict(cs.structure).to(fmt="cif"))
-            except Exception:
-                pass
-        return cs.record.cif if cs.record is not None else None
+        for it in reversed(self.state.iterations):  # runs stored without workspace.json
+            for sim in it.sims:
+                if sim.candidate_id == candidate_id and sim.relaxed is not None:
+                    cif = _to_cif(sim.relaxed.pmg_dict) or sim.relaxed.cif
+                    if _has_atoms(cif):
+                        return cif
+            for rec in it.structures:
+                if rec.candidate_id == candidate_id and _has_atoms(rec.cif):
+                    return rec.cif
+        return None
 
     # ------------------------------------------------------------------ parsing
 
@@ -666,6 +670,45 @@ class Experiment:
 
 
 # ---------------------------------------------------------------------- module helpers
+
+
+def _to_cif(pmg_dict: dict[str, Any] | None) -> str | None:
+    """Render a pymatgen structure dict as CIF.
+
+    Parameters
+    ----------
+    pmg_dict : dict or None
+        ``Structure.as_dict()`` output.
+
+    Returns
+    -------
+    str or None
+        CIF text, or ``None`` when the dict is empty or unreadable.
+    """
+    if not pmg_dict:
+        return None
+    try:
+        from pymatgen.core import Structure
+
+        return str(Structure.from_dict(pmg_dict).to(fmt="cif"))
+    except Exception:
+        return None
+
+
+def _has_atoms(cif: str | None) -> bool:
+    """Whether a CIF lists atom sites (stub records hold only a ``data_`` line).
+
+    Parameters
+    ----------
+    cif : str or None
+        CIF text.
+
+    Returns
+    -------
+    bool
+        True when the CIF has an ``_atom_site_`` loop.
+    """
+    return bool(cif) and "_atom_site_" in cif  # type: ignore[operator]
 
 
 def list_runs(root: Path | None = None) -> list[dict[str, Any]]:

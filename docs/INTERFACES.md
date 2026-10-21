@@ -205,5 +205,18 @@ Or render `events.jsonl` from the fixture directly with `ProgressEvent.model_val
 - Browser sign-in to Claude Code: `POST /auth/claude/start|code|cancel` return 501. Meanwhile, sign
   in from a terminal with `python -m hephaestus login`.
 - `interfaces/cli/app.py` doesn't call `serve` yet. Wiring it up is B's.
-- The web UI is served from `interfaces/web/index.html` once that file exists. Until then, `/`
-  shows a placeholder.
+
+## The web UI as built
+
+`interfaces/web/` is plain HTML, CSS and ES modules: no build step, no CDN, no web fonts, so it works
+with Wi-Fi off. `python -m hephaestus serve` (or `uvicorn hephaestus.interfaces.http:app`) serves it at `/`.
+
+| File | What it does |
+| --- | --- |
+| `js/app.js` | Hash router (`#/new`, `#/run/<id>/<tab>`), sidebar (runs, Claude/Valency/compute status, theme), goal composer |
+| `js/run.js` | Run header (status, stop/resume/replay, phase stepper) and the tabs: Overview, Activity, Literature, Candidates, Structure, Validation, Brief, Spec |
+| `js/model.js` | Folds `ProgressEvent`s and `RunState` into what the tabs show; decides nothing |
+| `js/chart.js` | Confidence chart (code rubric and reviewer, threshold line, tooltip, table view) and the publications-per-year columns |
+| `js/viewer.js` | Canvas 3D crystal viewer: CIF parsing with symmetry, shaded atoms, B–X bonds, unit cell |
+| `js/markdown.js` | Escaping Markdown renderer for the brief |
+| `css/app.css` | Design tokens (light and dark), layout, components |
