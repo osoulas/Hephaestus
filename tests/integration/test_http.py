@@ -161,7 +161,7 @@ def test_ui1_web_ui_is_served_offline(client: TestClient) -> None:
 
 def test_ui12_claude_sign_in_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Start, follow and finish a Claude Code sign-in over HTTP with a fake CLI."""
-    from test_auth import fake_login, wait_for
+    from fake_claude import fake_login, wait_for
 
     login = fake_login(tmp_path, "code")
     c = TestClient(http.create_app(tmp_path, deps_factory=deps, claude_login=login))
@@ -238,3 +238,16 @@ def test_dl7_materials_project_key_endpoints(tmp_path: Path, monkeypatch: pytest
     assert os.environ["MP_API_KEY"] == key
     assert (tmp_path / "home" / "mp_api_key").read_text(encoding="utf-8") == key
     assert c.delete("/auth/materials-project").json()["present"] is False and "MP_API_KEY" not in os.environ
+
+
+def test_ui9_replay_reports_progress_and_takes_speed_changes(client: TestClient) -> None:
+    """A replay says how many events it will send, and its speed can change while it runs."""
+    run_id = client.post("/runs", json={"raw_goal": scripts.GOAL}).json()["run_id"]
+    stored = stream(client, run_id)
+    r = client.post(f"/replay/{run_id}", json={"speed": 0.001}).json()
+    assert r["total_events"] == len(stored)
+    state = client.get(f"/runs/{r['replay_id']}").json()
+    assert state["replay"] == {"source": run_id, "total_events": len(stored), "speed": 0.001}
+    assert client.post(f"/replay/{r['replay_id']}/speed", json={"speed": 0}).json()["speed"] == 0
+    assert len(stream(client, r["replay_id"])) == len(stored)
+    assert client.post(f"/replay/{run_id}/speed", json={"speed": 2}).status_code == 404  # not a replay

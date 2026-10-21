@@ -41,3 +41,26 @@ def test_ui9_replay_reemits_without_writing(tmp_path: Path) -> None:
     assert [e.run_id for e in out] == ["replay-1", "replay-1"]
     assert len(seen) == 2
     assert not (tmp_path / "replay-1").exists()
+
+
+def test_ui9_replay_speed_can_change_and_replay_can_stop(tmp_path: Path) -> None:
+    """A slow replay speeds up when its speed changes, and a stop ends it before the last event."""
+    import threading
+    import time
+    from datetime import timedelta
+
+    bus = EventBus(tmp_path)
+    for i in range(3):
+        e = bus.emit("r1", "tool", "finished")
+        e.time = e.time + timedelta(seconds=10 * i)  # stored 10 s apart
+    speed = {"v": 0.001}  # would take hours
+    t0 = time.monotonic()
+    timer = threading.Timer(0.3, lambda: speed.update(v=0))
+    timer.start()
+    out = bus.replay("r1", "replay-a", lambda: speed["v"], max_gap_s=60)
+    assert len(out) == 3 and time.monotonic() - t0 < 3
+
+    stop = threading.Event()
+    threading.Timer(0.3, stop.set).start()
+    out = bus.replay("r1", "replay-b", speed=0.001, max_gap_s=60, stop=stop)
+    assert len(out) == 1

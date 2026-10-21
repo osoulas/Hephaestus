@@ -261,7 +261,7 @@ export class RunModel {
    */
   span(start, end) {
     if (!start) return null;
-    const stop = end || (this.running ? new Date() : this.lastTime);
+    const stop = end || (this.running && !this.isReplay ? new Date() : this.lastTime);
     return Math.max(0, (stop - start) / 1000);
   }
 
@@ -316,7 +316,7 @@ export class RunModel {
   /** @returns {number} Seconds from the first to the last event (or now while running). */
   get elapsed() {
     if (!this.startTime) return null;
-    const end = this.running ? new Date() : this.lastTime;
+    const end = this.running && !this.isReplay ? new Date() : this.lastTime; // a replay follows the recorded clock
     return (end - this.startTime) / 1000;
   }
 

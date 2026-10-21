@@ -156,6 +156,7 @@ class Experiment:
         self._error: BaseException | None = None
         self._campaign: Campaign | None = None
         self._source: str | None = None  # stored run behind a replay
+        self.replay_control: dict[str, Any] | None = None  # speed and stop of a replay handle
 
     # ------------------------------------------------------------------ loading
 
@@ -494,14 +495,36 @@ class Experiment:
             raise self._error
         return self._result if self._result is not None else (self.state if self.exists else None)
 
+    def set_replay_speed(self, speed: float) -> None:
+        """Change a running replay's speed (UI-9).
+
+        Parameters
+        ----------
+        speed : float
+            New speed; 0 plays the rest with no pauses.
+
+        Raises
+        ------
+        ExperimentError
+            If this is not a replay.
+        """
+        if self.replay_control is None:
+            raise ExperimentError(f"{self.run_id} is not a replay.")
+        self.replay_control["speed"] = float(speed)
+
     def stop(self) -> bool:
         """Ask the campaign to stop and submit; the run still ends with a brief (OR-8, UI-10).
+
+        For a replay handle, ends the replay instead.
 
         Returns
         -------
         bool
             True if the run is active in this process.
         """
+        if self.replay_control is not None:
+            self.replay_control["stop"].set()
+            return self.running
         if self._campaign is not None:
             self._campaign.request_stop()
         return runner.request_stop(self.run_id)
@@ -563,10 +586,17 @@ class Experiment:
         handle = Experiment(self.goal, self.config, spec=self.spec, run_id=rid, root=self.root)
         handle.deps.bus = self.deps.bus
         handle._source = self.run_id
+        handle.replay_control = {
+            "source": self.run_id,
+            "total_events": len(self.deps.bus.history(self.run_id)),
+            "speed": float(speed),
+            "stop": threading.Event(),
+        }
+        ctl = handle.replay_control
 
         def play() -> None:
             """Publish the stored events under the replay ID."""
-            self.deps.bus.replay(self.run_id, rid, speed)
+            self.deps.bus.replay(self.run_id, rid, lambda: ctl["speed"], stop=ctl["stop"])
 
         handle._thread = threading.Thread(target=play, daemon=True, name=f"replay-{rid}")
         handle._thread.start()
