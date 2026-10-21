@@ -796,7 +796,8 @@ def phonon_check(
     fmax : float
         Force threshold for re-relaxations, eV/Å.
     max_rounds : int
-        Most distortions followed.
+        Most distortions carried forward. The soft mode left after the last one is still
+        mapped, to tell a spurious mode (stable) from a real one (unstable).
 
     Returns
     -------
@@ -816,7 +817,7 @@ def phonon_check(
         if an["min_frequency_THz"] >= min_THz:
             verdict = "stable_after_distortion" if distorted else "stable"
             break
-        if gate == "strict" or len(rounds) >= max_rounds:
+        if gate == "strict":
             verdict = "unstable"
             break
         mm = mode_map(current, energy, an, dims, calc, fmax)
@@ -832,6 +833,9 @@ def phonon_check(
         )
         if not real:
             verdict = "stable_after_distortion" if distorted else "spurious_soft_mode"
+            break
+        if len(rounds) > max_rounds:  # a real instability remains after the last allowed distortion
+            verdict = "unstable"
             break
         current, energy, sg, distorted = mm["atoms"], mm["energy_eV_per_atom"], mm["space_group"], True
     return {
