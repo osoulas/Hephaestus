@@ -1213,25 +1213,17 @@ button.link {
 
 /* hero candidate */
 
-/* the recommended candidate: a soft forge-warm wash, and a molten strip like the wordmark */
+/* the recommended candidate: a forge-warm glow radiating from the top-right corner */
 .hero {
   position: relative;
   overflow: hidden;
-  padding: 24px 24px 22px;
-  background:
-    linear-gradient(
-      125deg,
-      color-mix(in srgb, var(--molten-5) 13%, var(--surface)) 0%,
-      color-mix(in srgb, var(--molten-6) 6%, var(--surface)) 32%,
-      var(--surface) 62%
-    );
-}
-.hero::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 3px;
-  background: linear-gradient(90deg, var(--molten-2), var(--molten-4) 45%, var(--molten-6));
+  padding: 22px 24px;
+  background: radial-gradient(
+    ellipse 85% 120% at 100% 0%,
+    color-mix(in srgb, var(--molten-4) 30%, var(--surface)) 0%,
+    color-mix(in srgb, var(--molten-5) 14%, var(--surface)) 38%,
+    var(--surface) 75%
+  );
 }
 .hero-label {
   display: flex;
