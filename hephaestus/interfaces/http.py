@@ -53,6 +53,32 @@ STATUS_TTL_S = 60.0
 DepsFactory = Callable[[], runner.Deps]
 
 
+class RevalidatedStaticFiles(StaticFiles):
+    """Static files the browser must revalidate on every load.
+
+    The UI is plain ES modules: a browser that keeps an old module beside a new one that imports
+    from it fails to start, leaving a blank page. ``no-cache`` still lets it reuse a file whose
+    ETag has not changed, so offline replays stay fast.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Any:
+        """Serve a file with ``Cache-Control: no-cache``.
+
+        Parameters
+        ----------
+        *args, **kwargs
+            Passed to ``StaticFiles.file_response``.
+
+        Returns
+        -------
+        starlette.responses.Response
+            The file response.
+        """
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 class ParseRequest(BaseModel):
     """Body of ``POST /parse`` (UI-2)."""
 
@@ -819,7 +845,7 @@ def create_app(
     # ------------------------------------------------------------------ static UI
 
     if (WEB_DIR / "index.html").exists():
-        app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+        app.mount("/", RevalidatedStaticFiles(directory=WEB_DIR, html=True), name="web")
     else:
 
         @app.get("/", response_class=HTMLResponse)
