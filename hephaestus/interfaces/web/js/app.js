@@ -2,7 +2,7 @@
 // Routes: #/new, #/run/<id>/<tab>.
 
 import { api, ApiError } from "./api.js";
-import { ago, append, h, icon, label, pill, store, stored, toast, wordmark } from "./dom.js";
+import { ago, append, cid, cidLong, h, icon, label, pill, store, stored, toast, wordmark } from "./dom.js";
 import { openConnectDialog } from "./auth.js";
 import { mountRun } from "./run.js";
 import { CONFIG_GROUPS, TOP_LEVEL_SETTINGS, modelName, specGrid } from "./spec.js";
@@ -96,7 +96,7 @@ function renderSidebar() {
           null,
           h(`span.dot.${kind}`),
           r.running ? "Running" : label(r.status),
-          r.best ? h("span", null, "· ", r.best) : null,
+          r.best ? h("span", { title: cidLong(r.best) }, "· ", cid(r.best)) : null,
           h("span", { style: { marginLeft: "auto" } }, ago(r.created_at)),
         ),
       ),
