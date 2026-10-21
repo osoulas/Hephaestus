@@ -1,6 +1,6 @@
 """Brief facts, number check and assembly (Section 10).
 
-Owner: A. Every number comes from the run state (EB-2). The LLM writes prose for a few
+Every number comes from the run state (EB-2). The LLM writes prose for a few
 sections using ``{placeholders}`` that code fills; a section with any number not in the facts
 is replaced by its template.
 """

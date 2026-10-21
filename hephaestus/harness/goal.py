@@ -1,6 +1,6 @@
 """Goal parser: free text to ``SearchSpec`` (Section 1).
 
-Owner: A. One structured LLM call drafts the spec and up to three clarifying questions; code
+One structured LLM call drafts the spec and up to three clarifying questions; code
 then expands implied constraints and validates the result.
 """
 

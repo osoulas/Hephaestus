@@ -1,8 +1,4 @@
-"""Run folders, the on-disk cache keyed by exact inputs, and logs (DL-1 to DL-5, DL-12).
-
-Owner: C. The run-folder helpers below were added by A because the harness snapshots
-after every tool call; the cache (``cached``) and call logs are C's.
-"""
+"""Run folders, the on-disk cache keyed by exact inputs, and logs (DL-1 to DL-5, DL-12)."""
 
 from __future__ import annotations
 

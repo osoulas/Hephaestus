@@ -1,6 +1,6 @@
 """Orchestrator loop for the API and Claude Code backends (Section 8).
 
-Owner: A. ``Campaign.call_tool`` is the single path every tool call takes, whichever backend
+``Campaign.call_tool`` is the single path every tool call takes, whichever backend
 drives the conversation: budget, events, run-control tools, gates and snapshots all live
 there. ``Campaign.run`` drives backends that return one turn at a time (API, scripted); the
 Claude Code backend drives its own loop and calls back into ``call_tool``.

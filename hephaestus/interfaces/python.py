@@ -1,4 +1,1 @@
-"""``Experiment``: the public Python API.
-
-Owner: A.
-"""
+"""``Experiment``: the public Python API."""
