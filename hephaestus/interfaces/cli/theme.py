@@ -355,6 +355,21 @@ _LETTERS = {
 WORD = "HEPHAESTUS"
 LOGO_WIDTH = sum(len(_LETTERS[c][0]) for c in WORD)
 
+# An anvil for the right of the logo, drawn in the same ANSI Shadow style as the letters: the
+# face and horn (pointing back at the lettering), the body, the waist and the foot. Six rows.
+ANVIL = [
+    "████████████████████╗",
+    "╚════█████████████╔═╝",
+    "     ╚══███████╔══╝  ",
+    "        ███████║     ",
+    "    ███████████████╗ ",
+    "    ╚══════════════╝ ",
+]
+ANVIL_WIDTH = max(len(r) for r in ANVIL)
+ANVIL_GAP = 3  # cells between the lettering and the anvil
+IRON = ["#C7CFD6", "#B8C2CA", "#9AA5AE", "#7D8790", "#646D75", "#4E565D"]  # anvil rows, lit face to foot
+IRON_SHADOW = "#3A4046"  # the anvil's shadow lines
+
 
 def logo(width: int) -> Text:
     """Draw the startup logo: block letters in molten colours, or a wordmark on narrow terminals.
@@ -367,18 +382,24 @@ def logo(width: int) -> Text:
     Returns
     -------
     rich.text.Text
-        Six rows of block letters graded red to gold (shadows in scorched iron), or one line.
+        Six rows of block letters graded red to gold (shadows in scorched iron), with an anvil to
+        their right when the terminal is wide enough; one line when it is too narrow for the letters.
     """
     if width < LOGO_WIDTH + 4:
         text = Text("  ")
         for i, ch in enumerate(WORD):
             text.append(ch + " ", style=f"bold {MOLTEN[min(i * len(MOLTEN) // len(WORD), len(MOLTEN) - 1)]}")
         return text
+    with_anvil = width >= LOGO_WIDTH + 4 + ANVIL_GAP + ANVIL_WIDTH
     text = Text()
     for row in range(6):
         text.append("  ")
         for ch in "".join(_LETTERS[c][row] for c in WORD):
             text.append(ch, style=MOLTEN[row] if ch == "█" else SCORCH)
+        if with_anvil:
+            text.append(" " * ANVIL_GAP)
+            for ch in ANVIL[row]:
+                text.append(ch, style=IRON[row] if ch == "█" else IRON_SHADOW)
         text.append("\n")
     text.rstrip()
     return text
