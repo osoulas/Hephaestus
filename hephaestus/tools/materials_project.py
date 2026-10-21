@@ -12,7 +12,6 @@ dynamic-stability verdict always comes from the ``phonons`` tool with mode mappi
 
 from __future__ import annotations
 
-import itertools
 import os
 from typing import Any
 
@@ -22,7 +21,7 @@ from pymatgen.core import Composition, Structure
 from hephaestus.core.store import CacheMiss, cached
 from hephaestus.tools.registry import ToolError, Workspace, register
 
-CACHE_VERSION = "mp-1"
+CACHE_VERSION = "mp-2"  # bumped when failures stopped being cached
 POLYMORPH_WINDOW_EV = 0.05  # SG-1: experimentally observed entries this close to the lowest compete
 MAX_ENTRIES = 8  # entries returned to the LLM
 MAX_PHONON_LOOKUPS = 3  # per lookup_materials_project call; each is a network round trip
@@ -372,7 +371,8 @@ def mp_phonon_summary(entry: dict[str, Any], offline: bool = False) -> dict[str,
     -------
     dict
         ``{available: false}`` when MP has no phonons, else ``available``, ``min_frequency_THz``,
-        ``where`` and ``method``. A failed fetch gives ``available: false`` plus ``error``.
+        ``where`` and ``method``. A failed fetch gives ``available: false`` plus ``error`` and is not
+        cached, so a later call retries.
     """
     ids = entry.get("phonon_ids") or {}
     method = next((m for m in PHONON_METHODS if ids.get(m)), None)
@@ -388,20 +388,13 @@ def mp_phonon_summary(entry: dict[str, Any], offline: bool = False) -> dict[str,
         dict
             Min frequency and location.
         """
-        try:
-            bs = _fetch_phonon(pid, method)
-        except OSError:
-            raise  # connection trouble: not cached, so a later call retries
-        except Exception as exc:  # MP answered but has no usable document: cache the answer
-            return {"error": f"{type(exc).__name__}: {exc}"[:300]}
+        bs = _fetch_phonon(pid, method)
         return phonon_extremes(bs["frequencies"], bs["qpoints"], bs.get("labels_dict"))
 
-    try:
+    try:  # failures are never cached: MPRestError also covers 429, 503 and key errors
         summary = _cached({"op": "phonon", "phonon_id": pid, "method": method}, compute, offline)
     except MPUnavailable as exc:
         return {"available": False, "error": str(exc)}
-    if "error" in summary:
-        return {"available": False, "error": summary["error"]}
     return {"available": True, **summary, "method": method}
 
 
@@ -485,39 +478,6 @@ def _compact(entry: dict[str, Any]) -> dict[str, Any]:
         ``mp_id``, ``space_group``, ``e_hull_eV_per_atom``, ``experimental``, ``n_icsd``.
     """
     return {k: entry[k] for k in ("mp_id", "space_group", "e_hull_eV_per_atom", "experimental", "n_icsd")}
-
-
-def competing_phases(elements: list[str], offline: bool = False) -> list[dict[str, Any]]:
-    """MP stable phases of a chemical system and all its subsystems, with structures.
-
-    Used by ``energy_above_hull`` (SE-4, SE-5), which re-relaxes them with the run's potential.
-
-    Parameters
-    ----------
-    elements : list of str
-        Element symbols, e.g. ``["Sr", "Ti", "O"]``.
-    offline : bool
-        Serve only from the cache.
-
-    Returns
-    -------
-    list of dict
-        Entries (as ``_entry``) on the MP hull, elemental references included.
-    """
-    els = sorted(set(elements))
-    systems = ["-".join(c) for n in range(1, len(els) + 1) for c in itertools.combinations(els, n)]
-
-    def compute() -> list[dict[str, Any]]:
-        """Fetch the stable entries.
-
-        Returns
-        -------
-        list of dict
-            Entries.
-        """
-        return [_entry(d) for d in _fetch_summary(chemsys=systems, is_stable=True)]
-
-    return _cached({"op": "competing", "elements": els}, compute, offline)  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------

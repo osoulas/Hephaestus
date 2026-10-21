@@ -162,9 +162,34 @@ def test_failed_phonon_fetch_degrades(fake_mp: FakeMP, monkeypatch: pytest.Monke
     assert row["phonon"]["available"] is False and "down" in row["phonon"]["error"]
 
 
-def test_competing_phases_queries_all_subsystems(fake_mp: FakeMP) -> None:
-    """Every subsystem of the chemical system is asked for, stable phases only."""
-    mp.competing_phases(["O", "Ti", "Sr"])
-    ((_, query),) = fake_mp.calls
-    assert set(query["chemsys"]) == {"O", "Sr", "Ti", "O-Sr", "O-Ti", "Sr-Ti", "O-Sr-Ti"}
-    assert query["is_stable"] is True
+def test_failed_phonon_fetch_is_retried(fake_mp: FakeMP, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed phonon request is not cached: the next lookup asks again and can succeed."""
+    real = fake_mp.phonon
+
+    def flaky(phonon_id: str, method: str) -> dict[str, Any]:
+        """Fail once with an MP-style server error, then behave.
+
+        Parameters
+        ----------
+        phonon_id, method : str
+            Passed on.
+
+        Returns
+        -------
+        dict
+            The recorded band structure.
+
+        Raises
+        ------
+        RuntimeError
+            On the first call.
+        """
+        if not any(name == "flaky" for name, _ in fake_mp.calls):
+            fake_mp.calls.append(("flaky", {}))
+            raise RuntimeError("503 Service Unavailable")
+        return real(phonon_id, method)
+
+    monkeypatch.setattr(mp, "_fetch_phonon", flaky)
+    entry = next(e for e in mp.mp_polymorphs("SrTiO3") if e["space_group"] == "Pm-3m")
+    assert mp.mp_phonon_summary(entry)["available"] is False
+    assert mp.mp_phonon_summary(entry)["available"] is True

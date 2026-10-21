@@ -216,19 +216,19 @@
       "key": "olivine",
       "name": "Olivine M1M2TX4",
       "family": "olivine",
-      "aliases": ["Mg2SiO4-type", "forsterite", "LiFePO4-type"],
+      "aliases": ["LiFePO4-type", "triphylite", "Mg2SiO4-type", "forsterite"],
       "space_group": "Pnma",
       "sg_number": 62,
-      "lattice": {"a": 10.207, "b": 5.98, "c": 4.756, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
-      "reference": "Mg2SiO4 forsterite",
+      "lattice": {"a": 10.332, "b": 6.01, "c": 4.692, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+      "reference": "LiFePO4 triphylite (Li on M1, Fe on M2); forsterite Mg2SiO4 fills both M sites with Mg",
       "primitive": false,
       "sites": [
-        {"label": "M1", "role": "cation", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Mg2+"},
-        {"label": "M2", "role": "cation", "wyckoff": "4c", "coords": [0.2774, 0.25, 0.9915], "cn": 6, "ref": "Mg2+"},
-        {"label": "T", "role": "cation", "wyckoff": "4c", "coords": [0.094, 0.25, 0.4262], "cn": 4, "ref": "Si4+"},
-        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.0913, 0.25, 0.7657], "cn": 4, "ref": "O2-"},
-        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.4474, 0.25, 0.2215], "cn": 4, "ref": "O2-"},
-        {"label": "X", "role": "anion", "wyckoff": "8d", "coords": [0.1628, 0.0331, 0.2777], "cn": 4, "ref": "O2-"}
+        {"label": "M1", "role": "cation", "wyckoff": "4a", "coords": [0.0, 0.0, 0.0], "cn": 6, "ref": "Li+"},
+        {"label": "M2", "role": "cation", "wyckoff": "4c", "coords": [0.2822, 0.25, 0.9747], "cn": 6, "ref": "Fe2+"},
+        {"label": "T", "role": "cation", "wyckoff": "4c", "coords": [0.095, 0.25, 0.4182], "cn": 4, "ref": "P5+"},
+        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.0968, 0.25, 0.7428], "cn": 4, "ref": "O2-"},
+        {"label": "X", "role": "anion", "wyckoff": "4c", "coords": [0.4571, 0.25, 0.206], "cn": 4, "ref": "O2-"},
+        {"label": "X", "role": "anion", "wyckoff": "8d", "coords": [0.1656, 0.0465, 0.2848], "cn": 4, "ref": "O2-"}
       ]
     },
     {

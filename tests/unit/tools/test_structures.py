@@ -26,12 +26,34 @@ def test_sg5_dopants_follow_size() -> None:
     assert sites["B"] == {"Al": 0.25, "Ti": 0.75}
 
 
-def test_sg5_olivine_splits_and_orders_cations() -> None:
-    """Mg fills both olivine M sites; in LiFePO4, Li and Fe order on M1 and M2."""
+def test_sg5_olivine_orders_cations() -> None:
+    """Mg fills both olivine M sites; in LiFePO4, Li takes M1 and Fe takes M2 (triphylite)."""
     assert S.assign_sites("Mg2SiO4", "olivine").sites["T"] == {"Si": 1.0}
     lfp = S.assign_sites("LiFePO4", "olivine").sites
-    assert {next(iter(lfp["M1"])), next(iter(lfp["M2"]))} == {"Li", "Fe"}
-    assert lfp["T"] == {"P": 1.0}
+    assert (lfp["M1"], lfp["M2"], lfp["T"]) == ({"Li": 1.0}, {"Fe": 1.0}, {"P": 1.0})
+
+
+@pytest.mark.parametrize(
+    ("formula", "key", "expected"),
+    [
+        ("Fe2VAl", "full_heusler", {"X": {"Fe": 1.0}, "Y": {"V": 1.0}, "Z": {"Al": 1.0}}),
+        ("Mg2SiO4", "spinel", {"A": {"Si": 1.0}, "B": {"Mg": 1.0}, "X": {"O": 1.0}}),
+        ("Fe3O4", "spinel", {"A": {"Fe": 1.0}, "B": {"Fe": 1.0}, "X": {"O": 1.0}}),
+    ],
+)
+def test_sg5_ordered_layout_preferred(formula: str, key: str, expected: dict) -> None:
+    """When whole elements can fill every site, no site is shared (so the compound stays ordered)."""
+    sites = S.assign_sites(formula, key).sites
+    assert sites == expected
+    assert S.disorder_reason(sites) is None
+
+
+def test_inverse_spinel_is_flagged() -> None:
+    """Known inverse spinels carry a warning; normal ones and other templates do not."""
+    note = S.inverse_spinel_note("NiFe2O4", "spinel")
+    assert note is not None and note.startswith("NiFe2O4 is a known")
+    assert S.inverse_spinel_note("MgAl2O4", "spinel") is None
+    assert S.inverse_spinel_note("NiFe2O4", "rocksalt") is None
 
 
 def test_sg5_antiperovskite_orders_anions() -> None:

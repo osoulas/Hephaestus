@@ -43,6 +43,7 @@ VACANCY = "Vac"
 SITE_TOLERANCE = 0.05  # max relative error of each element's fraction on each site (SG-4)
 MAX_ANION_DEFICIT = 0.05  # fraction of anion sites that may be vacant (off-stoichiometry)
 MIN_DISTANCE_FACTOR = 0.7  # x sum of covalent radii (SG-9)
+CHARGE_WEIGHT = 0.1  # site-assignment cost per unit of oxidation-state mismatch with the reference ion
 # Disordered solid solutions (a site shared by several elements, or partly vacant) are parked
 # until the workflow for ordered compounds is complete. A disordered candidate needs a choice of
 # dopant site and an ensemble of configurations; one small supercell fakes an ordered compound.
@@ -341,6 +342,23 @@ def metallic_radius(element: str) -> float:
     return float(radius or el.atomic_radius or 1.5)
 
 
+def _ref_charge(ref: str) -> float:
+    """Oxidation state of a prototype's reference species (0 for a plain element).
+
+    Parameters
+    ----------
+    ref : str
+        Reference species, e.g. ``"Li+"`` or ``"Cu"``.
+
+    Returns
+    -------
+    float
+        Oxidation state.
+    """
+    sp = get_el_sp(ref)
+    return float(sp.oxi_state or 0) if isinstance(sp, Species) else 0.0
+
+
 def _ref_radius(ref: str, cn: int, metallic: bool) -> float:
     """Radius of a prototype's reference species on a site.
 
@@ -397,6 +415,55 @@ def disorder_reason(sites: dict[str, dict[str, float]]) -> str | None:
     )
 
 
+# Spinels that are wholly or largely inverse: (B)[AB]X4. Assignment by radius always gives the normal
+# arrangement, and relaxation will not swap the cations back, so these carry a warning.
+INVERSE_SPINELS = frozenset(
+    Composition(f).reduced_formula
+    for f in (
+        "NiFe2O4",
+        "CoFe2O4",
+        "CuFe2O4",
+        "MgFe2O4",
+        "Fe3O4",
+        "NiCo2O4",
+        "Zn2TiO4",
+        "Mg2TiO4",
+        "Fe2TiO4",
+        "Co2TiO4",
+        "Zn2SnO4",
+        "Mg2SnO4",
+        "Co2SnO4",
+        "Mg2VO4",
+    )
+)
+
+
+def inverse_spinel_note(composition: str, structure_type: str) -> str | None:
+    """Warn when a spinel template is used for a known inverse spinel.
+
+    Parameters
+    ----------
+    composition : str
+        Formula.
+    structure_type : str
+        Prototype key.
+
+    Returns
+    -------
+    str or None
+        The warning, or ``None`` when it does not apply.
+    """
+    if structure_type != "spinel":
+        return None
+    if Composition(composition).reduced_formula not in INVERSE_SPINELS:
+        return None
+    return (
+        f"{composition} is a known (largely) inverse spinel, but the spinel template builds the normal "
+        "arrangement (A on the tetrahedral site) and relaxation will not swap the cations. Prefer the "
+        "Materials Project structure (source='auto' or 'mp'), and treat template results with caution."
+    )
+
+
 @dataclass
 class SiteAssignment:
     """Elements placed on a prototype's site labels.
@@ -440,6 +507,49 @@ def _label_specs(proto: Prototype) -> dict[str, Any]:
     for s in proto.sites:
         out.setdefault(s.label, s)
     return out
+
+
+def _ordered_assignment(
+    supply: dict[str, float], demand: dict[str, float], cost: dict[tuple[str, str], float]
+) -> dict[str, dict[str, float]] | None:
+    """Best layout in which every site label holds one whole element, if the formula allows one.
+
+    An element may fill several labels (Fe on both spinel sites in Fe3O4, Mg on both olivine M
+    sites), but no label is shared. Ordered layouts are tried before ``_transport``, whose
+    continuous optimum can split an element across labels and make an ordered compound look
+    disordered (Fe2VAl, Mg2SiO4 spinel). The search is exhaustive: elements ** labels is small
+    for every prototype.
+
+    Parameters
+    ----------
+    supply : dict
+        Element to amount per prototype cell.
+    demand : dict
+        Site label to number of sites per prototype cell.
+    cost : dict
+        ``(element, label)`` to cost per site.
+
+    Returns
+    -------
+    dict or None
+        Label to ``{element: amount}``, or ``None`` when no ordered layout matches the amounts.
+    """
+    els, labels = sorted(supply), list(demand)
+    if VACANCY in supply:
+        return None
+    best: tuple[float, tuple[str, ...]] | None = None
+    for choice in itertools.product(els, repeat=len(labels)):
+        filled = dict.fromkeys(els, 0.0)
+        for e, lab in zip(choice, labels, strict=True):
+            filled[e] += demand[lab]
+        if any(abs(filled[e] - supply[e]) > 1e-6 for e in els):
+            continue
+        total = sum(demand[lab] * cost[(e, lab)] for e, lab in zip(choice, labels, strict=True))
+        if best is None or total < best[0] - 1e-12:
+            best = (total, choice)
+    if best is None:
+        return None
+    return {lab: {e: demand[lab]} for e, lab in zip(best[1], labels, strict=True)}
 
 
 def _transport(
@@ -488,8 +598,10 @@ def assign_sites(composition: str, structure_type: str) -> SiteAssignment:
 
     Cations go to cation sites and anions to anion sites. Within each group the assignment
     minimises the amount-weighted relative mismatch between each element's Shannon radius (at
-    the site's coordination) and the reference ion's, so list order never matters. An element
-    may be split over sites when the stoichiometry demands it (e.g. Mg on both olivine M sites).
+    the site's coordination) and the reference ion's, plus ``CHARGE_WEIGHT`` per unit of
+    oxidation-state mismatch, so list order never matters. Layouts in which every site holds one
+    whole element are tried first; an element may still fill several sites (Mg on both olivine
+    M sites). Only when no such layout matches the formula are sites shared.
     Up to 5 % of the anion sites may stay vacant for declared off-stoichiometry.
 
     Parameters
@@ -568,7 +680,9 @@ def assign_sites(composition: str, structure_type: str) -> SiteAssignment:
                     continue
                 r = metallic_radius(e) if proto.is_metallic else ionic_radius(e, oxi[e], spec.cn)
                 cost[(e, lab)] = abs(r - ref) / ref
-        placed = _transport(scaled, demand, cost)
+                if not proto.is_metallic:  # oxidation state breaks near-ties in radius (Li+/Fe2+)
+                    cost[(e, lab)] += CHARGE_WEIGHT * abs(oxi[e] - _ref_charge(spec.ref))
+        placed = _ordered_assignment(scaled, demand, cost) or _transport(scaled, demand, cost)
         if placed is None:
             raise StructureBuildError("no_template", f"{fail}: no feasible site assignment.")
         for lab, occ in placed.items():
@@ -794,13 +908,16 @@ def choose_supercell(
     """
     n_base = sum(assign.base_counts.values())
     best: tuple[tuple[int, float], list[int], float] | None = None
+    errors: dict[int, tuple[float, bool]] = {}  # the site error depends only on the number of cells
     for na in range(1, 9):
         for nb in range(1, 9):
             for nc in range(1, 9):
                 mult = na * nb * nc
                 if mult * n_base > max_atoms:
                     continue
-                err, present = _site_error(assign, mult)
+                if mult not in errors:
+                    errors[mult] = _site_error(assign, mult)
+                err, present = errors[mult]
                 if err > tolerance + 1e-9 or not present:
                     continue
                 lengths = np.array(lattice.abc) * [na, nb, nc]
@@ -940,7 +1057,11 @@ class TemplateBuild:
 
 
 def build_from_template(
-    composition: str, structure_type: str, seed: int = 0, max_atoms: int = 80
+    composition: str,
+    structure_type: str,
+    seed: int = 0,
+    max_atoms: int = 80,
+    assign: SiteAssignment | None = None,
 ) -> TemplateBuild:
     """Build a starting structure for a composition from a prototype (SG-2 to SG-9, SG-13).
 
@@ -954,6 +1075,8 @@ def build_from_template(
         Disorder seed.
     max_atoms : int
         Supercell cap.
+    assign : SiteAssignment, optional
+        Site occupancies already computed by the caller; computed here when omitted.
 
     Returns
     -------
@@ -965,7 +1088,7 @@ def build_from_template(
     StructureBuildError
         ``unknown_structure_type``, ``no_template``, ``supercell`` or ``geometry``.
     """
-    assign = assign_sites(composition, structure_type)
+    assign = assign or assign_sites(composition, structure_type)
     base = build_prototype(structure_type)
     scale = estimate_lattice(assign)
     base.scale_lattice(base.volume * scale**3)
@@ -1119,13 +1242,31 @@ def generate_structure(
             if from_mp_only:
                 raise StructureBuildError("mp_unavailable", str(exc)) from None
             notes.append(f"Materials Project unavailable, built from the template instead: {exc}")
+    struct = None
     if found is not None:
         struct = _clean_mp_structure(found["structure"])
+        if len(struct) > max_atoms:  # SG-8: try the primitive cell before giving up on MP
+            prim = struct.get_primitive_structure()
+            if len(prim) < len(struct):
+                notes.append(f"Reduced the MP cell from {len(struct)} to {len(prim)} atoms (primitive cell).")
+                struct = prim
+        if len(struct) > max_atoms:
+            oversize = (
+                f"The MP cell of {found['entry']['mp_id']} has {len(struct)} atoms, above "
+                f"max_atoms={max_atoms} (SG-8)."
+            )
+            if source != "auto" or from_mp_only:
+                raise StructureBuildError(
+                    "supercell",
+                    oversize
+                    + " Choose another polymorph from other_polymorphs, or raise RunConfig.max_atoms.",
+                )
+            notes.append(oversize + " Built from the template instead.")
+            found = None
+    if found is not None and struct is not None:
         if problems := check_geometry(struct):
             raise StructureBuildError("geometry", "Atoms too close: " + "; ".join(problems))
         entry = found["entry"]
-        if len(struct) > max_atoms:
-            notes.append(f"MP cell has {len(struct)} atoms, above max_atoms={max_atoms}.")
         match = _polymorph_matches(entry, candidate.structure_type)
         if match is False:
             proto = PROTOTYPES[candidate.structure_type]
@@ -1143,11 +1284,12 @@ def generate_structure(
             f"{comp} is not in Materials Project, so structure_type 'mp' cannot be built; propose it "
             "with a prototype structure_type instead.",
         )
-    if not ALLOW_PARTIAL_OCCUPANCY:
-        disordered = disorder_reason(assign_sites(comp, candidate.structure_type).sites)
-        if disordered:
-            raise StructureBuildError("disordered", disordered)
-    build = build_from_template(comp, candidate.structure_type, seed, max_atoms)
+    assign = assign_sites(comp, candidate.structure_type)
+    if not ALLOW_PARTIAL_OCCUPANCY and (disordered := disorder_reason(assign.sites)):
+        raise StructureBuildError("disordered", disordered)
+    build = build_from_template(comp, candidate.structure_type, seed, max_atoms, assign=assign)
+    if note := inverse_spinel_note(comp, candidate.structure_type):
+        notes.append(note)
     rec = _record(
         candidate.candidate_id,
         build.structure,
@@ -1179,7 +1321,8 @@ def _same_composition(a: str, b: str) -> bool:
     bool
         True when the atomic fractions agree.
     """
-    return Composition(a).fractional_composition.almost_equals(Composition(b).fractional_composition)
+    fa, fb = Composition(a).fractional_composition, Composition(b).fractional_composition
+    return fa.almost_equals(fb, rtol=0.0, atol=1e-6)  # the default rtol of 10 % equates Fe3O4 and Fe2O3
 
 
 @register("propose_candidate")
@@ -1247,6 +1390,8 @@ def propose_candidate(
             reasons.append(f"{exc.message} (CG-9).")
     if assign is not None:
         _charge_check(assign.charge_balanced, declared, reasons, warnings)
+        if note := inverse_spinel_note(composition, structure_type):
+            warnings.append(note)
         disordered = disorder_reason(assign.sites)
         if disordered and not ALLOW_PARTIAL_OCCUPANCY:
             reasons.append(disordered)
@@ -1409,23 +1554,8 @@ def build_structure(
     except StructureBuildError as exc:
         cs.errors.append(ErrorRecord(step="build_structure", code=exc.code, message=exc.message))
         raise ToolError(f"{exc.code}: {exc.message}") from None
+    _reset_candidate_state(cs)
     cs.record = rec
-    for name in (
-        "structure",
-        "energy_eV_per_atom",
-        "e_hull",
-        "e_form",
-        "phonon",
-        "md",
-        "space_group",
-        "lattice",
-        "density_g_cm3",
-        "potential",
-        "potential_in_domain",
-    ):
-        setattr(cs, name, None)
-    cs.predictions, cs.phonon_details, cs.decomposes_to = {}, {}, []
-    cs.converged = cs.hull_stale = False
     struct = Structure.from_dict(rec.pmg_dict)
     out: dict[str, Any] = {
         "candidate_id": candidate_id,
@@ -1456,6 +1586,25 @@ def build_structure(
         out["lattice_abc_A"] = [round(x, 3) for x in struct.lattice.abc]
     out["notes"] = notes
     return out
+
+
+KEEP_ON_REBUILD = frozenset({"candidate", "round", "errors"})
+
+
+def _reset_candidate_state(cs: CandidateState) -> None:
+    """Return every field except the candidate, its round and its errors to the default, in place.
+
+    Driven by the model's own fields, so results added to ``CandidateState`` later (such as
+    ``elastic``) are cleared too. The object is kept, so other references to it stay valid.
+
+    Parameters
+    ----------
+    cs : CandidateState
+        The candidate's state, about to get a new starting structure.
+    """
+    for name, info in CandidateState.model_fields.items():
+        if name not in KEEP_ON_REBUILD:
+            setattr(cs, name, info.get_default(call_default_factory=True))
 
 
 def _space_group(structure: Structure) -> str | None:
