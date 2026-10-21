@@ -232,3 +232,23 @@ def test_source_from_id(paper_id: str, source: str | None) -> None:
         Expected corpus.
     """
     assert literature._source_from_id(paper_id) == source
+
+
+def test_dl3_valency_cached_on_disk_by_default(tmp_path: Any, monkeypatch: Any) -> None:
+    """With the default wiring, a repeated Valency call is served from the disk cache, also after a restart."""
+    from conftest import FakeValency
+
+    monkeypatch.setenv("HEPHAESTUS_CACHE_DIR", str(tmp_path))
+    literature.reset()
+    fake = FakeValency()
+    literature.configure(backend=fake)
+    try:
+        first = literature.valency_semantic_search("SrTiO3")
+        literature.reset()  # a new process: fresh wiring, same cache folder
+        literature.configure(backend=fake)
+        second = literature.valency_semantic_search("SrTiO3")
+    finally:
+        literature.reset()
+    assert first == second
+    assert len(fake.calls) == 1
+    assert list((tmp_path / "valency").rglob("*.json"))

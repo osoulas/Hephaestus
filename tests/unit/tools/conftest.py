@@ -106,7 +106,7 @@ def valency() -> Iterator[FakeValency]:
         The backend in use.
     """
     fake = FakeValency()
-    literature.configure(backend=fake)
+    literature.configure(backend=fake, cache=literature._no_cache)
     yield fake
     literature.reset()
 
