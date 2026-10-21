@@ -32,8 +32,15 @@ def critique(score: int = 80, conf: int | None = 80, critical: bool = False, sto
         if critical
         else []
     )
-    return Critique(iteration=1, candidate_id="c1-1", score=score, llm_confidence=conf, findings=findings,
-                    stop_recommended=stop, stop_reason="done" if stop else None)  # fmt: skip
+    return Critique(
+        iteration=1,
+        candidate_id="c1-1",
+        score=score,
+        llm_confidence=conf,
+        findings=findings,
+        stop_recommended=stop,
+        stop_reason="done" if stop else None,
+    )
 
 
 PASS = {"all_passed": True, "dyn_stable": True}

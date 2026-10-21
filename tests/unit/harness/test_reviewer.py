@@ -29,10 +29,20 @@ def answer(next_comp: str = "SrTi0.75Fe0.25O3", conf: int = 70, **over: Any) -> 
     """
     base = {
         "findings": [
-            {"severity": "major", "category": "reliability", "text": "MEGNet error 0.65 eV.", "suggestion": "",
-             "paper_ids": []},
-            {"severity": "minor", "category": "synthesis", "text": "Solid-state route known.", "suggestion": "",
-             "paper_ids": ["p1"]},
+            {
+                "severity": "major",
+                "category": "reliability",
+                "text": "MEGNet error 0.65 eV.",
+                "suggestion": "",
+                "paper_ids": [],
+            },
+            {
+                "severity": "minor",
+                "category": "synthesis",
+                "text": "Solid-state route known.",
+                "suggestion": "",
+                "paper_ids": ["p1"],
+            },
         ],
         "next_composition": next_comp,
         "next_rationale": "More Fe.",
@@ -40,7 +50,7 @@ def answer(next_comp: str = "SrTi0.75Fe0.25O3", conf: int = 70, **over: Any) -> 
         "stop_reason": None,
         "llm_confidence": conf,
         "llm_confidence_reason": "Within error bar.",
-    }  # fmt: skip
+    }
     return base | over
 
 
@@ -85,8 +95,17 @@ def test_sc7_repeat_recommendation_is_asked_again_once() -> None:
 
 def test_sc4_sc5_sc9_problems_recorded_after_second_failure() -> None:
     """Missing reliability/sceptic findings and unknown IDs survive as an error after the retry."""
-    bad = answer(findings=[{"severity": "info", "category": "literature", "text": "x", "suggestion": "",
-                            "paper_ids": ["nope"]}])  # fmt: skip
+    bad = answer(
+        findings=[
+            {
+                "severity": "info",
+                "category": "literature",
+                "text": "x",
+                "suggestion": "",
+                "paper_ids": ["nope"],
+            }
+        ]
+    )
     _, errors = run(ScriptedLLM(structured={"reviewer": [bad, bad]}))
     assert errors[-1].code == "invalid_critique"
     for tag in ("SC-4", "SC-5", "SC-9"):

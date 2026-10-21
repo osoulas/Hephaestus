@@ -9,10 +9,23 @@ from hephaestus.tools import registry as R
 from hephaestus.tools.registry import ToolError, Workspace
 
 DOC_TOOLS = [
-    "search_literature", "related_papers", "get_paper", "publication_trend", "note_evidence",
-    "lookup_materials_project", "propose_candidate", "build_structure", "relax", "energy_above_hull",
-    "phonons", "run_md", "predict_property", "candidate_status", "request_review", "submit_final",
-]  # fmt: skip
+    "search_literature",
+    "related_papers",
+    "get_paper",
+    "publication_trend",
+    "note_evidence",
+    "lookup_materials_project",
+    "propose_candidate",
+    "build_structure",
+    "relax",
+    "energy_above_hull",
+    "phonons",
+    "run_md",
+    "predict_property",
+    "candidate_status",
+    "request_review",
+    "submit_final",
+]
 
 
 @pytest.fixture
@@ -106,8 +119,13 @@ def test_workspace_get_unknown_candidate(ws: Workspace) -> None:
 
 def test_sim_result_thermo_verdict_ignores_stale_hull(ws: Workspace) -> None:
     """A hull computed before mode mapping changed the structure does not count."""
-    cand = Candidate(candidate_id="c1-1", iteration=1, composition="SrTiO3", structure_type="perovskite_cubic",
-                     rationale="r")  # fmt: skip
+    cand = Candidate(
+        candidate_id="c1-1",
+        iteration=1,
+        composition="SrTiO3",
+        structure_type="perovskite_cubic",
+        rationale="r",
+    )
     ws.candidates["c1-1"] = R.CandidateState(candidate=cand, round=1, e_hull=0.01)
     assert ws.sim_result("c1-1").thermo_stable
     ws.candidates["c1-1"].hull_stale = True
