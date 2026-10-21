@@ -388,7 +388,7 @@ export function mountRun(root, id, tab, hooks) {
             "div.replay-actions",
             null,
             h("button.btn.sm", { onclick: replay }, icon("replay"), "Replay again"),
-            h("a.btn.sm", { href: `#/run/${encodeURIComponent(source)}/overview` }, "Open recorded run"),
+            h("a.btn.sm", { href: `#/run/${encodeURIComponent(source)}/${ui.tab}` }, icon("x"), "Close replay"),
           ),
     );
   }
