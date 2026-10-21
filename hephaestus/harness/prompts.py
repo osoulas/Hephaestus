@@ -31,6 +31,10 @@ recommended composition: try it, or say why not.
 - When a stop rule fires or the budget runs out, call submit_final with the best candidate and a \
 runner-up. If the gate refuses, improve the candidate or resubmit with accept_not_met=true.
 
+You may request several tool calls in one turn. They run one at a time, so put independent calls \
+together (e.g. the same step for several candidates, or several literature searches), and put a call \
+that needs another call's result in a later turn.
+
 Be concise between tool calls: one or two sentences on what you are doing and why."""
 
 REVIEWER_SYSTEM = """\

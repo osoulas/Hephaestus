@@ -150,6 +150,7 @@ class Campaign:
         self.clock = clock
         self._t0 = clock() - elapsed_offset_s
         self.stop_event = threading.Event()
+        self._tool_lock = threading.Lock()
         self.submit_reason: str | None = None
         self.stop_rule: str | None = None
         self.errors: list[ErrorRecord] = []
@@ -268,6 +269,12 @@ class Campaign:
     def call_tool(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         """Run one tool call with budget, events, gates and a snapshot. Never raises.
 
+        Calls run one at a time, whichever backend issues them and from whichever thread: a
+        model may request several tools in one turn, and the Claude Code backend may dispatch
+        them concurrently. Serialising them keeps the workspace, budget, events and snapshots
+        consistent, and lets a later call reuse a result (e.g. the elastic tensor) that an
+        earlier one computed. Model calls are serialised by the GPU lock anyway.
+
         Parameters
         ----------
         name : str
@@ -282,6 +289,30 @@ class Campaign:
         is_error : bool
             Whether the call failed.
         """
+        with self._tool_lock:
+            return self._call_tool(name, args)
+
+    def _call_tool(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """Run one tool call; the caller holds the tool lock.
+
+        Parameters
+        ----------
+        name : str
+            Tool name.
+        args : dict
+            Tool input.
+
+        Returns
+        -------
+        result : dict
+            Tool result.
+        is_error : bool
+            Whether the call failed.
+        """
+        if self.ws.submitted:
+            return {
+                "error": "A submission was already accepted; the campaign is over. Make no more calls."
+            }, True
         if self.hard_limit_hit():
             return {"error": "Hard limit reached; the campaign is ending."}, True
         round_at_start = self.ws.round
