@@ -1,0 +1,204 @@
+[
+ {
+  "phonon_IDs": {
+   "pheasy": [
+    "aaaemmig"
+   ]
+  },
+  "theoretical": false,
+  "database_IDs": {
+   "icsd": [
+    "icsd-65090",
+    "icsd-290370",
+    "icsd-186725",
+    "icsd-170091",
+    "icsd-187480",
+    "icsd-91899",
+    "icsd-56718",
+    "icsd-23076",
+    "icsd-182764",
+    "icsd-182763",
+    "icsd-184921",
+    "icsd-187619",
+    "icsd-187296",
+    "icsd-56717",
+    "icsd-181652",
+    "icsd-290617",
+    "icsd-80872",
+    "icsd-80873",
+    "icsd-186895",
+    "icsd-191828",
+    "icsd-80871",
+    "icsd-248379",
+    "icsd-184455",
+    "icsd-80874",
+    "icsd-182762",
+    "icsd-27045",
+    "icsd-56092",
+    "icsd-192314",
+    "icsd-201256",
+    "icsd-94573",
+    "icsd-65088",
+    "icsd-76186",
+    "icsd-65089",
+    "icsd-262269",
+    "icsd-248380"
+   ]
+  },
+  "band_gap": 1.7658999999999998,
+  "formation_energy_per_atom": -3.5511922376666667,
+  "energy_above_hull": 0.00047005399999910935,
+  "nsites": 5,
+  "formula_pretty": "SrTiO3",
+  "symmetry": {
+   "crystal_system": "Cubic",
+   "symbol": "Pm-3m",
+   "hall": "-P 4 2 3",
+   "number": 221,
+   "point_group": "m-3m",
+   "symprec": 0.1,
+   "angle_tolerance": 5.0,
+   "version": "2.7.0"
+  },
+  "material_id": "mp-aaaaahtd",
+  "structure": {
+   "@module": "pymatgen.core.structure",
+   "@class": "Structure",
+   "charge": 0.0,
+   "lattice": {
+    "matrix": [
+     [
+      3.91270131,
+      0.0,
+      -0.0
+     ],
+     [
+      -0.0,
+      3.91270131,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      3.91270131
+     ]
+    ],
+    "pbc": [
+     true,
+     true,
+     true
+    ],
+    "a": 3.91270131,
+    "b": 3.91270131,
+    "c": 3.91270131,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0,
+    "volume": 59.90045030664282
+   },
+   "properties": {},
+   "sites": [
+    {
+     "species": [
+      {
+       "element": "Sr",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      -0.0,
+      -0.0,
+      -0.0
+     ],
+     "properties": {},
+     "label": "Sr",
+     "xyz": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "Ti",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.5,
+      0.5,
+      0.5
+     ],
+     "properties": {},
+     "label": "Ti",
+     "xyz": [
+      1.956350655,
+      1.956350655,
+      1.956350655
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.5,
+      -0.0,
+      0.5
+     ],
+     "properties": {},
+     "label": "O",
+     "xyz": [
+      1.956350655,
+      0.0,
+      1.956350655
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      0.5,
+      0.5,
+      -0.0
+     ],
+     "properties": {},
+     "label": "O",
+     "xyz": [
+      1.956350655,
+      1.956350655,
+      0.0
+     ]
+    },
+    {
+     "species": [
+      {
+       "element": "O",
+       "occu": 1.0
+      }
+     ],
+     "abc": [
+      -0.0,
+      0.5,
+      0.5
+     ],
+     "properties": {},
+     "label": "O",
+     "xyz": [
+      0.0,
+      1.956350655,
+      1.956350655
+     ]
+    }
+   ]
+  }
+ }
+]
