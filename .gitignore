@@ -42,3 +42,8 @@ git_to_be_added
 filesize.csv
 *.gz
 POTCAR*
+change_in_git
+
+# Hephaestus run folders and the external-call cache (tokens live in ~/.hephaestus/)
+runs/
+cache/

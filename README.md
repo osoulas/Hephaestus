@@ -1,108 +1,70 @@
-# template-python
+# Hephaestus
 
-A compact starting point for a modern, typed Python package. It uses
-setuptools and `pyproject.toml` packaging, Ruff, mypy, pytest with full branch
-coverage, pre-commit, and GitHub Actions.
+A self-designing experiment agent for materials discovery. Type a goal in plain English:
 
-The example package exposes a tiny NumPy API and a command-line entry point so
-the template works end to end before you replace the sample code.
+> a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable
+> (≤ 0.05 eV/atom above hull) and dynamically stable
 
-## Requirements
+Hephaestus returns a recommended composition, checked by simulation, and a lab-ready brief that cites the
+literature.
 
-- Python 3.14 or newer
-- pip 25.1 or newer (for dependency groups)
+An LLM orchestrator runs the campaign through tools: Valency Bond literature search, Materials Project
+lookups, structure building, MACE relaxations, convex-hull energies, phonons with mode mapping, MD, and
+MEGNet band gaps. An independent reviewer LLM critiques each round. **Code, not the LLM, decides** the
+stability verdicts, the target check, the submission gate, the budgets and the stop rules. The winner is
+re-checked at higher fidelity before the brief is written.
 
-## Quick start
+Built at the OSI Hackathon, 21–22 October 2026.
 
-Create an isolated environment and install the package with its development
-tools:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install --group dev -e .
-```
-
-On Windows PowerShell, activate the environment with
-`.venv\Scripts\Activate.ps1` instead.
-
-Run the example:
+## Install
 
 ```bash
-template-python Ada
-python -m template_python Ada
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[sim,dev]"     # drop "sim" to skip torch, MACE and MEGNet
+pre-commit install
 ```
 
-Or use the library:
+On Windows with an NVIDIA driver at CUDA 12.2, install torch first:
+`pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121`.
+
+Environment variables: `MP_API_KEY` (required), `ANTHROPIC_API_KEY` (for the `api` backend),
+`HEPHAESTUS_LLM_MODEL` (default `claude-opus-5-5`).
+
+## Use
+
+```bash
+python -m hephaestus serve                  # UI at http://127.0.0.1:8000, API docs at /docs
+python -m hephaestus                        # interactive CLI
+python -m hephaestus run "<goal>" --backend claude-code
+python -m hephaestus login                  # Claude Code sign-in
+python -m hephaestus signin                 # Valency sign-in
+```
 
 ```python
-from template_python import line, print_hello
+from hephaestus.interfaces.python import Experiment
 
-print_hello("Ada")
-samples = line(-1.0, 1.0, num=5)
-print(samples)
+state = Experiment("a lead-free perovskite with a smaller band gap than SrTiO3").run()
 ```
 
-## Development
-
-Run the complete local checks:
+## Test
 
 ```bash
-ruff check .
-ruff format --check .
-mypy
-pytest
-python -m build
-python -m twine check dist/*
+pytest -q          # default suite: offline, no GPU, no API key
+pytest -m slow     # real MACE / MEGNet on cached tiny cases
+pytest -m live     # real LLM, Valency and Materials Project
+ruff check . && ruff format --check .
 ```
 
-Ruff can apply safe lint and formatting changes with:
+The default suite blocks outbound network access; mark a test `live` to use the network.
 
-```bash
-ruff check --fix .
-ruff format .
-```
+## Documentation
 
-Install the Git hooks once, then pre-commit will run the fast checks before
-each commit:
-
-```bash
-pre-commit install
-pre-commit run --all-files
-```
-
-If you prefer Conda, `build_tools/environment.yml` creates the base environment:
-
-```bash
-conda env create -f build_tools/environment.yml
-conda activate template-python
-python -m pip install --group dev -e .
-```
-
-## Project layout
-
-```text
-.
-├── .github/workflows/ci.yml   # automated quality and packaging checks
-├── build_tools/               # optional Conda setup
-├── template_python/           # installable package
-├── tests/                     # behavior-focused tests
-└── pyproject.toml              # project metadata and tool configuration
-```
-
-## Use this template
-
-After creating a repository from this template:
-
-1. Rename the `template-python` distribution, `template_python` import package,
-   and console command.
-2. Update the description, author, repository URLs, and license metadata.
-3. Choose and test the Python versions your project supports.
-4. Replace the example API and tests while keeping the quality gates green.
-5. Set a real release version and configure trusted publishing only when the
-   package is ready to publish.
+- [`CLAUDE.md`](CLAUDE.md): team guide, decisions, package layout and coding rules.
+- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md): the specification, with requirement IDs.
+- [`docs/TOOLS.md`](docs/TOOLS.md): the tool contract between the harness and the tools.
+- [`docs/stability_check.md`](docs/stability_check.md): why dynamic stability uses mode mapping.
+- [`docs/valency_tools.md`](docs/valency_tools.md): Valency Bond's live tool schemas.
 
 ## License
 
-Released under the [MIT License](LICENSE).
+[MIT](LICENSE).
