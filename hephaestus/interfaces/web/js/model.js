@@ -108,6 +108,9 @@ export class RunModel {
       const t = new Date(e.time);
       if (this.campaignStart && !this.campaignEnd) this.campaignEnd = t;
       if (this.finalStart && !this.finalEnd) this.finalEnd = t;
+      if (p.status === "stopped") {
+        for (const ph of PHASES) if (this.phase[ph.key] === "pending" || this.phase[ph.key] === "active") this.phase[ph.key] = "skipped";
+      }
       if (e.status === "failed") {
         this.errors += (p.errors || []).length || 1;
         const stuck = PHASES.find((ph) => this.phase[ph.key] !== "done" && this.phase[ph.key] !== "skipped");
@@ -116,7 +119,7 @@ export class RunModel {
       this.log.push({
         type: "marker",
         seq: e.seq,
-        text: e.status === "finished" ? "Run finished" : "Run failed",
+        text: e.status === "failed" ? "Run failed" : p.status === "stopped" ? "Run stopped" : "Run finished",
         status: e.status,
         detail: p,
         time: e.time,

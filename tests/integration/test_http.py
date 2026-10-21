@@ -104,7 +104,7 @@ def test_ui2_ui3_ui8_parse_run_stream_and_brief(client: TestClient) -> None:
     assert client.get(f"/runs/{run_id}/structure/zz").status_code == 404
     assert [r["run_id"] for r in client.get("/runs").json()] == [run_id]
     assert client.post(f"/runs/{run_id}/resume").status_code == 409
-    assert client.post(f"/runs/{run_id}/stop").json() == {"stopping": False}
+    assert client.post(f"/runs/{run_id}/stop").json() == {"stopping": False, "mode": "campaign"}
 
 
 def test_ui16_history_survives_a_new_server(client: TestClient, tmp_path: Path) -> None:
@@ -262,7 +262,7 @@ def test_ui9_stopped_replay_resumes_where_it_stopped(client: TestClient) -> None
     stored = stream(client, run_id)
     rid = client.post(f"/replay/{run_id}", json={"speed": 0.001}).json()["replay_id"]
     time.sleep(0.3)
-    assert client.post(f"/runs/{rid}/stop").json() == {"stopping": True}
+    assert client.post(f"/runs/{rid}/stop").json()["stopping"] is True
     first = stream(client, rid)
     assert 0 < len(first) < len(stored)
     client.post(f"/replay/{rid}/speed", json={"speed": 0})

@@ -115,6 +115,60 @@ def test_sys1_goal_to_brief_unattended(tmp_path: Path) -> None:
     assert firsts == ["goal_parser", "orchestrator", "final_calculation", "brief_generator"]  # OR-1
 
 
+def stop_run(run_id: str, mode: str, turn: list):  # type: ignore[no-untyped-def]
+    """Return a scripted turn that stops the run through the runner, then answers with ``turn``.
+
+    Parameters
+    ----------
+    run_id : str
+        Run to stop.
+    mode : {"campaign", "all"}
+        What to stop.
+    turn : list
+        The orchestrator's answer after the stop.
+
+    Returns
+    -------
+    callable
+        A scripted turn.
+    """
+
+    def f(messages: list) -> list:
+        """Stop, then answer.
+
+        Parameters
+        ----------
+        messages : list
+            Ignored.
+
+        Returns
+        -------
+        list
+            ``turn``.
+        """
+        assert runner.request_stop(run_id, mode)
+        return turn
+
+    return f
+
+
+def test_or8_stop_search_still_checks_and_writes_brief(tmp_path: Path) -> None:
+    """Stopping the search submits, then the final re-check and the brief still run."""
+    turns = [*scripts.ROUND_1[:3], stop_run("rs", "campaign", [scripts.submit("c1-2")])]
+    state = runner.run(scripts.GOAL, deps=deps(tmp_path, turns, ANSWERS), run_id="rs")
+    assert state.status == "finished" and state.stop_reason == "user_stop"
+    assert state.validation and (tmp_path / "rs" / "brief.md").exists()
+
+
+def test_or8_stop_everything_skips_check_and_brief(tmp_path: Path) -> None:
+    """Stopping everything ends the run as stopped, with no re-check and no brief; it can resume."""
+    turns = [*scripts.ROUND_1[:3], stop_run("ra", "all", [scripts.submit("c1-2")])]
+    state = runner.run(scripts.GOAL, deps=deps(tmp_path, turns, ANSWERS), run_id="ra")
+    assert state.status == "stopped" and state.stop_reason == "user_abort"
+    assert not state.validation and not (tmp_path / "ra" / "brief.md").exists()
+    assert state.best is not None
+
+
 def test_gp5_questions_stop_before_campaign(tmp_path: Path) -> None:
     """A goal with an unanswered question ends as needs_input with no tool calls."""
     parsed = scripts.PARSED | {"reference_material": None, "questions": ["What band gap do you need?"]}

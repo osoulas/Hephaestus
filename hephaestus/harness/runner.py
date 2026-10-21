@@ -74,6 +74,7 @@ class UsageMeter:
 
 ACTIVE: dict[str, Campaign] = {}
 _STOPS: dict[str, threading.Event] = {}
+_ABORTS: dict[str, threading.Event] = {}  # "stop entirely": no final re-check, no brief
 _LOCK = threading.Lock()
 
 
@@ -107,13 +108,17 @@ def default_final_check() -> Callable[..., list[ValidationReport]] | None:
     return getattr(final_check, "validate_finalists", None)
 
 
-def request_stop(run_id: str) -> bool:
-    """Ask a running campaign to stop and submit (OR-8).
+def request_stop(run_id: str, mode: str = "campaign") -> bool:
+    """Stop a running run (OR-8).
 
     Parameters
     ----------
     run_id : str
         Run ID.
+    mode : {"campaign", "all"}
+        ``"campaign"``: end the search; the best candidate still gets the final re-check and the
+        brief. ``"all"``: end the run as soon as the current calculation returns, with no final
+        re-check and no brief; it can be resumed later.
 
     Returns
     -------
@@ -122,11 +127,14 @@ def request_stop(run_id: str) -> bool:
     """
     with _LOCK:
         ev = _STOPS.get(run_id)
+        abort = _ABORTS.get(run_id)
         camp = ACTIVE.get(run_id)
     if ev:
         ev.set()
+    if abort and mode == "all":
+        abort.set()
     if camp:
-        camp.request_stop()
+        camp.request_stop(abort=mode == "all")
     return bool(ev or camp)
 
 
@@ -370,10 +378,12 @@ def _drive(
     """
     rid = state.run_id
     stop = threading.Event()
+    abort = threading.Event()
     with _LOCK:
         if rid in _STOPS:
             raise RunRefused(f"Run {rid} is already running.")
         _STOPS[rid] = stop
+        _ABORTS[rid] = abort
     bus = deps.bus
     try:
         llm, reviewer = _models(state.config, deps, files)
@@ -407,9 +417,13 @@ def _drive(
             state.stop_reason = state.stop_reason or "submitted"
         sync_state(state, ws, [it.critique for it in state.iterations if it.critique])
         write_artifacts(files, state)
-        _final(state, files, ws, deps, bus, handlers, stop)
-        _brief(state, files, ws, llm, bus)
-        state.status = "finished"
+        if not abort.is_set():
+            _final(state, files, ws, deps, bus, handlers, stop)
+        if not abort.is_set():
+            _brief(state, files, ws, llm, bus)
+        state.status = "stopped" if abort.is_set() else "finished"
+        if abort.is_set():
+            state.stop_reason = "user_abort"
         meter.update()
         save_json(files.state, state)
         bus.emit(
@@ -427,6 +441,7 @@ def _drive(
     finally:
         with _LOCK:
             _STOPS.pop(rid, None)
+            _ABORTS.pop(rid, None)
             ACTIVE.pop(rid, None)
 
 

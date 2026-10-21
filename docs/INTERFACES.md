@@ -120,7 +120,7 @@ Base URL `http://127.0.0.1:8000`; interactive docs at `/docs`. Bodies are JSON i
 | `GET /runs/{id}/events` | `?history=true` | SSE stream (below) |
 | `GET /runs/{id}/structure/{candidate_id}` | | CIF text (3D viewer, UI-7) |
 | `GET /runs/{id}/brief` | `?format=md\|pdf` | Markdown or PDF; 404 until written |
-| `POST /runs/{id}/stop` | | `{stopping}` |
+| `POST /runs/{id}/stop?mode=campaign\|all` | | `{stopping, mode}`: `campaign` ends the search (re-check and brief still run); `all` ends the run after the current calculation |
 | `POST /runs/{id}/resume` | | `{run_id, resumed}`; 409 if finished or running |
 | `POST /replay/{id}` | `{speed}` (0 = no pauses) | `{replay_id}` |
 | `GET /health` | | `{ok, backends, device, valency, running}`; never blocks (`backends` is `null` until the first background check ends) |

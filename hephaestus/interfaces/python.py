@@ -559,22 +559,31 @@ class Experiment:
             raise ExperimentError(f"{self.run_id} is not a replay.")
         self.replay_control["speed"] = float(speed)
 
-    def stop(self) -> bool:
-        """Ask the campaign to stop and submit; the run still ends with a brief (OR-8, UI-10).
+    def stop(self, mode: str = "campaign") -> bool:
+        """Stop the run (OR-8, UI-10).
 
         For a replay handle, ends the replay instead.
+
+        Parameters
+        ----------
+        mode : {"campaign", "all"}
+            ``"campaign"``: end the search; the best candidate still gets the final re-check and
+            the brief. ``"all"``: end the run after the current calculation, with no re-check and
+            no brief; ``resume()`` continues it later.
 
         Returns
         -------
         bool
             True if the run is active in this process.
         """
+        if mode not in ("campaign", "all"):
+            raise ValueError(f"mode must be 'campaign' or 'all', not {mode!r}")
         if self.replay_control is not None:
             self.replay_control["stop"].set()
             return self.running
         if self._campaign is not None:
-            self._campaign.request_stop()
-        return runner.request_stop(self.run_id)
+            self._campaign.request_stop(abort=mode == "all")
+        return runner.request_stop(self.run_id, mode)
 
     # ------------------------------------------------------------------ events
 
