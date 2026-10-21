@@ -47,6 +47,22 @@
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sidebar-w: 272px;
+  /* the CLI logo's forge palette (interfaces/cli/theme.py) */
+  --molten-1: #9e1b1b;
+  --molten-2: #c2361f;
+  --molten-3: #e4572e;
+  --molten-4: #f07a2a;
+  --molten-5: #f5a23a;
+  --molten-6: #f9c74f;
+  --scorch: #6b2a14;
+  --iron-1: #6f7a84; /* darker than the terminal's iron, so it reads on a light surface */
+  --iron-2: #646e78;
+  --iron-3: #56606a;
+  --iron-4: #48515a;
+  --iron-5: #3b434b;
+  --iron-6: #2f363c;
+  --iron-shadow: #a9b1b8;
+  --gold-ink: #a8650c;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -81,6 +97,14 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
     --shadow-lg: 0 24px 48px -16px rgba(0, 0, 0, 0.7);
+    --iron-1: #c7cfd6;
+    --iron-2: #b8c2ca;
+    --iron-3: #9aa5ae;
+    --iron-4: #7d8790;
+    --iron-5: #646d75;
+    --iron-6: #4e565d;
+    --iron-shadow: #3a4046;
+    --gold-ink: #f5b041;
   }
 }
 
@@ -115,6 +139,14 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
   --shadow-lg: 0 24px 48px -16px rgba(0, 0, 0, 0.7);
+  --iron-1: #c7cfd6;
+  --iron-2: #b8c2ca;
+  --iron-3: #9aa5ae;
+  --iron-4: #7d8790;
+  --iron-5: #646d75;
+  --iron-6: #4e565d;
+  --iron-shadow: #3a4046;
+  --gold-ink: #f5b041;
 }
 
 /* ------------------------------------------------------------------ base */
@@ -222,26 +254,25 @@ pre,
 }
 
 .brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 18px 18px 14px;
+  display: grid;
+  gap: 4px;
+  padding: 20px 18px 16px;
   text-decoration: none;
 }
-.brand-mark {
-  width: 30px;
-  height: 30px;
-  flex: none;
-}
-.brand-name {
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+.wordmark {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  margin-bottom: 8px;
 }
 .brand-tag {
-  font-size: 11.5px;
+  font: 600 11px/1.35 var(--mono);
+  color: var(--gold-ink);
+}
+.brand-motto {
+  font: 10.5px/1.4 var(--mono);
   color: var(--ink-3);
-  line-height: 1.2;
 }
 
 .sidebar-actions {

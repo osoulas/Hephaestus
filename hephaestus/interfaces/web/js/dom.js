@@ -125,17 +125,85 @@ export function icon(name, cls) {
   );
 }
 
-/** The brand mark: a flame over an anvil. */
-export function brandMark() {
+// The CLI's logo (interfaces/cli/theme.py): HEPHAESTUS in ANSI Shadow block letters graded from
+// molten red to gold, with an anvil in iron to the right. Drawn as SVG, one terminal cell per unit
+// (cells are twice as tall as wide): full blocks become filled cells, box-drawing shadows thin lines.
+const LETTERS = {
+  H: ["██╗  ██╗", "██║  ██║", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
+  E: ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "███████╗", "╚══════╝"],
+  P: ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔═══╝ ", "██║     ", "╚═╝     "],
+  A: [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
+  S: ["███████╗", "██╔════╝", "███████╗", "╚════██║", "███████║", "╚══════╝"],
+  T: ["████████╗", "╚══██╔══╝", "   ██║   ", "   ██║   ", "   ██║   ", "   ╚═╝   "],
+  U: ["██╗   ██╗", "██║   ██║", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝ "],
+};
+const ANVIL = [
+  "████████████████████╗",
+  "╚════█████████████╔═╝",
+  "     ╚══███████╔══╝  ",
+  "        ███████║     ",
+  "    ███████████████╗ ",
+  "    ╚══════════════╝ ",
+];
+const ANVIL_GAP = 3;
+
+// Half-cell strokes for each box-drawing character: [x1, y1, x2, y2] in cell units (cell 1 × 2).
+const STROKES = {
+  "═": [[0, 1, 1, 1]],
+  "║": [[0.5, 0, 0.5, 2]],
+  "╗": [[0, 1, 0.5, 1], [0.5, 1, 0.5, 2]],
+  "╔": [[1, 1, 0.5, 1], [0.5, 1, 0.5, 2]],
+  "╝": [[0, 1, 0.5, 1], [0.5, 1, 0.5, 0]],
+  "╚": [[1, 1, 0.5, 1], [0.5, 1, 0.5, 0]],
+};
+
+/**
+ * Draw rows of ANSI Shadow art into an SVG group.
+ * @param {string[]} rows Six rows of block and box-drawing characters.
+ * @param {number} x0 Left column.
+ * @param {string} fillVar CSS variable prefix for block rows, e.g. "--molten" (rows 1-6).
+ * @param {string} shadowVar CSS variable for the shadow strokes.
+ * @returns {SVGElement}
+ */
+function shadowArt(rows, x0, fillVar, shadowVar) {
+  const g = s("g");
+  const lines = [];
+  rows.forEach((row, r) => {
+    const y = r * 2;
+    let run = null; // merge each run of blocks into one rect, so no seams show between cells
+    [...row, " "].forEach((ch, c) => {
+      const x = x0 + c;
+      if (ch === "█") {
+        if (run === null) run = x;
+        return;
+      }
+      if (run !== null) {
+        g.append(s("rect", { x: run, y: y - 0.02, width: x - run, height: 2.06, fill: `var(${fillVar}-${r + 1})` }));
+        run = null;
+      }
+      if (STROKES[ch]) for (const [a, b, e, f] of STROKES[ch]) lines.push(`M${x + a} ${y + b}L${x + e} ${y + f}`);
+    });
+  });
+  g.prepend(s("path", { d: lines.join(""), stroke: `var(${shadowVar})`, "stroke-width": 0.42, "stroke-linecap": "square", fill: "none" }));
+  return g;
+}
+
+/**
+ * The HEPHAESTUS wordmark with its anvil, as in the CLI banner.
+ * @param {{anvil?: boolean}} [opts] Draw the anvil (default true).
+ * @returns {SVGElement}
+ */
+export function wordmark(opts = {}) {
+  const anvil = opts.anvil !== false;
+  const word = "HEPHAESTUS";
+  const letterRows = [0, 1, 2, 3, 4, 5].map((r) => [...word].map((ch) => LETTERS[ch][r]).join(""));
+  const textW = letterRows[0].length;
+  const width = textW + (anvil ? ANVIL_GAP + ANVIL[0].length : 0);
   return s(
     "svg",
-    { viewBox: "0 0 32 32", class: "brand-mark", "aria-hidden": "true" },
-    s("rect", { width: 32, height: 32, rx: 8, fill: "var(--primary)" }),
-    s("path", {
-      d: "M16 5c1.2 3.6 4.8 5.6 4.8 10.2A4.8 4.8 0 0 1 16 20a4.8 4.8 0 0 1-4.8-4.8c0-2 1-3.3 2.1-4.4.2 1.6 1 2.6 2 2.9-.6-3.4.2-6.4.7-8.7Z",
-      fill: "var(--ember)",
-    }),
-    s("path", { d: "M7 23h18l-2 3H9z", fill: "var(--primary-ink)" }),
+    { viewBox: `-0.3 -0.3 ${width + 0.6} 12.6`, class: "wordmark", role: "img", "aria-label": "Hephaestus" },
+    shadowArt(letterRows, 0, "--molten", "--scorch"),
+    anvil ? shadowArt(ANVIL, textW + ANVIL_GAP, "--iron", "--iron-shadow") : null,
   );
 }
 

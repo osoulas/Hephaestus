@@ -2,7 +2,7 @@
 // Routes: #/new, #/run/<id>/<tab>.
 
 import { api, ApiError } from "./api.js";
-import { ago, append, brandMark, h, icon, label, pill, store, stored, toast } from "./dom.js";
+import { ago, append, h, icon, label, pill, store, stored, toast, wordmark } from "./dom.js";
 import { openConnectDialog } from "./auth.js";
 import { mountRun } from "./run.js";
 import { CONFIG_GROUPS, TOP_LEVEL_SETTINGS, modelName, specGrid } from "./spec.js";
@@ -103,7 +103,13 @@ function renderSidebar() {
     );
   }
   sidebar.replaceChildren(
-    h("a.brand", { href: "#/new" }, brandMark(), h("div", null, h("div.brand-name", null, "Hephaestus"), h("div.brand-tag", null, "Self-designing experiments"))),
+    h(
+      "a.brand",
+      { href: "#/new", title: "Hephaestus: new experiment" },
+      wordmark(),
+      h("div.brand-tag", null, "self-designing experiments for materials discovery"),
+      h("div.brand-motto", null, "forged in simulation · checked by code · grounded in the literature"),
+    ),
     h("div.sidebar-actions", null, h("a.btn.primary", { href: "#/new" }, icon("plus"), "New experiment")),
     h("div.sidebar-section", null, "Runs", h("span.num", null, app.runs.length || "")),
     list,
