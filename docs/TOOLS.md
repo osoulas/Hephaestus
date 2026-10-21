@@ -23,6 +23,7 @@ live in the owning module and are registered by name.
 - **Caching.** Every external call and every relaxation is cached by its exact inputs (`core/store.py`), so
   repeating a tool call is cheap and the demo works offline.
 - **Budget.** Each call counts towards `RunConfig.max_tool_calls`. Compute tools also add to `ws.compute_s`.
+  A budget of 0 (`max_iterations`, `max_tool_calls`, `time_budget_s`, `final_time_budget_s`) means no limit.
 - **Events.** The harness, not the tool, emits a `ProgressEvent` before and after each call. The payload
   carries `tool`, `input`, `result`, plus flat fields for the UI (see *Event payloads*).
 
@@ -260,6 +261,10 @@ The first use of a new chemical system relaxes its competing phases, which can t
 n_competing_phases, thermo_stable, threshold, wall_time_s}`. `thermo_stable` (code) means
 E_hull ≤ `spec.stability_thresholds.e_hull_max_eV_per_atom`.
 
+`RunConfig.run_hull = false` turns the tool off (it returns an error) and the gate stops requiring it.
+`RunConfig.e_hull_max_eV_per_atom`, when set, replaces the goal's threshold; `null` keeps the goal's
+(0.05 eV/atom if the goal names none). `run_phonons = false` does the same for `phonons`.
+
 #### `phonons`
 Finite-displacement phonons with phonopy, at commensurate q-points (SE-6 to SE-8).
 - `mode=fast`: supercell ≥ 7 Å.
@@ -299,7 +304,7 @@ domain flag (PP-5). The registry (`simulation.property_registry`) lists every ke
 
 | Property | Model | Units | Uncertainty |
 | --- | --- | --- | --- |
-| `band_gap` | MEGNet-BandGap-mfi-MP-2019.4.1, fidelity from `RunConfig.band_gap_fidelity` (`hse` default, or `pbe`) | eV | HSE ±0.65 (MAE vs 15 measured perovskite gaps); PBE ±0.57 vs MP PBE gaps, about 1.6 eV below experiment |
+| `band_gap` | MEGNet-BandGap-mfi-MP-2019.4.1; `RunConfig.band_gap_model` picks the output: `megnet-hse` (default), `megnet-pbe`, `megnet-gllb-sc`, `megnet-scan` | eV | HSE ±0.65 (MAE vs 15 measured perovskite gaps); PBE ±0.57 vs MP PBE gaps, about 1.6 eV below experiment; GLLB-SC and SCAN not benchmarked, so no uncertainty |
 | `bulk_modulus`, `shear_modulus` | elastic tensor from strain-stress with the run's potential (±0.25 and ±0.5 % strains, ions relaxed at each strain), Voigt-Reuss-Hill | GPa | 15 / 20 (typical MLIP MAE) |
 | `youngs_modulus`, `poisson_ratio`, `pugh_ratio` | from K and G | GPa, –, – | propagated from K and G |
 | `sound_velocity_longitudinal`, `sound_velocity_transverse`, `sound_velocity_mean`, `debye_temperature` | from K, G and the density | km/s, K | propagated from K and G |
@@ -352,8 +357,9 @@ reviewer confidence below the threshold.
 #### `submit_final`
 Submit the recommended candidate. **Code gate:**
 - **Required calculations:** `relax`, `energy_above_hull` (not stale), `phonons` and the target
-  `predict_property` must have run.
-- **Checks:** the target check and both stability verdicts must pass.
+  `predict_property` must have run. A stability check turned off for the run is not required.
+- **Checks:** the target check and both stability verdicts must pass. A check turned off for the run
+  reports `null` and is left out; the code rubric is then rescaled to 0–100 without it.
 - **Novelty** (when `require_novel`): the literature search must find no prior report of the composition.
 - **A failing gate** returns `accepted: false` with the reasons. The agent can improve the candidate, or
   resubmit with `accept_not_met: true` to report the best attempt as not meeting the target.

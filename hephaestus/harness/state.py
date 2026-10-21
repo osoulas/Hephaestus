@@ -80,6 +80,8 @@ class RunFiles:
             "calls": "calls.jsonl",
             "brief_md": "brief.md",
             "brief_pdf": "brief.pdf",
+            "compute_brief_md": "compute_brief.md",
+            "compute_brief_pdf": "compute_brief.pdf",
         }
         if name in names:
             return self.root / names[name]

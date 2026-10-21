@@ -8,7 +8,9 @@ potential too, so candidate and reference stay on the same scale (GP-11).
 
 Within the separate time budget (FC-9), work runs in priority order: the winner's Must steps,
 the Should items (disorder spread FC-4, runner-up FC-6), then the Could items (MD FC-5, second
-potential FC-3). Items that do not fit are skipped and named in the notes.
+potential FC-3). The Must steps always run, since there is no verdict without them; each optional
+item starts only if its estimated cost, from the step times just measured, fits in what remains.
+Items that do not fit, or that a stop request cuts, are skipped and named in the notes.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from typing import Any
 
 from pymatgen.core import Composition
 
+from hephaestus.core.config import budget_limit
 from hephaestus.core.types import SearchSpec, Submission, ValidationCheck, ValidationReport
 from hephaestus.harness.gates import pessimistic, target_met
 from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
@@ -30,6 +33,91 @@ DISORDER_SEEDS = (1, 2)  # extra configurations besides the finalist's own (FC-4
 EHULL_WEAKEN = 0.02  # eV/atom: a rise this large weakens a result that still passes
 DISORDER_WEAKEN = 0.01  # eV/atom: an energy spread this large weakens the result (FC-4)
 OVERTURN_CHECKS = ("target_met", "thermo_stable", "dyn_stable", "md_stable")
+MD_COST_FACTOR = 10.0  # MD for MD_PS takes about this many final relaxations (FC-9 estimate)
+
+StepHook = Callable[[str, str, dict[str, Any]], None]
+"""``on_step(status, tool, info)``: status is ``started``, ``finished`` or ``failed``."""
+
+
+def _timed(
+    handlers: Mapping[str, Handler],
+    times: dict[str, float],
+    on_step: StepHook | None,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Handler]:
+    """Wrap handlers to record each tool's latest duration and report progress.
+
+    Parameters
+    ----------
+    handlers : mapping
+        Tool handlers.
+    times : dict
+        Filled with tool name to the latest wall time, in s.
+    on_step : callable or None
+        Progress callback.
+    clock : callable
+        Monotonic clock in s.
+
+    Returns
+    -------
+    dict
+        Wrapped handlers.
+    """
+
+    def wrap(name: str, fn: Handler) -> Handler:
+        """Time and report one handler.
+
+        Parameters
+        ----------
+        name : str
+            Tool name.
+        fn : callable
+            Handler.
+
+        Returns
+        -------
+        callable
+            Wrapped handler.
+        """
+
+        def run(ws: Workspace, **args: Any) -> dict[str, Any]:
+            """Call the handler, timing it and reporting start and end.
+
+            Parameters
+            ----------
+            ws : Workspace
+                Final-check workspace.
+            **args
+                Tool input.
+
+            Returns
+            -------
+            dict
+                The handler's result.
+            """
+            info = {
+                "candidate_id": args.get("candidate_id"),
+                "potential": args.get("potential"),
+                "mode": args.get("mode"),
+            }
+            if on_step:
+                on_step("started", name, info)
+            t0 = clock()
+            try:
+                out = fn(ws, **args)
+            except Exception:
+                times[name] = clock() - t0
+                if on_step:
+                    on_step("failed", name, {**info, "wall_s": round(times[name], 1)})
+                raise
+            times[name] = clock() - t0
+            if on_step:
+                on_step("finished", name, {**info, "wall_s": round(times[name], 1)})
+            return out
+
+        return run
+
+    return {name: wrap(name, fn) for name, fn in handlers.items()}
 
 
 @dataclass
@@ -93,10 +181,9 @@ def _must_steps(fws: Workspace, handlers: Mapping[str, Handler], fin: _Finalist)
     ]
     if cfg.run_phonons:
         steps.append(("phonons", {"candidate_id": cid, "mode": "full"}))
-    steps += [
-        ("energy_above_hull", {"candidate_id": cid}),
-        ("predict_property", {"candidate_id": cid, "property": fws.spec.target_property}),
-    ]
+    if cfg.run_hull:
+        steps.append(("energy_above_hull", {"candidate_id": cid}))
+    steps.append(("predict_property", {"candidate_id": cid, "property": fws.spec.target_property}))
     supercell = None
     for name, args in steps:
         out, err = _call(fws, handlers, name, args)
@@ -423,6 +510,8 @@ def validate_finalists(
     handlers: Mapping[str, Handler] | None = None,
     time_budget_s: float | None = None,
     clock: Callable[[], float] = time.monotonic,
+    on_step: StepHook | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[ValidationReport]:
     """Re-check the winner and the runner-up at higher fidelity (FC-1 to FC-7, FC-9).
 
@@ -436,17 +525,22 @@ def validate_finalists(
         Tool handlers; defaults to the registered ones.
     time_budget_s : float, optional
         Budget in s; defaults to ``ws.cfg.final_time_budget_s``. The winner's Must steps always
-        run; Should items run while time remains, then Could items (FC-9).
+        run; each optional item runs only if its estimated cost fits in what remains (FC-9).
     clock : callable
         Monotonic clock in s, injectable for tests.
+    on_step : callable, optional
+        Called before and after each tool call, for live progress.
+    should_stop : callable, optional
+        Returns True when the user asked the run to stop; optional items are then skipped.
 
     Returns
     -------
     list of ValidationReport
         Winner first, then the runner-up when it was checked.
     """
-    handlers = handlers if handlers is not None else load_default_handlers()
-    budget = ws.cfg.final_time_budget_s if time_budget_s is None else time_budget_s
+    times: dict[str, float] = {}
+    handlers = _timed(handlers if handlers is not None else load_default_handlers(), times, on_step, clock)
+    budget = budget_limit(ws.cfg.final_time_budget_s if time_budget_s is None else time_budget_s)
     start = clock()
     remaining = lambda: budget - (clock() - start)  # noqa: E731
     fws = ws.model_copy(deep=True)
@@ -472,13 +566,21 @@ def validate_finalists(
         """
         if not relaxed:
             skipped.append(f"{label}, as the final relaxation failed")
+        elif should_stop is not None and should_stop():
+            skipped.append(f"{label}, as the run was stopped")
         elif (left := remaining()) > 0 and left >= cost:
             run()
         else:
-            skipped.append(label)
+            skipped.append(f"{label} (needs about {cost:.0f} s, {max(left, 0):.0f} s left)")
 
     # Should items first, then Could items, so a short budget drops the Could items (FC-9).
-    optional("disorder spread (FC-4)", lambda: disorder_spread(fws, handlers, winner))
+    relax_s = times.get("relax", 0.0)
+    disordered = winner.cid in fws.candidates and is_disordered(fws.candidates[winner.cid])
+    optional(
+        "disorder spread (FC-4)",
+        lambda: disorder_spread(fws, handlers, winner),
+        cost=len(DISORDER_SEEDS) * relax_s if disordered else 0.0,
+    )
     finalists = [winner]
     rid = submission.runner_up_id
     if rid and rid in ws.candidates and rid != winner.cid:
@@ -490,10 +592,14 @@ def validate_finalists(
             finalists.append(runner_up)
 
         optional(f"runner-up {rid} (FC-6)", check_runner_up, cost=must_cost)
-    optional("MD (FC-5)", lambda: run_md(fws, handlers, winner))
+    optional("MD (FC-5)", lambda: run_md(fws, handlers, winner), cost=MD_COST_FACTOR * relax_s)
     second = ws.cfg.cross_check_potential
-    if second:
-        optional("second potential (FC-3)", lambda: cross_check(fws, handlers, winner, second))
+    if second and ws.cfg.run_hull:
+        optional(
+            "second potential (FC-3)",
+            lambda: cross_check(fws, handlers, winner, second),
+            cost=relax_s + times.get("energy_above_hull", 0.0),
+        )
 
     reports = []
     for fin in finalists:

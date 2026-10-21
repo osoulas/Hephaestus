@@ -24,7 +24,34 @@ from hephaestus.llm.base import Backend, CampaignHost, LLMError, Turn
 SERVER = "hephaestus"
 STREAM_CLOSE_TIMEOUT_MS = "300000"
 MAX_NUDGES = 3
+WATCH_S = 1.0  # how often the campaign session checks for a stop or a hard limit
 STRUCTURED_TIMEOUT_S = 600.0
+
+
+async def only_hephaestus_tools(name: str, args: dict[str, Any], context: Any) -> Any:
+    """Refuse any tool that is not one of ours, should the CLI offer one anyway (OR-11).
+
+    Parameters
+    ----------
+    name : str
+        Tool the model asked for.
+    args : dict
+        Its input.
+    context : ToolPermissionContext
+        Unused.
+
+    Returns
+    -------
+    PermissionResultAllow or PermissionResultDeny
+        Allow for ``mcp__hephaestus__*``; deny with a message otherwise.
+    """
+    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+
+    if name.startswith(f"mcp__{SERVER}__"):
+        return PermissionResultAllow()
+    return PermissionResultDeny(
+        message=f"{name} is not available in Hephaestus; use the Hephaestus tools only."
+    )
 
 
 class ClaudeCodeLLM:
@@ -114,8 +141,15 @@ class ClaudeCodeLLM:
             system_prompt=system,
             tools=[],
             setting_sources=[],
+            # The signed-in account's claude.ai connectors (Docs, Slack, ...) are not settings, so
+            # setting_sources=[] does not hide them: switch them off and use only our MCP server.
+            strict_mcp_config=True,
+            can_use_tool=only_hephaestus_tools,
             thinking={"type": "adaptive", "display": "summarized"},
-            env={"CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": STREAM_CLOSE_TIMEOUT_MS},
+            env={
+                "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": STREAM_CLOSE_TIMEOUT_MS,
+                "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+            },
             **kw,
         )
 
@@ -237,6 +271,7 @@ class ClaudeCodeLLM:
         result: Any = None
         async for msg in client.receive_response():
             if isinstance(msg, ResultMessage):
+                self.last_usage = {k: int(v) for k, v in (msg.usage or {}).items() if isinstance(v, int)}
                 if msg.is_error:
                     raise LLMError(f"Claude Code error: {msg.result or msg.subtype}")
                 result = msg.structured_output if msg.structured_output is not None else msg.result
@@ -297,11 +332,7 @@ class ClaudeCodeLLM:
             The campaign.
         """
         from claude_agent_sdk import (
-            AssistantMessage,
             ClaudeSDKClient,
-            ResultMessage,
-            TextBlock,
-            ThinkingBlock,
             create_sdk_mcp_server,
             tool,
         )
@@ -350,27 +381,55 @@ class ClaudeCodeLLM:
             mcp_servers={SERVER: server},
             allowed_tools=[f"mcp__{SERVER}__{t['name']}" for t in tools],
             effort="high",
-            max_turns=campaign.ws.cfg.max_tool_calls + 40,
+            max_turns=campaign.ws.cfg.max_tool_calls + 40 if campaign.ws.cfg.max_tool_calls else None,
         )
         async with ClaudeSDKClient(opts) as client:
-            prompt = kickoff
-            for _ in range(MAX_NUDGES + 1):
-                await client.query(prompt)
-                interrupted = False
-                async for msg in client.receive_response():
-                    if isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, ThinkingBlock):
-                                campaign.emit_agent("thinking", block.thinking)
-                            elif isinstance(block, TextBlock):
-                                campaign.emit_agent("text", block.text)
-                    elif isinstance(msg, ResultMessage):
-                        for k, v in (msg.usage or {}).items():
-                            if isinstance(v, int):
-                                campaign.usage[k] = campaign.usage.get(k, 0) + v
-                    if not interrupted and (campaign.ws.submitted or campaign.hard_limit_hit()):
-                        interrupted = True
-                        await client.interrupt()
-                if campaign.ws.submitted or campaign.hard_limit_hit():
-                    return
-                prompt = campaign.nudge()
+
+            async def watch() -> None:
+                """Interrupt the session as soon as the campaign must end, even mid-turn (OR-8)."""
+                while not (campaign.ws.submitted or campaign.hard_limit_hit()):
+                    await asyncio.sleep(WATCH_S)
+                with contextlib.suppress(Exception):
+                    await client.interrupt()
+
+            watcher = asyncio.create_task(watch())
+            try:
+                await self._converse(client, campaign, kickoff)
+            finally:
+                watcher.cancel()
+
+    async def _converse(self, client: Any, campaign: CampaignHost, kickoff: str) -> None:
+        """Send the kickoff, then nudges, until the campaign submits or must end.
+
+        Parameters
+        ----------
+        client : ClaudeSDKClient
+            Open session.
+        campaign : CampaignHost
+            The campaign.
+        kickoff : str
+            First message.
+        """
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ThinkingBlock
+
+        prompt = kickoff
+        for _ in range(MAX_NUDGES + 1):
+            await client.query(prompt)
+            interrupted = False
+            async for msg in client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, ThinkingBlock):
+                            campaign.emit_agent("thinking", block.thinking)
+                        elif isinstance(block, TextBlock):
+                            campaign.emit_agent("text", block.text)
+                elif isinstance(msg, ResultMessage):
+                    for k, v in (msg.usage or {}).items():
+                        if isinstance(v, int):
+                            campaign.usage[k] = campaign.usage.get(k, 0) + v
+                if not interrupted and (campaign.ws.submitted or campaign.hard_limit_hit()):
+                    interrupted = True
+                    await client.interrupt()
+            if campaign.ws.submitted or campaign.hard_limit_hit():
+                return
+            prompt = campaign.nudge()

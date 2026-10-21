@@ -77,12 +77,16 @@ class StabilityThresholds(Record):
 
     e_hull_max_eV_per_atom: float = 0.05
     phonon_min_THz: float = -0.1
+    # Which verdicts the gate requires; a check turned off for the run is not required
+    thermodynamic: bool = True
+    dynamic: bool = True
 
 
 class SearchSpec(Record):
     """Structured search specification produced by the goal parser (Section 1)."""
 
     raw_goal: str
+    title: str = ""  # short run title proposed by the parser, e.g. "Lead-free perovskite below SrTiO3's gap"
     material_family: str
     elements: list[str] = Field(default_factory=list)
     excluded_elements: list[str] = Field(default_factory=list)
@@ -243,8 +247,8 @@ class Critique(Record):
     candidate_id: str | None
     target_met_central: bool = False
     target_met_conservative: bool = False
-    thermo_stable: bool = False
-    dyn_stable: bool = False
+    thermo_stable: bool | None = False  # None: the check is turned off for the run
+    dyn_stable: bool | None = False
     score: int = 0
     score_breakdown: dict[str, int] = Field(default_factory=dict)
     findings: list[Finding] = Field(default_factory=list)

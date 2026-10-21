@@ -26,14 +26,56 @@ from hephaestus.core.types import (
 )
 from hephaestus.harness.agent import Campaign, NoveltyFn
 from hephaestus.harness.brief import assemble_brief
-from hephaestus.harness.goal import parse_goal, validate_spec
+from hephaestus.harness.brief_pdf import export_pdf
+from hephaestus.harness.compute_brief import assemble_compute_brief
+from hephaestus.harness.goal import apply_stability_options, parse_goal, validate_spec
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot, sync_state, write_artifacts
 from hephaestus.llm.base import LLM, LoggedLLM, make_llm
 from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
 
 FinalCheck = Callable[[Workspace, Submission], list[ValidationReport]]
+TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+
+
+class UsageMeter:
+    """Token totals for the run state: campaign turns plus parser, reviewer and brief calls."""
+
+    def __init__(self, state: RunState, *llms: LoggedLLM) -> None:
+        """Start from what the state already holds (a resumed run keeps its earlier tokens).
+
+        Parameters
+        ----------
+        state : RunState
+            Run state to update.
+        *llms : LoggedLLM
+            Wrappers whose structured calls count.
+        """
+        self.state = state
+        self.llms = llms
+        self.base = {k: int(state.usage.get(k, 0)) for k in TOKEN_KEYS}
+        self.campaign: dict[str, int] = {}
+
+    def update(self, campaign_usage: Mapping[str, int] | None = None) -> None:
+        """Write the current totals into ``state.usage``.
+
+        Parameters
+        ----------
+        campaign_usage : mapping, optional
+            The campaign's orchestrator usage so far; kept from the last call when omitted.
+        """
+        if campaign_usage is not None:
+            self.campaign = dict(campaign_usage)
+        for k in TOKEN_KEYS:
+            self.state.usage[k] = (
+                self.base[k]
+                + int(self.campaign.get(k, 0))
+                + sum(int(m.structured_usage.get(k, 0)) for m in self.llms)
+            )
+
+
 ACTIVE: dict[str, Campaign] = {}
 _STOPS: dict[str, threading.Event] = {}
+_ABORTS: dict[str, threading.Event] = {}  # "stop entirely": no final re-check, no brief
 _LOCK = threading.Lock()
 
 
@@ -67,13 +109,17 @@ def default_final_check() -> Callable[..., list[ValidationReport]] | None:
     return getattr(final_check, "validate_finalists", None)
 
 
-def request_stop(run_id: str) -> bool:
-    """Ask a running campaign to stop and submit (OR-8).
+def request_stop(run_id: str, mode: str = "campaign") -> bool:
+    """Stop a running run (OR-8).
 
     Parameters
     ----------
     run_id : str
         Run ID.
+    mode : {"campaign", "all"}
+        ``"campaign"``: end the search; the best candidate still gets the final re-check and the
+        brief. ``"all"``: end the run as soon as the current calculation returns, with no final
+        re-check and no brief; it can be resumed later.
 
     Returns
     -------
@@ -82,11 +128,14 @@ def request_stop(run_id: str) -> bool:
     """
     with _LOCK:
         ev = _STOPS.get(run_id)
+        abort = _ABORTS.get(run_id)
         camp = ACTIVE.get(run_id)
     if ev:
         ev.set()
+    if abort and mode == "all":
+        abort.set()
     if camp:
-        camp.request_stop()
+        camp.request_stop(abort=mode == "all")
     return bool(ev or camp)
 
 
@@ -330,13 +379,16 @@ def _drive(
     """
     rid = state.run_id
     stop = threading.Event()
+    abort = threading.Event()
     with _LOCK:
         if rid in _STOPS:
             raise RunRefused(f"Run {rid} is already running.")
         _STOPS[rid] = stop
+        _ABORTS[rid] = abort
     bus = deps.bus
     try:
         llm, reviewer = _models(state.config, deps, files)
+        meter = UsageMeter(state, llm, reviewer)
         bus.emit(
             rid,
             "run",
@@ -361,15 +413,19 @@ def _drive(
                 return state
         state.status = "running"
         if ws.submitted is None:
-            _campaign(state, files, ws, critiques, llm, reviewer, handlers, deps, stop, resume)
+            _campaign(state, files, ws, critiques, llm, reviewer, handlers, deps, stop, resume, meter)
         else:
             state.stop_reason = state.stop_reason or "submitted"
         sync_state(state, ws, [it.critique for it in state.iterations if it.critique])
         write_artifacts(files, state)
-        _final(state, files, ws, deps, bus, handlers)
-        _brief(state, files, ws, llm, bus)
-        state.status = "finished"
-        state.usage = {**state.usage, **llm.usage}
+        if not abort.is_set():
+            _final(state, files, ws, deps, bus, handlers, stop)
+        if not abort.is_set():
+            _brief(state, files, ws, llm, bus)
+        state.status = "stopped" if abort.is_set() else "finished"
+        if abort.is_set():
+            state.stop_reason = "user_abort"
+        meter.update()
         save_json(files.state, state)
         bus.emit(
             rid,
@@ -386,6 +442,7 @@ def _drive(
     finally:
         with _LOCK:
             _STOPS.pop(rid, None)
+            _ABORTS.pop(rid, None)
             ACTIVE.pop(rid, None)
 
 
@@ -456,6 +513,7 @@ def _workspace(state: RunState, files: RunFiles, resume: bool) -> tuple[Workspac
         _, ws, critiques = load_for_resume(files)
         return ws, critiques
     assert state.spec is not None
+    state.spec = apply_stability_options(state.spec, state.config)
     return Workspace(run_id=state.run_id, spec=state.spec, cfg=state.config), []
 
 
@@ -470,6 +528,7 @@ def _campaign(
     deps: Deps,
     stop: threading.Event,
     resume: bool,
+    meter: UsageMeter | None = None,
 ) -> None:
     """Run the agent campaign and record its outcome.
 
@@ -493,6 +552,8 @@ def _campaign(
         Set by ``request_stop``.
     resume : bool
         Whether this resumes.
+    meter : UsageMeter, optional
+        Keeps ``state.usage`` token totals current.
     """
     offset = float(state.usage.get("campaign_s", 0))
 
@@ -506,6 +567,8 @@ def _campaign(
         """
         llm.iteration = reviewer.iteration = c.ws.round
         state.usage["campaign_s"] = int(c.elapsed_s)
+        if meter:
+            meter.update(c.usage)
         state.errors = [*base_errors, *c.errors]
         save_snapshot(files, state, c.ws, c.critiques)
         if c.critiques and len(c.critiques) != n_written[0]:
@@ -534,6 +597,8 @@ def _campaign(
     state.stop_reason = camp.stop_rule
     state.errors = [*base_errors, *camp.errors]
     state.usage["campaign_s"] = int(camp.elapsed_s)
+    if meter:
+        meter.update(camp.usage)
     save_snapshot(files, state, ws, camp.critiques)
     if sub is None:
         state.errors.append(
@@ -548,6 +613,7 @@ def _final(
     deps: Deps,
     bus: EventBus,
     handlers: Mapping[str, Handler],
+    stop: threading.Event | None = None,
 ) -> None:
     """Run the higher-fidelity re-check of the finalists (Section 9); failures degrade the run.
 
@@ -565,12 +631,31 @@ def _final(
         Events.
     handlers : mapping
         The run's tool handlers, used by the default final check.
+    stop : threading.Event, optional
+        Set by ``request_stop``; the default final check then skips its optional items.
     """
     if not ws.cfg.run_final or ws.submitted is None or state.validation:
         return
     fn = deps.final_check
     if fn is None and (default := default_final_check()) is not None:
-        fn = lambda w, sub: default(w, sub, handlers=handlers)  # noqa: E731
+
+        def on_step(status: str, tool: str, info: dict[str, Any]) -> None:
+            """Publish one final-check tool call (``final_step`` events, for live progress).
+
+            Parameters
+            ----------
+            status : {"started", "finished", "failed"}
+                Step status.
+            tool : str
+                Tool name.
+            info : dict
+                ``candidate_id``, ``potential``, ``mode`` and, at the end, ``wall_s``.
+            """
+            bus.emit(state.run_id, "final_step", status, {"tool": tool, **info})  # type: ignore[arg-type]
+
+        fn = lambda w, sub: default(  # noqa: E731
+            w, sub, handlers=handlers, on_step=on_step, should_stop=stop.is_set if stop else None
+        )
     if fn is None:
         state.errors.append(
             ErrorRecord(step="final_calculation", code="unavailable", message="Final check not implemented.")
@@ -624,8 +709,48 @@ def _brief(state: RunState, files: RunFiles, ws: Workspace, llm: LLM, bus: Event
     bus.emit(state.run_id, "brief_generator", "started", {})
     brief, errors = assemble_brief(state, ws, llm)
     state.errors += errors
-    state.brief = brief
     atomic_write_text(files.brief_md, brief.markdown)
+    try:  # a failed PDF degrades the run; the Markdown brief stands (EB-10)
+        brief.pdf_path = str(export_pdf(brief.markdown, files.brief_pdf, state.run_id, state.raw_goal))
+    except Exception as exc:
+        state.errors.append(ErrorRecord(step="brief_pdf", code="export_failed", message=str(exc)[:300]))
+    state.brief = brief
+    compute = write_compute_brief(state, ws, files)
     bus.emit(
-        state.run_id, "brief_generator", "finished", {"pdf": brief.pdf_path, "cited": brief.cited_paper_ids}
+        state.run_id,
+        "brief_generator",
+        "finished",
+        {"pdf": brief.pdf_path, "cited": brief.cited_paper_ids, "compute": compute},
     )
+
+
+def write_compute_brief(state: RunState, ws: Workspace, files: RunFiles) -> bool:
+    """Write the computational brief and its PDF; a failure degrades the run (Section 10).
+
+    Parameters
+    ----------
+    state : RunState
+        Run state with the submission; errors are added to it.
+    ws : Workspace
+        Workspace.
+    files : RunFiles
+        Run paths.
+
+    Returns
+    -------
+    bool
+        True when the Markdown was written.
+    """
+    try:
+        md = assemble_compute_brief(state, ws).markdown
+        atomic_write_text(files.compute_brief_md, md)
+    except Exception as exc:
+        state.errors.append(ErrorRecord(step="compute_brief", code="failed", message=str(exc)[:300]))
+        return False
+    try:
+        export_pdf(md, files.compute_brief_pdf, state.run_id, state.raw_goal)
+    except Exception as exc:
+        state.errors.append(
+            ErrorRecord(step="compute_brief_pdf", code="export_failed", message=str(exc)[:300])
+        )
+    return True

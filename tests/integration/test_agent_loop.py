@@ -93,12 +93,78 @@ def test_or3_code_picks_best_without_submission(tmp_path: Path) -> None:
     assert sub.runner_up_id == "c1-2"
 
 
-def test_or8_user_stop_tells_orchestrator_to_submit(tmp_path: Path) -> None:
-    """After a user stop, the next tool result says to submit, and a failing gate is accepted."""
-    camp, _ = campaign(tmp_path, [*scripts.ROUND_1[:3], [scripts.submit("c1-2")]], [])
-    camp.request_stop()
+def stop_then(camp: list, turn: list, abort: bool = False):  # type: ignore[no-untyped-def]
+    """Return a scripted turn that stops the campaign, then answers with ``turn``.
+
+    Parameters
+    ----------
+    camp : list
+        One-element list holding the campaign, filled in once it exists.
+    turn : list
+        The orchestrator's answer after the stop.
+    abort : bool
+        Stop everything rather than just the search.
+
+    Returns
+    -------
+    callable
+        A scripted turn.
+    """
+
+    def f(messages: list) -> list:
+        """Stop, then answer.
+
+        Parameters
+        ----------
+        messages : list
+            Ignored.
+
+        Returns
+        -------
+        list
+            ``turn``.
+        """
+        camp[0].request_stop(abort=abort)
+        return turn
+
+    return f
+
+
+def test_or8_user_stop_refuses_calculations_and_accepts_submission(tmp_path: Path) -> None:
+    """After a stop, a new calculation is refused and a failing submission is accepted."""
+    holder: list = []
+    relax = {"tool": "relax", "input": {"candidate_id": "c1-1", "potential": "mace-mp-0-small", "fmax": 0.02}}
+    turns = [*scripts.ROUND_1[:3], stop_then(holder, [relax]), [scripts.submit("c1-2")]]
+    camp, _ = campaign(tmp_path, turns, [])
+    holder.append(camp)
+    before_stop = sum("tool" in step for turn in scripts.ROUND_1[:3] for step in turn)
     sub = camp.run()
-    assert sub is not None and sub.candidate_id == "c1-2" and camp.stop_rule == "user_stop"
+    assert sub is not None and sub.candidate_id == "c1-2" and sub.picked_by == "orchestrator"
+    assert camp.stop_rule == "user_stop"
+    assert camp.ws.tool_calls == before_stop + 1  # the refused relax never ran; the submission did
+    result, is_error = camp.call_tool(relax["tool"], relax["input"])
+    assert is_error and "submission was already accepted" in result["error"]
+
+
+def test_or8_ignored_stop_ends_with_a_code_pick(tmp_path: Path) -> None:
+    """An orchestrator that keeps calculating after a stop is cut off; code picks the answer."""
+    holder: list = []
+    relax = {"tool": "relax", "input": {"candidate_id": "c1-1", "potential": "mace-mp-0-small", "fmax": 0.02}}
+    turns = [*scripts.ROUND_1[:3], stop_then(holder, [relax]), [relax], [relax], [relax]]
+    camp, _ = campaign(tmp_path, turns, [])
+    holder.append(camp)
+    sub = camp.run()
+    assert sub is not None and sub.picked_by == "code" and camp.hard_limit_hit()
+
+
+def test_or8_abort_ends_the_campaign_at_once(tmp_path: Path) -> None:
+    """Stopping everything ends the campaign without waiting for a submission."""
+    holder: list = []
+    turns = [*scripts.ROUND_1[:3], stop_then(holder, [scripts.submit("c1-2")], abort=True)]
+    camp, _ = campaign(tmp_path, turns, [])
+    holder.append(camp)
+    sub = camp.run()
+    assert sub is not None and sub.picked_by == "code"
 
 
 def test_or2_max_rounds_with_reviewer_down(tmp_path: Path) -> None:

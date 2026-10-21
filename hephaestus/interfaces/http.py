@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Str
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from hephaestus.core import valency_auth
+from hephaestus.core import credentials, valency_auth
 from hephaestus.core.config import RunConfig
 from hephaestus.core.types import RunState, SearchSpec
 from hephaestus.harness import runner
@@ -34,12 +34,49 @@ from hephaestus.interfaces.python import (
     device_status,
     list_runs,
     models,
+    run_blockers,
+    simulation_status,
 )
+from hephaestus.llm.auth import (
+    ClaudeLogin,
+    api_key_status,
+    check_api_key,
+    forget_api_key,
+    load_api_key,
+    save_api_key,
+)
+from hephaestus.tools.materials_project import check_mp_key
 
 WEB_DIR = Path(__file__).parent / "web"
 STATUS_TTL_S = 60.0
 
 DepsFactory = Callable[[], runner.Deps]
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    """Static files the browser must revalidate on every load.
+
+    The UI is plain ES modules: a browser that keeps an old module beside a new one that imports
+    from it fails to start, leaving a blank page. ``no-cache`` still lets it reuse a file whose
+    ETag has not changed, so offline replays stay fast.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Any:
+        """Serve a file with ``Cache-Control: no-cache``.
+
+        Parameters
+        ----------
+        *args, **kwargs
+            Passed to ``StaticFiles.file_response``.
+
+        Returns
+        -------
+        starlette.responses.Response
+            The file response.
+        """
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 class ParseRequest(BaseModel):
@@ -52,7 +89,11 @@ class ParseRequest(BaseModel):
     llm_backend: str | None = None
     llm_model: str | None = None
     require_novel: bool | None = None
-    band_gap_fidelity: str | None = None
+    band_gap_model: str | None = None
+    band_gap_fidelity: str | None = None  # older clients; mapped to band_gap_model
+    run_hull: bool | None = None
+    e_hull_max_eV_per_atom: float | None = None
+    run_phonons: bool | None = None
 
 
 class RunRequest(BaseModel):
@@ -64,6 +105,30 @@ class RunRequest(BaseModel):
     config: RunConfig = Field(default_factory=RunConfig)
     raw_goal: str = ""
     answers: dict[str, str] | None = None
+
+
+class CodeRequest(BaseModel):
+    """Body of ``POST /auth/claude/code``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+
+
+class ApiKeyRequest(BaseModel):
+    """Body of ``POST /auth/anthropic``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str
+
+
+class TitleRequest(BaseModel):
+    """Body of ``PATCH /runs/{run_id}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
 
 
 class ReplayRequest(BaseModel):
@@ -141,7 +206,12 @@ def sse(events: Iterator[Any]) -> Iterator[str]:
 
 
 def create_app(
-    root: Path | None = None, deps_factory: DepsFactory | None = None, check_backends: bool | None = None
+    root: Path | None = None,
+    deps_factory: DepsFactory | None = None,
+    check_backends: bool | None = None,
+    claude_login: ClaudeLogin | None = None,
+    key_check: Callable[[str], str | None] | None = check_api_key,
+    mp_check: Callable[[str], str | None] | None = check_mp_key,
 ) -> FastAPI:
     """Build the API (tests pass a runs folder and scripted dependencies).
 
@@ -154,6 +224,12 @@ def create_app(
     check_backends : bool, optional
         Refuse runs on a backend that is not ready (503). Defaults to True unless
         ``deps_factory`` is given.
+    claude_login : ClaudeLogin, optional
+        Claude Code sign-in runner (tests inject a fake CLI).
+    key_check : callable or None
+        Checks an Anthropic API key before saving; ``None`` skips the check (tests).
+    mp_check : callable or None
+        Checks a Materials Project key before saving; ``None`` skips the check (tests).
 
     Returns
     -------
@@ -164,6 +240,11 @@ def create_app(
     experiments: dict[str, Experiment] = {}
     lock = threading.Lock()
     status = StatusCache()
+    load_api_key()  # keys saved from the UI earlier
+    credentials.load_secret("materials_project")
+    login = claude_login or ClaudeLogin()
+    if login.on_done is None:
+        login.on_done = status.invalidate
     check = deps_factory is None if check_backends is None else check_backends
 
     def make_deps() -> runner.Deps:
@@ -195,6 +276,20 @@ def create_app(
         ok, error = backend_ready(backend, st)
         if not ok:
             raise HTTPException(503, f"LLM backend {backend!r} is not ready: {error}")
+
+    def require_runnable() -> None:
+        """Answer 503 when no run could get past its first step (no MACE, no MP key).
+
+        Raises
+        ------
+        fastapi.HTTPException
+            503 listing what is missing and how to fix it.
+        """
+        if not check:
+            return
+        blockers = run_blockers(simulation_status())
+        if blockers:
+            raise HTTPException(503, " ".join(blockers))
 
     def get_experiment(run_id: str) -> Experiment:
         """Return the live ``Experiment`` for a run, or the stored run.
@@ -245,7 +340,8 @@ def create_app(
         Returns
         -------
         dict
-            ``{ok, backends, device, valency, running}``; ``backends`` is ``None`` until checked.
+            ``{ok, backends, device, simulation, valency, running}``; ``backends`` is ``None`` until
+            checked, and ``simulation.blockers`` lists what stops any run.
         """
         st = status.get() or {}
         try:
@@ -258,6 +354,7 @@ def create_app(
             "ok": True,
             "backends": st.get("backends"),
             "device": st.get("device"),
+            "simulation": {**simulation_status(), "blockers": run_blockers()},
             "valency": valency,
             "running": running,
         }
@@ -283,6 +380,17 @@ def create_app(
             ``RunConfig().model_dump()``.
         """
         return RunConfig().model_dump(mode="json")
+
+    @app.get("/config/schema")
+    def config_schema() -> dict[str, Any]:
+        """JSON schema of ``RunConfig``, so the UI can offer every option (OR-4).
+
+        Returns
+        -------
+        dict
+            ``RunConfig.model_json_schema()``.
+        """
+        return RunConfig.model_json_schema()
 
     # ------------------------------------------------------------------ parse and runs
 
@@ -326,6 +434,7 @@ def create_app(
         if req.spec is None and not req.raw_goal.strip():
             raise HTTPException(422, "Give a spec or a raw_goal.")
         require_ready(req.config.llm_backend)
+        require_runnable()
         refuse_if_busy()
         exp = Experiment(
             req.raw_goal, req.config, spec=req.spec, answers=req.answers, root=root, deps=make_deps()
@@ -365,7 +474,42 @@ def create_app(
             state = RunState(run_id=run_id, raw_goal=exp.goal, config=exp.config, status="created")
         else:
             state = exp.state
-        return {**state.model_dump(mode="json"), "running": exp.running}
+        out = {
+            **state.model_dump(mode="json"),
+            "running": exp.running,
+            "title": exp.title if exp.exists else "",
+        }
+        if exp.replay_control is not None:
+            ctl = exp.replay_control
+            out["replay"] = {
+                "source": ctl["source"],
+                "total_events": ctl["total_events"],
+                "speed": ctl["speed"],
+            }
+        return out
+
+    @app.patch("/runs/{run_id}")
+    def rename_run(run_id: str, req: TitleRequest) -> dict[str, Any]:
+        """Rename a run, also while it runs.
+
+        Parameters
+        ----------
+        run_id : str
+            Run ID.
+        req : TitleRequest
+            New title.
+
+        Returns
+        -------
+        dict
+            ``{run_id, title}``; 422 for an empty or over-long title, 409 for a replay.
+        """
+        exp = get_experiment(run_id)
+        try:
+            return {"run_id": run_id, "title": exp.set_title(req.title)}
+        except ExperimentError as exc:
+            code = 409 if "replay" in str(exc) else 404 if str(exc).startswith("No run") else 422
+            raise HTTPException(code, str(exc)) from exc
 
     @app.get("/runs/{run_id}/events")
     def events(run_id: str, history: bool = True) -> StreamingResponse:
@@ -412,8 +556,12 @@ def create_app(
         return cif
 
     @app.get("/runs/{run_id}/brief", response_model=None)
-    def brief(run_id: str, format: str = Query("md", pattern="^(md|pdf)$")) -> Any:
-        """Return the brief as Markdown or PDF (UI-8).
+    def brief(
+        run_id: str,
+        format: str = Query("md", pattern="^(md|pdf)$"),
+        kind: str = Query("lab", pattern="^(lab|compute)$"),
+    ) -> Any:
+        """Return the lab or computational brief as Markdown or PDF (UI-8).
 
         Parameters
         ----------
@@ -421,6 +569,8 @@ def create_app(
             Run ID.
         format : {"md", "pdf"}
             File type.
+        kind : {"lab", "compute"}
+            The lab brief, or the computational brief (DFT settings and workflow).
 
         Returns
         -------
@@ -428,35 +578,45 @@ def create_app(
             ``text/markdown`` or ``application/pdf``.
         """
         exp = get_experiment(run_id)
+        name = f"{run_id}_{'compute_' if kind == 'compute' else ''}brief"
         if format == "pdf":
-            pdf = exp.brief_pdf
+            try:
+                pdf = exp.compute_brief_pdf if kind == "compute" else exp.brief_pdf
+            except Exception as exc:
+                raise HTTPException(500, f"Could not render the PDF: {exc}") from exc
             if pdf is None:
                 raise HTTPException(404, f"Run {run_id} has no PDF brief.")
-            return FileResponse(pdf, media_type="application/pdf", filename=f"{run_id}_brief.pdf")
-        md = exp.brief
+            return FileResponse(pdf, media_type="application/pdf", filename=f"{name}.pdf")
+        try:
+            md = exp.compute_brief if kind == "compute" else exp.brief
+        except Exception as exc:
+            raise HTTPException(500, f"Could not build the brief: {exc}") from exc
         if md is None:
             raise HTTPException(404, f"Run {run_id} has no brief yet.")
         return PlainTextResponse(
             md,
             media_type="text/markdown; charset=utf-8",
-            headers={"Content-Disposition": f'inline; filename="{run_id}_brief.md"'},
+            headers={"Content-Disposition": f'inline; filename="{name}.md"'},
         )
 
     @app.post("/runs/{run_id}/stop")
-    def stop(run_id: str) -> dict[str, Any]:
-        """Ask a run to stop and submit; it still ends with a brief (OR-8, UI-10).
+    def stop(run_id: str, mode: str = Query("campaign", pattern="^(campaign|all)$")) -> dict[str, Any]:
+        """Stop a run (OR-8, UI-10).
 
         Parameters
         ----------
         run_id : str
             Run ID.
+        mode : {"campaign", "all"}
+            ``campaign`` ends the search and still runs the final re-check and the brief; ``all``
+            ends the run after the current calculation, with neither.
 
         Returns
         -------
         dict
-            ``{stopping}``: False when the run is not executing here.
+            ``{stopping, mode}``: ``stopping`` is False when the run is not executing here.
         """
-        return {"stopping": get_experiment(run_id).stop()}
+        return {"stopping": get_experiment(run_id).stop(mode), "mode": mode}
 
     @app.post("/runs/{run_id}/resume")
     def resume(run_id: str) -> dict[str, Any]:
@@ -474,6 +634,7 @@ def create_app(
         """
         exp = get_experiment(run_id)
         require_ready(exp.config.llm_backend)
+        require_runnable()
         refuse_if_busy()
         try:
             exp.start(resume=True)
@@ -506,7 +667,51 @@ def create_app(
             raise HTTPException(404, str(exc)) from exc
         with lock:
             experiments[handle.run_id] = handle
-        return {"replay_id": handle.run_id}
+        return {"replay_id": handle.run_id, "total_events": handle.replay_control["total_events"]}
+
+    @app.post("/replay/{replay_id}/resume")
+    def replay_resume(replay_id: str) -> dict[str, Any]:
+        """Continue a stopped replay where it ended (UI-9).
+
+        Parameters
+        ----------
+        replay_id : str
+            Replay ID.
+
+        Returns
+        -------
+        dict
+            ``{replay_id, resumed_at}``; reconnect to ``/runs/{replay_id}/events``.
+        """
+        exp = get_experiment(replay_id)
+        try:
+            start = exp.resume_replay()
+        except ExperimentError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"replay_id": replay_id, "resumed_at": start}
+
+    @app.post("/replay/{replay_id}/speed")
+    def replay_speed(replay_id: str, req: ReplayRequest) -> dict[str, Any]:
+        """Change a running replay's speed (UI-9).
+
+        Parameters
+        ----------
+        replay_id : str
+            Replay ID.
+        req : ReplayRequest
+            New speed; 0 plays the rest with no pauses.
+
+        Returns
+        -------
+        dict
+            ``{replay_id, speed}``.
+        """
+        exp = get_experiment(replay_id)
+        try:
+            exp.set_replay_speed(req.speed)
+        except ExperimentError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"replay_id": replay_id, "speed": req.speed}
 
     # ------------------------------------------------------------------ sign-in
 
@@ -528,41 +733,174 @@ def create_app(
 
     @app.get("/auth/claude")
     def auth_claude() -> dict[str, Any]:
-        """Claude Code sign-in state, from the cached readiness check (UI-12).
+        """Claude Code sign-in: the running sign-in's progress, else the cached readiness (UI-12).
 
         Returns
         -------
         dict
-            ``{status, signed_in, error, url}``; ``status`` is ``checking`` until the first check ends.
+            ``{status, signed_in, url, code_prompt, error}``. ``status`` is ``checking`` until the
+            first readiness check ends, then ``signed_in`` or ``signed_out``, or the running
+            sign-in's ``starting``, ``waiting``, ``verifying``, ``failed`` or ``cancelled``.
         """
+        flow = login.state()
         st = (status.get() or {}).get("backends")
-        if st is None:
-            return {"status": "checking", "signed_in": False, "error": None, "url": None}
-        cc = st["claude-code"]
+        cc = (st or {}).get("claude-code") or {}
+        signed_in = bool(cc.get("ready")) or flow["status"] == "signed_in"
+        if flow["status"] in ("starting", "waiting", "verifying", "failed", "cancelled"):
+            return {**flow, "signed_in": signed_in}
+        if st is None and flow["status"] != "signed_in":
+            return {
+                "status": "checking",
+                "signed_in": False,
+                "url": None,
+                "code_prompt": False,
+                "error": None,
+            }
         return {
-            "status": "signed_in" if cc["ready"] else "signed_out",
-            "signed_in": bool(cc["ready"]),
-            "error": cc["error"],
+            "status": "signed_in" if signed_in else "signed_out",
+            "signed_in": signed_in,
             "url": None,
+            "code_prompt": False,
+            "error": None if signed_in else cc.get("error"),
         }
 
     @app.post("/auth/claude/start")
-    @app.post("/auth/claude/code")
-    @app.post("/auth/claude/cancel")
-    def auth_claude_flow() -> dict[str, Any]:
-        """Browser sign-in to Claude Code from the UI: not built yet (UI-12).
+    def auth_claude_start() -> dict[str, Any]:
+        """Start ``claude auth login --claudeai``; the CLI opens the Claude sign-in page (UI-12).
 
-        Raises
-        ------
-        fastapi.HTTPException
-            501; sign in with ``python -m hephaestus login`` meanwhile.
+        Returns
+        -------
+        dict
+            Sign-in state; ``url`` is the fallback page once the CLI prints it.
         """
-        raise HTTPException(501, "Sign in from a terminal: python -m hephaestus login")
+        return {**login.start(), "signed_in": False}
+
+    @app.post("/auth/claude/code")
+    def auth_claude_code(req: CodeRequest) -> dict[str, Any]:
+        """Pass the code shown on the fallback sign-in page to the CLI.
+
+        Parameters
+        ----------
+        req : CodeRequest
+            The code.
+
+        Returns
+        -------
+        dict
+            Sign-in state.
+        """
+        try:
+            return {**login.submit_code(req.code), "signed_in": False}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/auth/claude/cancel")
+    def auth_claude_cancel() -> dict[str, Any]:
+        """Stop a running sign-in.
+
+        Returns
+        -------
+        dict
+            Sign-in state.
+        """
+        return {**login.cancel(), "signed_in": False}
+
+    @app.get("/auth/anthropic")
+    def auth_anthropic() -> dict[str, Any]:
+        """Whether an Anthropic API key is available; never returns the key (OR-11).
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}``.
+        """
+        return api_key_status()
+
+    @app.post("/auth/anthropic")
+    def auth_anthropic_save(req: ApiKeyRequest) -> dict[str, Any]:
+        """Check and save an API key owner-only in ``~/.hephaestus/`` (DL-7).
+
+        Parameters
+        ----------
+        req : ApiKeyRequest
+            The key.
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}``; 422 when the key is malformed or rejected.
+        """
+        try:
+            out = save_api_key(req.api_key, check=key_check)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        status.invalidate()
+        return out
+
+    @app.delete("/auth/anthropic")
+    def auth_anthropic_forget() -> dict[str, Any]:
+        """Delete the saved API key.
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}`` afterwards (a key set in the environment stays).
+        """
+        out = forget_api_key()
+        status.invalidate()
+        return out
+
+    @app.get("/auth/materials-project")
+    def auth_mp() -> dict[str, Any]:
+        """Whether a Materials Project API key is available; never returns the key.
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}``.
+        """
+        return credentials.secret_status("materials_project")
+
+    @app.post("/auth/materials-project")
+    def auth_mp_save(req: ApiKeyRequest) -> dict[str, Any]:
+        """Check and save a Materials Project API key owner-only in ``~/.hephaestus/`` (DL-7).
+
+        Parameters
+        ----------
+        req : ApiKeyRequest
+            The key.
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}``; 422 when the key is malformed or rejected.
+        """
+        key = req.api_key.strip()
+        if not key.isalnum() or len(key) < 16:
+            raise HTTPException(
+                422, "That does not look like a Materials Project API key (32 letters and digits)."
+            )
+        if mp_check is not None and (reason := mp_check(key)):
+            raise HTTPException(422, reason)
+        credentials.write_secret("materials_project", key)
+        return credentials.secret_status("materials_project")
+
+    @app.delete("/auth/materials-project")
+    def auth_mp_forget() -> dict[str, Any]:
+        """Delete the saved Materials Project key.
+
+        Returns
+        -------
+        dict
+            ``{present, source, hint}`` afterwards.
+        """
+        credentials.delete_secret("materials_project")
+        return credentials.secret_status("materials_project")
 
     # ------------------------------------------------------------------ static UI
 
     if (WEB_DIR / "index.html").exists():
-        app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+        app.mount("/", RevalidatedStaticFiles(directory=WEB_DIR, html=True), name="web")
     else:
 
         @app.get("/", response_class=HTMLResponse)
