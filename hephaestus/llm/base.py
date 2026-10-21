@@ -232,6 +232,21 @@ class LoggedLLM:
         self.section = "orchestrator"
         self.iteration: int | None = None
 
+    def __getattr__(self, name: str) -> Any:
+        """Delegate anything else (e.g. ``run_campaign``, ``close``) to the wrapped backend.
+
+        Parameters
+        ----------
+        name : str
+            Attribute name.
+
+        Returns
+        -------
+        Any
+            The wrapped backend's attribute.
+        """
+        return getattr(self.inner, name)
+
     def _log(self, section: str, request: Any, response: Any, usage: dict[str, int], t0: float) -> None:
         """Append one call to the log and add its usage to the totals.
 
