@@ -880,7 +880,7 @@ export function mountRun(root, id, tab, hooks) {
         return h(
           "div.log-entry",
           null,
-          h("div.log-icon.review", null, icon("gate")),
+          h("div.log-icon.decision", null, icon("gate")),
           h(
             "div.log-main",
             null,
@@ -900,7 +900,7 @@ export function mountRun(root, id, tab, hooks) {
         return h(
           "div.log-entry",
           null,
-          h("div.log-icon.review", null, icon("star")),
+          h("div.log-icon.decision", null, icon("star")),
           h(
             "div.log-main",
             null,
@@ -979,7 +979,7 @@ export function mountRun(root, id, tab, hooks) {
 
   function toolEntry(e, key, open, time) {
     const c = e.call;
-    const kind = c.error ? "error" : { lit: "lit", db: "lit", sim: "sim", review: "review" }[toolKind(c.tool)] || "";
+    const kind = c.error ? "error" : { lit: "lit", db: "lit", sim: "sim", review: "decision" }[toolKind(c.tool)] || "";
     const ic = { lit: "book", db: "database", sim: c.tool === "phonons" ? "wave" : c.tool === "predict_property" ? "gauge" : c.tool === "build_structure" ? "cube" : "atom", review: "gate", candidate: "flask", control: c.tool === "submit_final" ? "star" : "info" }[toolKind(c.tool)];
     const dur = c.finished ? (new Date(c.finished) - new Date(c.started)) / 1000 : null;
     const statusEl = c.status === "started" ? h("span.spinner") : c.error ? h("span.check.bad", null, icon("x")) : null;
