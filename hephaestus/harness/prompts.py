@@ -1,4 +1,1 @@
-"""Every system prompt, in one place.
-
-Owner: A.
-"""
+"""Every system prompt, in one place."""
