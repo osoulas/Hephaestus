@@ -6,23 +6,39 @@ import { stripCodes } from "./dom.js";
 const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
- * Inline formatting on escaped text.
+ * Subscript the amounts in chemical formulas: "Y2AlCrO6" -> Y<sub>2</sub>AlCrO<sub>6</sub>.
+ * Only tokens of two or more element symbols with at least one amount count, so "XRD", "P2_1/c"
+ * and "Al3+" are left alone.
+ * @param {string} t Escaped text.
+ * @returns {string} HTML.
+ */
+function formulas(t) {
+  return t.replace(/\b(?:[A-Z][a-z]?(?:\d+(?:\.\d+)?)?){2,}\b/g, (f) =>
+    /\d/.test(f) && (f.match(/[A-Z]/g) || []).length >= 2 ? f.replace(/(\d+(?:\.\d+)?)/g, "<sub>$1</sub>") : f,
+  );
+}
+
+/**
+ * Inline formatting on escaped text: code, links, citations, formulas and emphasis.
  * @param {string} t Escaped text.
  * @returns {string} HTML.
  */
 function inline(t) {
-  const codes = [];
-  t = t.replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
-  t = t
-    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, txt, url) => {
-      const safe = /^(https?:|#|\/|mailto:)/i.test(url) ? url : "#";
-      const ext = /^https?:/i.test(safe) ? ' target="_blank" rel="noopener"' : "";
-      return `<a href="${safe}"${ext}>${txt}</a>`;
-    })
+  const kept = [];
+  const keep = (html) => `\u0000${kept.push(html) - 1}\u0000`;
+  t = t.replace(/`([^`]+)`/g, (_, c) => keep(`<code>${c}</code>`));
+  // Links; the text may hold one level of brackets, as citations do: [[4]](url).
+  t = t.replace(/\[((?:[^[\]]|\[[^[\]]*\])+)\]\(([^)\s]+)\)/g, (_, txt, url) => {
+    const safe = /^(https?:|#|\/|mailto:)/i.test(url) ? url : "#";
+    const ext = /^https?:/i.test(safe) ? ' target="_blank" rel="noopener"' : "";
+    const n = txt.match(/^\[?(\d+)\]?$/);
+    return keep(n ? `<a class="cite" href="${safe}"${ext}>[${n[1]}]</a>` : `<a href="${safe}"${ext}>${formulas(txt)}</a>`);
+  });
+  t = formulas(t)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
     .replace(/(^|\W)_([^_\s][^_]*)_(?=\W|$)/g, "$1<em>$2</em>");
-  return t.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+  return t.replace(/\u0000(\d+)\u0000/g, (_, i) => kept[i]);
 }
 
 /**

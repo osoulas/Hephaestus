@@ -499,7 +499,7 @@ The Experimental Brief Generator writes the document a researcher takes to the l
 | EB-1 | Contain every part listed above, in that order. | Must | Template check passes. |
 | EB-2 | Take every number from the run state; the LLM writes prose only. | Must | Each number in the brief matches a stored value. |
 | EB-3 | Show predicted properties as a table: property, predicted value ± uncertainty, target, met or not. | Must | Table present with all four columns. |
-| EB-4 | Base the synthesis route on literature synthesis insights for the same or closest composition, citing them. | Must | Each synthesis step names its source paper or says "inferred". |
+| EB-4 | Base the synthesis route on literature synthesis insights for the same or closest composition, citing them; for a compound never made, follow the closest analogues and say which. Lab conditions (temperatures, times, atmospheres) come from cited evidence or abstracts, or are marked "inferred"; computed results still come only from the run state (EB-2). | Must | Each synthesis step names its source paper or says "inferred". |
 | EB-5 | Order the characterisation plan by what most quickly confirms or kills the candidate (e.g. XRD for phase first). | Must | First step tests phase identity. |
 | EB-6 | List risks with severity and a concrete fallback for each critical one. | Must | Every critical risk has a fallback. |
 | EB-7 | Link each cited paper to its Valency record. | Must | All citations resolve. |
