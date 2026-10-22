@@ -835,28 +835,38 @@ function mountComposer(root) {
   }
 
   // The status refresh redraws the composer, which would rebuild a field the user is typing in and
-  // drop the cursor. While a field has focus, hold the redraw until focus leaves the composer's fields.
+  // drop the cursor, or replace a button between press and release so the click is lost. Hold the
+  // redraw while a field has focus or a pointer is down, and run it once both are over.
   let heldDraw = false;
+  let pointerDown = false;
   const typing = () => {
     const el = document.activeElement;
     return Boolean(el && view.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
   };
-  view.addEventListener("focusout", () => {
-    if (!heldDraw) return;
-    setTimeout(() => {
-      if (heldDraw && !typing() && !st.busy) {
-        heldDraw = false;
-        draw();
-      }
-    }, 0);
-  });
+  const flush = () => {
+    if (heldDraw && !typing() && !pointerDown && !st.busy) {
+      heldDraw = false;
+      draw();
+    }
+  };
+  view.addEventListener("pointerdown", () => (pointerDown = true), true);
+  const onPointerUp = () => {
+    pointerDown = false;
+    setTimeout(flush, 0); // after the click that follows this pointerup
+  };
+  window.addEventListener("pointerup", onPointerUp, true);
+  window.addEventListener("pointercancel", onPointerUp, true);
+  view.addEventListener("focusout", () => setTimeout(flush, 0));
 
   draw();
   return {
-    unmount() {},
+    unmount() {
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+    },
     onHealth() {
       if (st.busy) return;
-      if (typing()) heldDraw = true;
+      if (typing() || pointerDown) heldDraw = true;
       else draw();
     },
   };
