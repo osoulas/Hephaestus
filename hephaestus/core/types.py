@@ -33,6 +33,7 @@ RunStatus = Literal[
     "finished",
     "failed",
     "stopped",
+    "paused",  # Claude usage limit reached: resume when the limit resets
 ]
 
 
@@ -440,6 +441,7 @@ class RunState(Record):
     errors: list[ErrorRecord] = Field(default_factory=list)
     usage: dict[str, int] = Field(default_factory=dict)
     versions: dict[str, str] = Field(default_factory=dict)
+    pause: dict[str, Any] | None = None  # why the run paused (usage limit), and when it resets
 
 
 ToolStage = Literal["plan", "code", "package", "question", "give_up"]

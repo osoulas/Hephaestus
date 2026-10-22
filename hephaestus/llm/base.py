@@ -22,6 +22,26 @@ class LLMError(Exception):
     """An LLM call failed; callers degrade (SC-10) rather than crash."""
 
 
+class UsageLimitError(LLMError):
+    """The Claude account reached its usage limit: the run pauses instead of failing.
+
+    ``resets_at`` is the Unix time the limit window ends, when the CLI reports it.
+    """
+
+    def __init__(self, message: str, resets_at: int | None = None) -> None:
+        """Keep the message and the reset time.
+
+        Parameters
+        ----------
+        message : str
+            What the CLI reported.
+        resets_at : int, optional
+            Unix time when the window resets.
+        """
+        super().__init__(message)
+        self.resets_at = resets_at
+
+
 @dataclass
 class ToolCall:
     """One tool call requested by the model."""
