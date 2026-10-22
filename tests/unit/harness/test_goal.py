@@ -109,3 +109,26 @@ def test_se13_checks_turned_off_become_assumptions() -> None:
     assert sum("not checked" in a for a in spec.assumptions) == 2
     back = apply_stability_options(spec, RunConfig())
     assert back.stability_thresholds.thermodynamic and not any("not checked" in a for a in back.assumptions)
+
+
+def test_gp12_parser_stability_wording_is_not_duplicated() -> None:
+    """The parser's own stability constraints count: code adds no second copy of either check."""
+    own = [
+        "Must not contain lead (Pb)",
+        "Energy above hull must be 0.05 eV/atom or less",
+        "Must be dynamically stable (no imaginary phonon modes)",
+    ]
+    spec, _, _ = parse(scripts.PARSED | {"hard_constraints": own})
+    assert spec is not None
+    hc = spec.hard_constraints
+    assert hc == own, hc
+    off, _, _ = parse(scripts.PARSED | {"hard_constraints": own}, run_hull=False, run_phonons=False)
+    assert off is not None and off.hard_constraints == ["Must not contain lead (Pb)"]
+
+
+def test_gp12_thermodynamic_wording_is_not_read_as_dynamic() -> None:
+    """"Thermodynamically stable" alone still gets the dynamic check added."""
+    spec, _, _ = parse(scripts.PARSED | {"hard_constraints": ["Thermodynamically stable on the hull"]})
+    assert spec is not None
+    assert spec.hard_constraints[0] == "Thermodynamically stable on the hull"
+    assert sum(h.startswith("dynamically stable") for h in spec.hard_constraints) == 1
