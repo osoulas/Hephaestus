@@ -44,7 +44,7 @@ LLM_SECTIONS = [
 NUMBER = re.compile(r"(?<![\w.])[-+\u2212]?\d+(?:\.\d+)?(?![\w.]*\d)")
 DASH = "\u2013"  # shown for a missing value
 CITATION = re.compile(r"\[([^\[\]]+)\](?!\()")
-REQ_CODE = re.compile(r"\b(?:CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b")
+REQ_CODE = re.compile(r"\b(?:AT|CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b")
 # Lab conditions an "inferred" step may state: temperatures, times, rates, pressures, amounts.
 PROCESS_UNIT = re.compile(
     r"\s*(?:°\s?C|℃|K\b|C\b|h\b|hrs?\b|hours?\b|min\b|minutes?\b|days?\b|°C/min|K/min|MPa\b|bar\b|"

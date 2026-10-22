@@ -123,6 +123,27 @@ export const CONFIG_GROUPS = [
         .replace(/^./, (x) => x.toUpperCase()),
   },
   {
+    name: "Agent-built tools",
+    id: "tools",
+    icon: "wrench",
+    fields: {
+      custom_tools: ["When no tool fits", "If the goal needs a property no tool computes, the agent can propose one. You review the plan and the code before it runs."],
+      disabled_capabilities: ["Turn off elastic", "Hide the built-in elastic calculations, so the agent has to build its own (for demos)."],
+      max_custom_tools: ["Tools per run", "Most tools the agent may propose in one run.", "tools", true],
+      max_tool_revisions: ["Change requests", "How many times you can ask for changes to one tool.", "per tool", true],
+      capability_time_budget_s: ["Time to build a tool", "The agent's own time; time waiting for you does not count. 0 for no limit.", "min", true],
+      custom_tool_timeout_s: ["Time per tool call", "A tool call that runs longer is stopped.", "min", true],
+      tool_library_dir: ["Tool library folder", "Approved tools are saved here, relative to the server's working directory.", "", true],
+    },
+    summary: (c) =>
+      [
+        c.custom_tools === "ask" ? "Proposes a tool when none fits" : "Off",
+        (c.disabled_capabilities || []).includes("elastic") ? "elastic turned off" : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+  },
+  {
     name: "Compute",
     id: "compute",
     icon: "cpu",
@@ -144,10 +165,14 @@ export const DEPENDS_ON = {
   phonon_gate: "run_phonons",
   distortion_threshold_meV: "run_phonons",
   final_time_budget_s: "run_final",
+  max_custom_tools: "custom_tools",
+  max_tool_revisions: "custom_tools",
+  capability_time_budget_s: "custom_tools",
+  custom_tool_timeout_s: "custom_tools",
 };
 
 /** Budgets where 0 means no limit. */
-export const LIMITS = new Set(["max_iterations", "max_tool_calls", "time_budget_s", "final_time_budget_s"]);
+export const LIMITS = new Set(["max_iterations", "max_tool_calls", "time_budget_s", "final_time_budget_s", "capability_time_budget_s"]);
 
 function minutes(s) {
   return +(s / 60).toFixed(1);
@@ -179,6 +204,8 @@ export const VALUE_NAMES = {
   auto: "Auto",
   cpu: "CPU",
   cuda: "GPU (CUDA)",
+  ask: "Ask me",
+  off: "Off",
 };
 
 /** Machine-learned potentials offered in the model menus. */
