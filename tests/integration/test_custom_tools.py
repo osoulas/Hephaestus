@@ -716,3 +716,108 @@ def test_a_package_request_waits_through_the_hub(tmp_path: Path) -> None:
     HUB.submit(ph.ws.run_id, ToolDecision(proposal_id=w["proposal_id"], stage="package", action="allow"))  # type: ignore[arg-type]
     t.join(10)
     assert out == ["failed"] and ph.state.approved_packages == ["phonopy"]
+
+
+# ---------------------------------------------------------------- the agent's own second look
+
+BUGGY = TOOL_SOURCE.replace('inputs.get("scale", 2.0) * energy', "0.0 * energy")
+
+
+def test_trial_outside_the_declared_range_fails_before_the_user_sees_the_code(tmp_path: Path) -> None:
+    """A 0 result for SrTiO3 fails the trial check; the fixed code reaches the user."""
+    turns = [[{"tool": "propose_tool", "input": plan()}], write_turn(source=BUGGY), write_turn()]
+    decide, seen = decider("accept", "accept")
+    ph = phase(tmp_path, turns, decide)
+    assert ph.run() == "filled"
+    assert [p.stage for p in seen] == ["plan", "code"] and seen[1].source == TOOL_SOURCE
+    checks = [
+        e["payload"]["checks"]
+        for e in map(json.loads, (tmp_path / "r-test" / "events.jsonl").read_text().splitlines())
+        if e["payload"].get("kind") == "checks"
+    ]
+    assert (
+        not checks[0]["trial"]["passed"]
+        and "outside TOOL['trial_range'] [1, 100]" in checks[0]["trial"]["report"]
+    )
+    assert seen[1].trial and seen[1].trial["range"] == [1.0, 100.0]
+
+
+def test_a_tool_without_a_trial_range_fails_the_static_check(tmp_path: Path) -> None:
+    """The range is required, so code always has something to check the trial against."""
+    turns = [
+        [{"tool": "propose_tool", "input": plan()}],
+        write_turn(source=TOOL_SOURCE.replace('    "trial_range": [1.0, 100.0],\n', "")),
+    ]
+    ph = phase(tmp_path, turns, decider("accept")[0])
+    ph.run()
+    report = ph.state.proposals["t1"]
+    events = [json.loads(x) for x in (tmp_path / "r-test" / "events.jsonl").read_text().splitlines()]
+    static = next(e for e in events if e["payload"].get("kind") == "checks")["payload"]["checks"]["static"]
+    assert not static["passed"] and "trial_range" in static["report"] and report.stage == "plan"
+
+
+def test_the_agent_withdraws_code_the_user_is_reviewing_when_it_finds_a_bug(tmp_path: Path) -> None:
+    """The run where the user approved a known bug: now the fix replaces the open card first."""
+    sloppy = BUGGY.replace('"trial_range": [1.0, 100.0]', '"trial_range": [0.0, 100.0]')  # passes, but wrong
+    weak_tests = (
+        TEST_SOURCE.split("def test_positive")[0]
+        + "def test_header"
+        + TEST_SOURCE.split("def test_header")[1]
+    )
+    turns = [
+        [{"tool": "propose_tool", "input": plan()}],
+        [
+            {
+                "tool": "write_tool",
+                "input": {"proposal_id": "t1", "source": sloppy, "tests": weak_tests, "reason": None},
+            },
+            {
+                "tool": "write_tool",
+                "input": {"proposal_id": "t1", "source": TOOL_SOURCE, "tests": TEST_SOURCE, "reason": None},
+            },
+            {
+                "tool": "write_tool",
+                "input": {
+                    "proposal_id": "t1",
+                    "source": TOOL_SOURCE,
+                    "tests": TEST_SOURCE,
+                    "reason": "The value is 0: the energy is never scaled.",
+                },
+            },
+        ],
+    ]
+    decide, seen = decider("accept", "accept")
+    ph = phase(tmp_path, turns, decide)
+    assert ph.run() == "filled"
+    assert (
+        [p.stage for p in seen] == ["plan", "code"]
+        and seen[1].source == TOOL_SOURCE
+        and seen[1].revision == 2
+    )
+    assert seen[1].revisions_left == ph.ws.cfg.max_tool_revisions  # the agent's fix used none of the user's
+    events = [json.loads(x) for x in (tmp_path / "r-test" / "events.jsonl").read_text().splitlines()]
+    tools = [
+        e["payload"]
+        for e in events
+        if e["section"] == "tool" and e["status"] != "started" and e["payload"]["tool"] == "write_tool"
+    ]
+    assert "give a reason" in tools[1]["result"]["error"]  # a silent swap is refused
+    withdrawn = [e["payload"] for e in events if e["payload"].get("kind") == "withdrawn"]
+    assert withdrawn == [
+        {
+            "kind": "withdrawn",
+            "proposal_id": "t1",
+            "revision": 1,
+            "reason": "The value is 0: the energy is never scaled.",
+        }
+    ]
+
+
+def test_a_decision_already_made_cannot_be_withdrawn(tmp_path: Path) -> None:
+    """If the user decided first, the agent's withdrawal is refused and the decision stands."""
+    HUB.open("r-x", "t1", "code", {"accept"})
+    HUB.submit("r-x", ToolDecision(proposal_id="t1", stage="code", action="accept"))
+    assert HUB.withdraw("r-x", "t1", "code") is False
+    HUB.clear("r-x")
+    HUB.open("r-x", "t1", "code", {"accept"})
+    assert HUB.withdraw("r-x", "t1", "code") is True and HUB.waiting("r-x") == []

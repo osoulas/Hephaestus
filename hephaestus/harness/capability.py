@@ -119,9 +119,19 @@ CAPABILITY_TOOLS: list[dict[str, Any]] = [
     _schema(
         "write_tool",
         "Submit the tool file and its test file for an accepted plan. Code runs the static check, the tests and "
-        "a trial run in a sandbox. If a check fails, fix it and call again. When all pass, end your turn: the "
-        "user reviews the code.",
-        {"proposal_id": STR, "source": STR, "tests": STR},
+        "a trial run in a sandbox; the trial value must fall in TOOL['trial_range']. If a check fails, fix it and "
+        "call again. When all pass, read the trial output; if it shows a bug, call write_tool again at once with "
+        "the fix and a reason, which withdraws the code the user is reviewing. Otherwise end your turn: the user "
+        "reviews the code.",
+        {
+            "proposal_id": STR,
+            "source": STR,
+            "tests": STR,
+            "reason": {
+                "type": ["string", "null"],
+                "description": "why you replace code the user is already reviewing; null otherwise",
+            },
+        },
     ),
     _schema(
         "request_package",
@@ -279,6 +289,26 @@ class DecisionHub:
             self._waits.pop((run_id, proposal_id, stage), None)
         assert w.decision is not None
         return w.decision
+
+    def withdraw(self, run_id: str, proposal_id: str, stage: str) -> bool:
+        """Close a wait the user has not answered yet (the agent replaces its own code).
+
+        Parameters
+        ----------
+        run_id, proposal_id, stage : str
+            The wait.
+
+        Returns
+        -------
+        bool
+            False when the user already decided: the decision stands.
+        """
+        with self._lock:
+            w = self._waits.get((run_id, proposal_id, stage))
+            if w is not None and w.decision is not None:
+                return False
+            self._waits.pop((run_id, proposal_id, stage), None)
+            return True
 
     def clear(self, run_id: str) -> None:
         """Forget a run's waits.
@@ -742,8 +772,11 @@ class CapabilityPhase:
         tk.on_log = lambda m: self.emit("log", {"message": m})
         return tk
 
-    def _write(self, proposal_id: str, source: str, tests: str) -> dict[str, Any]:
+    def _write(self, proposal_id: str, source: str, tests: str, reason: str | None = None) -> dict[str, Any]:
         """``write_tool``: check the code, run its tests and a trial run (AT-10 to AT-12).
+
+        Called while the user reviews this proposal's code, it withdraws that code first: the
+        agent found a bug in its own work, and the user must not approve the old version.
 
         Parameters
         ----------
@@ -753,6 +786,8 @@ class CapabilityPhase:
             Tool file.
         tests : str
             Test file.
+        reason : str, optional
+            Why the agent replaces code the user is reviewing; required in that case.
 
         Returns
         -------
@@ -767,8 +802,10 @@ class CapabilityPhase:
         prop = self.state.proposals.get(proposal_id)
         if prop is None:
             raise ToolError(f"Unknown proposal_id {proposal_id!r}.")
+        if self.pending == (prop.proposal_id, "code") and prop.status == "waiting":
+            self._withdraw(prop, reason)
         if self.pending:
-            raise ToolError("A proposal is waiting for the user; end your turn.")
+            raise ToolError("Something is waiting for the user; end your turn.")
         ready = (prop.stage == "plan" and prop.status == "accepted") or (
             prop.stage == "code" and prop.status == "revise"
         )
@@ -794,8 +831,15 @@ class CapabilityPhase:
             problems.append(
                 "To use a package outside the allowlist, call request_package and wait for the user."
             )
+        trial_range = None
         if static["passed"]:
             header = custom.read_header(source)
+            trial_range = custom.header_trial_range(header)
+            if trial_range is None:
+                problems.append(
+                    "TOOL['trial_range'] must be [min, max]: the plausible value for the trial material "
+                    f"({self.ws.spec.reference_material or DEFAULT_TRIAL}) in {prop.units}, from the literature"
+                )
             for key in ("name", "property", "units"):
                 if header.get(key) != getattr(prop, key):
                     problems.append(
@@ -848,9 +892,19 @@ class CapabilityPhase:
                             "material": self.ws.spec.reference_material or DEFAULT_TRIAL,
                             "value": value,
                             "units": prop.units,
+                            "range": list(trial_range) if trial_range else None,
                             "details": shorten(details),
                         }
-                        checks["trial"] = ToolCheck(passed=True, report=f"{value:.4g} {prop.units}")
+                        lo, hi = trial_range or (None, None)
+                        if lo is not None and hi is not None and not lo <= value <= hi:
+                            checks["trial"] = ToolCheck(
+                                passed=False,
+                                report=f"{value:.4g} {prop.units} is outside TOOL['trial_range'] [{lo:g}, {hi:g}] for "
+                                f"{trial['material']}: find the bug, or correct the range only if the literature "
+                                "supports it",
+                            )
+                        else:
+                            checks["trial"] = ToolCheck(passed=True, report=f"{value:.4g} {prop.units}")
                     except ToolError as exc:
                         checks["trial"] = ToolCheck(passed=False, report=str(exc))
                 else:
@@ -991,6 +1045,37 @@ class CapabilityPhase:
             msg = "The user cancelled the run. Make no more calls."
         self.save()
         return msg
+
+    def _withdraw(self, prop: ToolProposal, reason: str | None) -> None:
+        """Withdraw code the user is reviewing, because the agent found a problem in it.
+
+        Parameters
+        ----------
+        prop : ToolProposal
+            Proposal waiting at the code stage.
+        reason : str or None
+            What is wrong; required.
+
+        Raises
+        ------
+        ToolError
+            Without a reason, when the user already decided, or after too many attempts.
+        """
+        if not (reason or "").strip():
+            raise ToolError("The user is reviewing this code: give a reason to withdraw and replace it.")
+        if not HUB.withdraw(self.ws.run_id, prop.proposal_id, "code"):
+            raise ToolError("The user has already decided on this code; end your turn.")
+        n = self.state.fix_attempts.get(prop.proposal_id, 0) + 1
+        self.state.fix_attempts[prop.proposal_id] = n
+        self.pending = None
+        prop.status = "revise"
+        prop.revision += 1  # the agent's own fix: the user's change requests are untouched
+        self.emit(
+            "withdrawn", {"proposal_id": prop.proposal_id, "revision": prop.revision - 1, "reason": reason}
+        )
+        if n > FIX_ATTEMPTS:
+            self._cancel(prop, f"the agent replaced its code {n} times")
+            raise ToolError("Too many attempts; the tool is cancelled. Make no more calls.")
 
     # ------------------------------------------------------------------ requests to the user
 
