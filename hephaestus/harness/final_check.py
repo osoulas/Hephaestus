@@ -25,7 +25,14 @@ from pymatgen.core import Composition
 from hephaestus.core.config import budget_limit
 from hephaestus.core.types import SearchSpec, Submission, ValidationCheck, ValidationReport
 from hephaestus.harness.gates import pessimistic, target_met
-from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
+from hephaestus.tools.registry import (
+    CandidateState,
+    Handler,
+    Workspace,
+    execute,
+    load_default_handlers,
+    target_step,
+)
 
 FINAL_FMAX = 0.005  # eV/Å (FC-1)
 MD_PS = 2.0  # ps (FC-5)
@@ -183,7 +190,8 @@ def _must_steps(fws: Workspace, handlers: Mapping[str, Handler], fin: _Finalist)
         steps.append(("phonons", {"candidate_id": cid, "mode": "full"}))
     if cfg.run_hull:
         steps.append(("energy_above_hull", {"candidate_id": cid}))
-    steps.append(("predict_property", {"candidate_id": cid, "property": fws.spec.target_property}))
+    if fws.spec.target_evaluable:
+        steps.append(target_step(fws.spec, cid))
     supercell = None
     for name, args in steps:
         out, err = _call(fws, handlers, name, args)

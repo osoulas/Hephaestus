@@ -215,6 +215,8 @@ def collect_facts(state: RunState, ws: Workspace) -> dict[str, Any]:
         "target_name": property_name(spec.target_property),
         "target_value": spec.target_value,
         "target_units": spec.target_units,
+        "target_tool": spec.target_tool,  # agent-built tool: values carry no uncertainty (AT-17)
+        "target_evaluable": spec.target_evaluable,
         "direction": spec.direction,
         "reference_material": spec.reference_material,
         "e_hull_threshold": spec.stability_thresholds.e_hull_max_eV_per_atom,
@@ -784,11 +786,12 @@ def property_table(facts: dict[str, Any]) -> str:
     arrow = {"minimise": "<", "maximise": ">", "hit": "≈"}[facts["direction"]]
     unc = facts.get("win_uncertainty")
     units = facts["target_units"]
-    pred = (
-        f"{_fmt(facts.get('win_value'))} ± {_fmt(unc)} {units}"
-        if unc is not None
-        else f"{_fmt(facts.get('win_value'))} {units} (no uncertainty available)"
-    )
+    if facts.get("target_tool"):
+        pred = f"{_fmt(facts.get('win_value'))} {units} (agent-built tool)"
+    elif unc is not None:
+        pred = f"{_fmt(facts.get('win_value'))} ± {_fmt(unc)} {units}"
+    else:
+        pred = f"{_fmt(facts.get('win_value'))} {units} (no uncertainty available)"
     ref = facts.get("reference_material")
     target = f"{arrow} {_fmt(facts['target_value'])} {units}" + (f" ({ref}, same model)" if ref else "")
     central, cons = facts.get("win_target_met_central"), facts.get("win_target_met_conservative")
@@ -907,6 +910,8 @@ def _summary(facts: dict[str, Any], state: RunState, next_step: str | None) -> l
     pred = f"{_fmt(facts.get('win_value'))}" + (
         f" ± {_fmt(facts['win_uncertainty'])}" if facts.get("win_uncertainty") is not None else ""
     )
+    if facts.get("target_tool"):
+        pred += " (agent-built tool)"
     target = f"{_fmt(facts['target_value'])} {facts['target_units']}" + (f" for {ref}" if ref else "")
     lines = [
         f"- **What to make:** {facts['win_composition']}, {facts.get('win_structure_type', '').replace('_', ' ')}"
@@ -984,8 +989,9 @@ def assemble_brief(state: RunState, ws: Workspace, llm: LLM | None = None) -> tu
             [
                 f"| Candidate | {facts['target_name']} | Energy above hull | Dynamically stable |",
                 "| --- | --- | --- | --- |",
-                f"| {facts['run_composition']} ({candidate_label(facts['run_id'])}) | {_fmt(facts['run_value'])} ± "
-                f"{_fmt(facts['run_uncertainty'])} {facts['target_units']} | {_fmt(facts['run_e_hull'])} eV/atom | "
+                f"| {facts['run_composition']} ({candidate_label(facts['run_id'])}) | {_fmt(facts['run_value'])}"
+                + (f" ± {_fmt(facts['run_uncertainty'])}" if facts.get("run_uncertainty") is not None else "")
+                + f" {facts['target_units']} | {_fmt(facts['run_e_hull'])} eV/atom | "
                 f"{_yes_no(facts['run_dyn_stable'])} |",
             ]
         )

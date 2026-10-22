@@ -413,7 +413,7 @@ class ClaudeCodeLLM:
         from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ThinkingBlock
 
         prompt = kickoff
-        for _ in range(MAX_NUDGES + 1):
+        for _ in range(getattr(campaign, "max_prompts", MAX_NUDGES + 1)):
             await client.query(prompt)
             interrupted = False
             async for msg in client.receive_response():
@@ -432,4 +432,7 @@ class ClaudeCodeLLM:
                     await client.interrupt()
             if campaign.ws.submitted or campaign.hard_limit_hit():
                 return
-            prompt = campaign.nudge()
+            # The capability phase's nudge waits for the user's decision: keep the loop free
+            prompt = await asyncio.to_thread(campaign.nudge)
+            if campaign.ws.submitted or campaign.hard_limit_hit():
+                return

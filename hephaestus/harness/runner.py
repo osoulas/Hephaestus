@@ -1,4 +1,4 @@
-"""Outer order: parse, campaign, final re-check, brief (OR-1, OR-6, OR-8).
+"""Outer order: parse, capability phase, campaign, final re-check, brief (OR-1, OR-6, OR-8).
 
 ``run`` is the single entry point the Python API, HTTP API and CLI call. Every
 dependency (models, tool handlers, final check) can be injected so tests run offline.
@@ -27,11 +27,20 @@ from hephaestus.core.types import (
 from hephaestus.harness.agent import Campaign, NoveltyFn
 from hephaestus.harness.brief import assemble_brief
 from hephaestus.harness.brief_pdf import export_pdf
+from hephaestus.harness.capability import HUB, CapabilityPhase, Decider, find_gap, load_state
 from hephaestus.harness.compute_brief import assemble_compute_brief
-from hephaestus.harness.goal import apply_stability_options, parse_goal, validate_spec
+from hephaestus.harness.goal import apply_stability_options, parse_goal, validate_for_run
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot, sync_state, write_artifacts
 from hephaestus.llm.base import LLM, LoggedLLM, make_llm
-from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
+from hephaestus.tools import custom
+from hephaestus.tools.registry import (
+    CandidateState,
+    Handler,
+    Workspace,
+    execute,
+    load_default_handlers,
+    target_step,
+)
 
 FinalCheck = Callable[[Workspace, Submission], list[ValidationReport]]
 TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
@@ -94,6 +103,8 @@ class Deps:
     final_check: FinalCheck | None = None
     bus: EventBus = field(default_factory=lambda: BUS)
     root: Path | None = None
+    decide: Decider | None = None  # agent-built tool decisions; else they come through HUB (AT-29)
+    toolkit_factory: custom.ToolkitFactory | None = None  # building blocks for agent-built tools
 
 
 def default_final_check() -> Callable[..., list[ValidationReport]] | None:
@@ -132,6 +143,7 @@ def request_stop(run_id: str, mode: str = "campaign") -> bool:
         camp = ACTIVE.get(run_id)
     if ev:
         ev.set()
+        HUB.cancel_run(run_id)  # a stop during the capability phase cancels the run
     if abort and mode == "all":
         abort.set()
     if camp:
@@ -243,7 +255,7 @@ def resolve_reference(
         What failed.
     """
     spec = ws.spec
-    if not spec.reference_material or spec.reference_value is not None:
+    if not spec.reference_material or spec.reference_value is not None or not spec.target_evaluable:
         return spec, []
     ref = spec.reference_material
     cand = Candidate(
@@ -257,7 +269,7 @@ def resolve_reference(
     calls: list[tuple[str, dict[str, Any]]] = [
         ("build_structure", {"candidate_id": "ref", "source": "auto", "mp_id": None, "seed": ws.cfg.seed}),
         ("relax", {"candidate_id": "ref", "potential": potential or ws.cfg.potential, "fmax": fmax}),
-        ("predict_property", {"candidate_id": "ref", "property": spec.target_property}),
+        target_step(spec, "ref"),
     ]
     result: dict[str, Any] = {}
     try:
@@ -399,7 +411,31 @@ def _drive(
             return state
         handlers = dict(deps.handlers) if deps.handlers is not None else load_default_handlers()
         ws, critiques = _workspace(state, files, resume)
-        if not resume and ws.spec.reference_material and ws.spec.reference_value is None:
+        outcome = _capability(state, files, ws, llm, handlers, deps, stop)
+        if outcome in ("cancelled_run", "off"):
+            if outcome == "off":
+                state.status = "failed"
+            else:
+                state.status, state.stop_reason = "stopped", "cancelled by user"
+            meter.update()
+            save_json(files.state, state)
+            bus.emit(
+                rid,
+                "run",
+                "failed" if outcome == "off" else "finished",
+                {
+                    "status": state.status,
+                    "stop_reason": state.stop_reason,
+                    "best": None,
+                    "errors": [e.model_dump() for e in state.errors],
+                },
+            )
+            return state
+        handlers.update(custom.custom_handlers(ws, deps.toolkit_factory))
+        needs_ref = (
+            ws.spec.reference_material and ws.spec.reference_value is None and ws.spec.target_evaluable
+        )
+        if needs_ref and not ws.candidates:
             spec, errors = resolve_reference(ws, handlers)
             state.errors += errors
             ws.spec = state.spec = spec
@@ -470,7 +506,7 @@ def _parse(state: RunState, files: RunFiles, llm: LLM, answers: dict[str, str] |
     bus.emit(state.run_id, "goal_parser", "started", {"goal": state.raw_goal})
     spec, questions, errors = parse_goal(llm, state.raw_goal, state.config, answers)
     state.errors += errors
-    if spec is None or questions or validate_spec(spec):
+    if spec is None or questions or validate_for_run(spec, state.config):
         state.status = "needs_input" if spec is not None else "failed"
         state.spec = spec
         save_json(files.state, state)
@@ -490,6 +526,143 @@ def _parse(state: RunState, files: RunFiles, llm: LLM, answers: dict[str, str] |
     save_json(files.state, state)
     bus.emit(state.run_id, "goal_parser", "finished", {"spec": spec.model_dump()})
     return True
+
+
+def _capability(
+    state: RunState,
+    files: RunFiles,
+    ws: Workspace,
+    llm: LLM,
+    handlers: Mapping[str, Handler],
+    deps: Deps,
+    stop: threading.Event,
+) -> str | None:
+    """Fill a capability gap before the campaign: reuse a library tool or run the phase (Section 14).
+
+    Parameters
+    ----------
+    state : RunState
+        State; its spec gains ``target_tool``, or ``target_evaluable=False`` when the tool is
+        cancelled.
+    files : RunFiles
+        Run paths.
+    ws : Workspace
+        Workspace; approved tools go into ``ws.custom_tools``.
+    llm : LLM
+        The orchestrator's model.
+    handlers : mapping
+        Tool handlers.
+    deps : Deps
+        Decision callback and toolkit factory.
+    stop : threading.Event
+        A user stop.
+
+    Returns
+    -------
+    str or None
+        ``None`` without a gap; ``"reused"``, or the phase's outcome.
+    """
+    spec, cfg = ws.spec, state.config
+    if spec.target_tool or not spec.target_evaluable:
+        return None
+    approved, _ = custom.scan_library(custom.library_dir(cfg))
+    reused = next((t for t in approved if t.property == spec.target_property), None)
+    builtin = custom.run_registry(cfg, [])
+    if spec.target_property in builtin or spec.target_property == "unsupported":
+        return None
+    if reused is not None:  # AT-22: an approved library tool fills the gap without a proposal
+        ws.custom_tools[reused.name] = reused
+        _set_target_tool(
+            state,
+            ws,
+            reused,
+            f"The agent-built tool {reused.name} from the tool library computes {spec.target_property}.",
+        )
+        deps.bus.emit(
+            state.run_id,
+            "capability",
+            "finished",
+            {"kind": "library", "reused": [reused.name], "property": spec.target_property},
+        )
+        save_snapshot(files, state, ws, [])
+        return "reused"
+    gap = find_gap(spec, cfg, approved)
+    if gap is None:
+        return None
+    if cfg.custom_tools == "off":  # AT-3: a gap ends the run before the campaign
+        state.errors.append(
+            ErrorRecord(
+                step="capability",
+                code="capability_gap",
+                message=f"No tool can compute {gap!r}, and agent-built tools are off for this run.",
+            )
+        )
+        return "off"
+    folder = files.root / "capability"
+    saved = load_state(folder)
+    state.status = "capability"
+    save_json(files.state, state)
+    phase = CapabilityPhase(
+        ws,
+        llm,
+        handlers,
+        deps.bus,
+        folder,
+        gap,
+        decide=deps.decide,
+        stop=stop,
+        state=saved,
+        toolkit_factory=deps.toolkit_factory,
+    )
+    outcome = phase.run(resume=saved is not None)
+    state.errors += phase.errors
+    for k, v in phase.usage.items():
+        state.usage[f"capability_{k}"] = state.usage.get(f"capability_{k}", 0) + int(v)
+    if outcome == "cancelled_run":
+        save_json(files.state, state)
+        return outcome
+    tool = next((t for t in phase.state.registered if t.property == gap), None)
+    if outcome == "filled" and tool is not None:
+        _set_target_tool(
+            state, ws, tool, f"The agent-built tool {tool.name}, approved by the user, computes {gap}."
+        )
+    else:
+        why = {
+            "cancelled_tool": "the user cancelled the tool for it",
+            "budget": "the capability phase ran out of time",
+        }
+        new = ws.spec.model_copy(deep=True)
+        new.target_evaluable = False
+        new.assumptions.append(
+            f"The target property {gap} was not evaluated: {why.get(outcome, 'no tool could be built for it')}; "
+            "the run screened stability only (AT-8)."
+        )
+        ws.spec = state.spec = new
+    state.status = "running"
+    save_json(files.spec, state.spec)
+    save_snapshot(files, state, ws, [])
+    return outcome
+
+
+def _set_target_tool(state: RunState, ws: Workspace, tool: Any, assumption: str) -> None:
+    """Point the spec's target at an agent-built tool (AT-16, AT-17).
+
+    Parameters
+    ----------
+    state : RunState
+        State whose spec is replaced.
+    ws : Workspace
+        Workspace whose spec is replaced.
+    tool : CustomTool
+        The tool.
+    assumption : str
+        Recorded for the brief.
+    """
+    new = ws.spec.model_copy(deep=True)
+    new.target_tool = f"custom_{tool.name}"
+    new.target_units = tool.units
+    new.assumptions.append(assumption + " Its values carry no uncertainty (agent-built tool).")
+    ws.spec = state.spec = new
 
 
 def _workspace(state: RunState, files: RunFiles, resume: bool) -> tuple[Workspace, list[Any]]:
@@ -587,6 +760,7 @@ def _campaign(
         novelty_fn=deps.novelty_fn,
         snapshot=snapshot,
         elapsed_offset_s=offset,
+        tools=custom.campaign_tools(ws),
     )
     if stop.is_set():
         camp.request_stop()
