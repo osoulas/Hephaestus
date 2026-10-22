@@ -9,6 +9,7 @@ tab. Green and red appear only for verdicts that code computed.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Iterable
 from typing import IO, Any
@@ -403,3 +404,39 @@ def logo(width: int) -> Text:
         text.append("\n")
     text.rstrip()
     return text
+
+
+# Requirement IDs from docs/REQUIREMENTS.md (e.g. "FC-1", "GP-11"): useful in code and logs, noise to a
+# user. Engine text carries them ("… full phonons (FC-1, FC-2)."), so text shown in the terminal drops
+# them, as the web UI does (web/js/dom.js stripCodes).
+_CODE = r"\b(?:AT|CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b"
+_DASHES = "\u2013|\u2014"  # en and em dash between codes, e.g. "FC-1 \u2013 FC-3"
+_CODE_LIST = rf"{_CODE}(?:\s*(?:,|;|and|to|{_DASHES}|-|/)\s*{_CODE})*"
+_ONLY_CODES = re.compile(rf"\s*\(\s*{_CODE_LIST}\s*\)")
+_TRAILING = re.compile(rf"\s*[,;]\s*{_CODE_LIST}(?=\s*\))")
+_LEADING = re.compile(rf"(\(\s*){_CODE_LIST}\s*[,;:]\s*")
+_BARE = re.compile(rf"\s*{_CODE_LIST}")
+
+
+def strip_codes(text: str) -> str:
+    """Remove requirement IDs from text shown to the user.
+
+    Parameters
+    ----------
+    text : str
+        Text that may cite requirements, e.g. ``"Defaults to 300 K (GP-7)."``.
+
+    Returns
+    -------
+    str
+        The text without them, e.g. ``"Defaults to 300 K."``.
+    """
+    if not text or not re.search(r"-\d", text):
+        return text
+    out = _ONLY_CODES.sub("", text)
+    out = _TRAILING.sub("", out)
+    out = _LEADING.sub(r"\1", out)
+    out = _BARE.sub("", out)
+    out = re.sub(r"\(\s*\)", "", out)
+    out = re.sub(r"[ \t]+([.,;:])", r"\1", out)
+    return re.sub(r"[ \t]{2,}", " ", out)

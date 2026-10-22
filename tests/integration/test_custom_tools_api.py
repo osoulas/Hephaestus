@@ -62,6 +62,8 @@ def test_at29_python_api_decides_step_by_step(tmp_path: Path) -> None:
     exp.start()
     plan = wait_for(exp, "plan")
     assert plan["name"] == "toy_expansion" and "revise" in plan["allowed"]
+    assert plan["phase"] == "thermal_expansion"
+    assert [(w["proposal_id"], w["stage"]) for w in exp.waiting()] == [("t1", "plan")]
     with pytest.raises(ExperimentError, match="not waiting"):
         exp.decide("t9", "accept")
     exp.decide("t1", "accept")
@@ -133,3 +135,25 @@ def test_at24_stop_while_waiting_cancels_the_run(tmp_path: Path) -> None:
     threading.Thread(target=exp.stop).start()
     state = exp.wait(10)
     assert state is not None and state.status == "stopped" and state.stop_reason == "cancelled by user"
+
+
+def test_at29_proposals_cover_the_phase_of_a_second_target(tmp_path: Path) -> None:
+    """A tool proposed for an extra target (``capability_<property>/``) is listed too, with its phase."""
+    import scripts
+    from test_custom_tools import decider, plan
+    from test_multi_target import PARSED_TWO
+
+    from hephaestus.harness import runner
+
+    turns = [[{"tool": "propose_tool", "input": plan()}], *campaign_turns()]
+    turns[3] = [s for s in turns[3] if not s.get("tool", "").startswith("custom_")]
+    turns[-1] = [scripts.submit("c1-1", accept_not_met=True)]
+    d = deps(tmp_path, turns, decider("cancel_tool")[0], reviews=[scripts.review(scripts.FE2, 90)])
+    d.llm.answers["goal_parser"] = [PARSED_TWO]
+    runner.run(GOAL, cfg=cfg(tmp_path), deps=d, run_id="r1")
+    assert not (tmp_path / "r1" / "capability").exists()
+    props = Experiment.load("r1", tmp_path).tool_proposals()
+    assert [(p["proposal_id"], p["phase"], p["waiting"]) for p in props] == [
+        ("t1", "thermal_expansion", False)
+    ]
+    assert Experiment.load("r1", tmp_path).waiting() == []

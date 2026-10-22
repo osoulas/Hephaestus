@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.padding import Padding
 from rich.rule import Rule
 from rich.table import Table
@@ -20,6 +21,7 @@ from rich.text import Text
 
 from hephaestus.core.config import RunConfig, runs_root, user_dir
 from hephaestus.interfaces.cli import actions
+from hephaestus.interfaces.cli.decide import make_choose
 from hephaestus.interfaces.cli.render import result_line
 from hephaestus.interfaces.cli.stream import (
     EXIT_OK,
@@ -33,7 +35,7 @@ from hephaestus.interfaces.cli.stream import (
     spinner,
 )
 from hephaestus.interfaces.cli.theme import EMBER, GLYPH, GOLD, SCORCH, STEEL, logo, mark
-from hephaestus.interfaces.python import backend_ready, device_status, list_runs, models
+from hephaestus.interfaces.python import backend_ready, device_status, list_runs, models, tool_library
 
 ReadLine = Callable[[str], str]
 PROMPT = f"{GLYPH['tool']} "  # the main goal-or-command prompt
@@ -41,23 +43,52 @@ EXAMPLE_GOAL = (
     "a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically "
     "stable (≤ 0.05 eV/atom above hull) and dynamically stable"
 )
-CONFIG_KEYS = (
-    "llm_backend",
-    "llm_model",
-    "require_novel",
-    "band_gap_fidelity",
+# Every RunConfig field, grouped as in the web composer (OR-4); /config lists and completes them.
+CONFIG_GROUPS: dict[str, tuple[str, ...]] = {
+    "search budget": (
+        "max_iterations",
+        "max_tool_calls",
+        "time_budget_s",
+        "confidence_threshold",
+        "max_parallel_tools",
+        "require_novel",
+    ),
+    "models": (
+        "llm_backend",
+        "llm_model",
+        "band_gap_model",
+        "potential",
+        "final_potential",
+        "cross_check_potential",
+    ),
+    "stability checks": (
+        "run_hull",
+        "e_hull_max_eV_per_atom",
+        "run_phonons",
+        "phonon_mode",
+        "phonon_gate",
+        "distortion_threshold_meV",
+    ),
+    "agent-built tools": (
+        "custom_tools",
+        "max_custom_tools",
+        "max_tool_revisions",
+        "capability_time_budget_s",
+        "custom_tool_timeout_s",
+        "tool_library_dir",
+        "disabled_capabilities",
+    ),
+    "final re-check": ("run_final", "final_time_budget_s", "final_dtype"),
+    "compute": ("device", "dtype", "max_atoms", "seed", "offline"),
+}
+CONFIG_KEYS = tuple(k for keys in CONFIG_GROUPS.values() for k in keys)
+NO_LIMIT_KEYS = {
     "max_iterations",
     "max_tool_calls",
-    "confidence_threshold",
     "time_budget_s",
-    "potential",
-    "final_potential",
-    "phonon_mode",
-    "run_final",
-    "max_atoms",
-    "seed",
-    "offline",
-)
+    "final_time_budget_s",
+    "capability_time_budget_s",
+}
 
 
 @dataclass
@@ -174,11 +205,21 @@ class Session:
                 self.console,
                 line,
                 self.config,
-                Prompts(ask=self.ask, confirm=self.confirm),
+                self.prompts(),
                 deps=self.deps,
                 root=self.root,
                 verbose=self.verbose,
             )
+
+    def prompts(self) -> Prompts:
+        """Return the session's question, confirmation and choice readers.
+
+        Returns
+        -------
+        Prompts
+            Interactive prompts on the input box.
+        """
+        return Prompts(ask=self.ask, confirm=self.confirm, choose=make_choose(self.console, self.read_line))
 
     def ask(self, question: str) -> str:
         """Ask one clarifying question.
@@ -250,9 +291,11 @@ class Session:
             c.llm_backend,
             c.llm_model,
             f"novel {'on' if c.require_novel else 'off'}",
-            f"gap {c.band_gap_fidelity}",
-            f"{c.max_iterations} rounds",
+            f"gap {c.band_gap_model}",
+            f"{c.max_iterations} rounds" if c.max_iterations else "no round limit",
         ]
+        if c.custom_tools == "ask":
+            bits.append("new tools ask")
         if c.offline:
             bits.append("offline")
         if self.verbose:
@@ -278,8 +321,9 @@ class Session:
         grid.add_row("model", c.llm_model)
         grid.add_row(
             "options",
-            f"novel {'on' if c.require_novel else 'off'} · band gap {c.band_gap_fidelity} · "
-            f"{c.max_iterations} rounds · {c.max_tool_calls} tool calls",
+            f"novel {'on' if c.require_novel else 'off'} · band gap {c.band_gap_model} · "
+            f"{c.max_iterations or 'no limit on'} rounds · {c.max_tool_calls or 'no limit on'} tool calls · "
+            f"agent-built tools {'ask' if c.custom_tools == 'ask' else 'off'}",
         )
         grid.add_row("literature", valency)
         grid.add_row(
@@ -481,14 +525,74 @@ def _config(s: Session, args: list[str]) -> bool:
         t.add_column(style="muted", no_wrap=True)
         t.add_column()
         data = s.config.model_dump()
-        for key in CONFIG_KEYS:
-            t.add_row(key, str(data.get(key)))
+        for i, (group, keys) in enumerate(CONFIG_GROUPS.items()):
+            if i:
+                t.add_row("", "")
+            t.add_row(Text(group, style="accent"), "")
+            for key in keys:
+                t.add_row(f"  {key}", _config_value(key, data.get(key)))
         s.console.print(t)
+        s.console.print(
+            Text("  /config <key> <value> sets one · /profile quick|standard|thorough", style="faint")
+        )
         return True
     if len(args) < 2:
         s.console.print(result_line("[warn]Usage:[/] /config <key> <value>"))
         return True
     return _set(s, args[0], " ".join(args[1:]))
+
+
+def _config_value(key: str, value: Any) -> str:
+    """Format one option for ``/config``: budgets of 0 read "no limit", unset values "none".
+
+    Parameters
+    ----------
+    key : str
+        ``RunConfig`` field.
+    value : Any
+        Its value.
+
+    Returns
+    -------
+    str
+        Display text.
+    """
+    if key in NO_LIMIT_KEYS and not value:
+        return "0 (no limit)"
+    if value is None:
+        return "none"
+    if isinstance(value, list):
+        return ", ".join(map(str, value)) or "none"
+    return str(value)
+
+
+def _profile(s: Session, args: list[str]) -> bool:
+    """``/profile quick|standard|thorough``: apply a preset of budgets, as the web composer's.
+
+    Parameters
+    ----------
+    s : Session
+        Session.
+    args : list of str
+        Profile name.
+
+    Returns
+    -------
+    bool
+        True.
+    """
+    if not args or args[0] not in actions.PROFILES:
+        s.console.print(result_line(f"[warn]Usage:[/] /profile {'|'.join(actions.PROFILES)}"))
+        return True
+    values = actions.PROFILES[args[0]]
+    if args[0] == "standard":
+        defaults = RunConfig()
+        keys = {k for p in actions.PROFILES.values() for k in p}
+        values = {k: getattr(defaults, k) for k in keys}
+    s.config = RunConfig.model_validate({**s.config.model_dump(), **values})
+    shown = " · ".join(f"{k} {_config_value(k, getattr(s.config, k))}" for k in values)
+    s.console.print(result_line(f"profile {GLYPH['arrow']} [accent]{args[0]}[/] [muted]{shown}[/]"))
+    return True
 
 
 def _set(s: Session, key: str, value: Any) -> bool:
@@ -513,7 +617,11 @@ def _set(s: Session, key: str, value: Any) -> bool:
         return True
     if isinstance(value, str) and value.lower() in ("none", "null"):
         value = None
-    if isinstance(value, str) and value.lower() in ("on", "off"):
+    if key == "disabled_capabilities" and isinstance(value, str):
+        value = [v.strip() for v in value.split(",") if v.strip()]
+    elif key == "disabled_capabilities" and value is None:
+        value = []
+    if isinstance(value, str) and value.lower() in ("on", "off") and key != "custom_tools":
         value = value.lower() == "on"
     try:
         s.config = RunConfig.model_validate({**s.config.model_dump(), key: value})
@@ -521,7 +629,8 @@ def _set(s: Session, key: str, value: Any) -> bool:
         first = str(exc).splitlines()
         s.console.print(result_line(f"[warn]Invalid value for {key}:[/] {first[-1] if first else exc}"))
         return True
-    s.console.print(result_line(f"{key} {GLYPH['arrow']} [accent]{getattr(s.config, key)}[/]"))
+    shown = _config_value(key, getattr(s.config, key))
+    s.console.print(result_line(f"{key} {GLYPH['arrow']} [accent]{escape(shown)}[/]"))
     return True
 
 
@@ -592,24 +701,98 @@ def _show(s: Session, args: list[str]) -> bool:
 
 
 def _brief(s: Session, args: list[str]) -> bool:
-    """``/brief [id]``: print a run's brief.
+    """``/brief [id] [compute] [pdf]``: print a run's lab brief, or its computational brief (UI-8).
 
     Parameters
     ----------
     s : Session
         Session.
     args : list of str
-        Run ID; the newest run by default.
+        Run ID (the newest run by default), then ``compute`` and/or ``pdf``.
 
     Returns
     -------
     bool
         True.
     """
-    rid = _need_id(s, args, "/brief <run id>")
+    words = {"compute", "pdf"}
+    rid = _need_id(s, [a for a in args if a not in words][:1], "/brief <run id> [compute] [pdf]")
     if rid:
-        actions.brief_view(s.console, rid, s.root)
+        actions.brief_view(s.console, rid, s.root, pdf="pdf" in args, compute="compute" in args)
     return True
+
+
+def _rename(s: Session, args: list[str]) -> bool:
+    """``/rename [id] <title>``: set a run's title (the newest run's when the first word is not a run).
+
+    Parameters
+    ----------
+    s : Session
+        Session.
+    args : list of str
+        Optional run ID, then the title words.
+
+    Returns
+    -------
+    bool
+        True.
+    """
+    ids = set(_run_ids(s))
+    rid, words = (args[0], args[1:]) if args and args[0] in ids else (None, args)
+    if not words:
+        s.console.print(result_line("[warn]Usage:[/] /rename [run id] <title>"))
+        return True
+    rid = rid or _need_id(s, [], "/rename [run id] <title>")
+    if rid:
+        actions.rename_cmd(s.console, rid, " ".join(words), s.root)
+    return True
+
+
+def _tools(s: Session, args: list[str]) -> bool:
+    """``/tools [list|review|show|remove] [name]``: the agent-built tool library (AT-20, AT-21, AT-28).
+
+    Parameters
+    ----------
+    s : Session
+        Session.
+    args : list of str
+        Action (``list`` by default) and tool name.
+
+    Returns
+    -------
+    bool
+        True.
+    """
+    action = args[0] if args else "list"
+    actions.tools_cmd(
+        s.console,
+        action,
+        args[1] if len(args) > 1 else None,
+        s.config.tool_library_dir,
+        ask=s.read_line,
+        confirm=s.confirm,
+    )
+    return True
+
+
+def _tool_names(s: Session) -> list[str]:
+    """Return the library actions and tool names for completion.
+
+    Parameters
+    ----------
+    s : Session
+        Session.
+
+    Returns
+    -------
+    list of str
+        ``list``, ``review``, ``show``, ``remove``, then tool names.
+    """
+    try:
+        lib = tool_library(s.config.tool_library_dir)
+    except Exception:
+        return list(actions.TOOL_ACTIONS)
+    return list(actions.TOOL_ACTIONS) + [str(t["name"]) for t in lib["approved"] + lib["unapproved"]]
 
 
 def _literature(s: Session, args: list[str]) -> bool:
@@ -652,7 +835,7 @@ def _resume(s: Session, args: list[str]) -> bool:
     if not args:
         s.console.print(result_line("[warn]Usage:[/] /resume <run id> · /runs lists them"))
         return True
-    resume_run(s.console, args[0], deps=s.deps, root=s.root, verbose=s.verbose)
+    resume_run(s.console, args[0], deps=s.deps, root=s.root, verbose=s.verbose, prompts=s.prompts())
     return True
 
 
@@ -679,7 +862,7 @@ def _replay(s: Session, args: list[str]) -> bool:
     except ValueError:
         s.console.print(result_line("[warn]Speed must be a number.[/]"))
         return True
-    replay_run(s.console, args[0], speed, root=s.root, verbose=s.verbose)
+    replay_run(s.console, args[0], speed, root=s.root, verbose=s.verbose, prompts=s.prompts())
     return True
 
 
@@ -790,10 +973,27 @@ _ALL = [
     ),
     Command("novel", "[on|off]", "Require novel materials", _novel, lambda s: ["on", "off"]),
     Command("config", "[key value]", "Show or set run options", _config, lambda s: list(CONFIG_KEYS)),
+    Command(
+        "profile",
+        "quick|standard|thorough",
+        "Preset budgets for the next run",
+        _profile,
+        lambda s: list(actions.PROFILES),
+    ),
     Command("verbose", "[on|off]", "Show thinking and results in full", _verbose, lambda s: ["on", "off"]),
     Command("runs", "", "List stored runs", _runs),
     Command("show", "[id]", "A run's spec, rounds, candidates and summary", _show, _run_ids),
-    Command("brief", "[id]", "Print a run's experimental brief", _brief, _run_ids),
+    Command(
+        "brief", "[id] [compute] [pdf]", "A run's lab brief, or its computational brief", _brief, _run_ids
+    ),
+    Command("rename", "[id] <title>", "Set a run's title", _rename, _run_ids),
+    Command(
+        "tools",
+        "[list|review|show|remove] [name]",
+        "Agent-built tools in the library",
+        _tools,
+        _tool_names,
+    ),
     Command(
         "literature",
         "[id] [filter]",

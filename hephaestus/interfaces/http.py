@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from hephaestus.core import credentials, valency_auth
-from hephaestus.core.config import RunConfig
+from hephaestus.core.config import PROFILES, RunConfig
 from hephaestus.core.types import RunState, SearchSpec
 from hephaestus.harness import runner
 from hephaestus.interfaces.python import (
@@ -406,6 +406,17 @@ def create_app(
             ``RunConfig().model_dump()``.
         """
         return RunConfig().model_dump(mode="json")
+
+    @app.get("/config/profiles")
+    def config_profiles() -> list[dict[str, Any]]:
+        """Return the setting profiles: ``{id, name, hint, values}``, where ``values`` are ``RunConfig`` fields (OR-4).
+
+        Returns
+        -------
+        list of dict
+            ``PROFILES``, quick to thorough.
+        """
+        return PROFILES
 
     @app.get("/config/schema")
     def config_schema() -> dict[str, Any]:
