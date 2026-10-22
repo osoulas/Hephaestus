@@ -35,6 +35,7 @@ dependencies = [
   "mcp>=2.0",
   "mp-api>=0.45",
   "numpy>=1.26",
+  "prompt_toolkit>=3.0.43",
   "phonopy>=2.26",
   "pydantic>=2.7",
   "pymatgen>=2024.6.10",

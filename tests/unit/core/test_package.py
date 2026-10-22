@@ -67,8 +67,11 @@ def test_layers_import_only_downwards(layer: str) -> None:
 
 
 def test_cli_entry_point_runs() -> None:
-    """``python -m hephaestus`` parses its subcommands."""
-    assert main(["replay"]) == 2
+    """``python -m hephaestus`` parses its subcommands (CLAUDE.md round 2, B)."""
+    from hephaestus.interfaces.cli.app import SUBCOMMANDS
+
+    assert main(["--help"]) == 0
+    assert {"run", "parse", "replay", "resume", "login", "backends", "signin", "serve"} <= set(SUBCOMMANDS)
 
 
 def test_or11_cli_login_saves_an_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

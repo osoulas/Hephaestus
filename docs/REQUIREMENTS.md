@@ -32,6 +32,9 @@ unchanged; new ones are marked *(new)*. Tool-level detail lives in `docs/TOOLS.m
   Approved tools are saved as files in the working directory and reused by later runs. A capability phase is
   added between goal parsing and the campaign (OR-1, GP-2); new types `ToolProposal`, `ToolDecision` and
   `CustomTool`; new `RunConfig` fields.
+- **Deciding from the CLI** *(22 October)*: the CLI answers through `Experiment.waiting()` and `decide()`
+  rather than the callback (AT-28); `waiting()` and `tool_proposals()` cover every capability phase (AT-29).
+  Setting profiles live in the Python API (`PROFILES`, `GET /config/profiles`).
 
 Oct 16, 2026 · @Oskar Soulas
 
@@ -729,8 +732,8 @@ stability verdicts. The tool file format, the toolkit and the event payloads are
 | AT-25 | Time spent waiting for the user counts against no budget. `capability_time_budget_s` (default 600) bounds the agent's work in the phase; when it runs out, unfinished tools are treated as cancelled. At most `max_custom_tools` (default 3) tools per run. | Must | A run that waits 20 minutes for a decision still runs its full campaign. |
 | AT-26 | `RunConfig.disabled_capabilities` removes built-in capabilities for a run (`elastic` removes every mechanical property). This is for demos and tests. | Must | With `elastic` disabled, a bulk modulus goal opens a gap. |
 | AT-27 | The UI shows the plan and the code review as cards in the orchestrator log, with the four actions and a message box. The code card has a syntax-highlighted viewer. A tool library page lists approved and unapproved tools, and the settings panel exposes the `RunConfig` fields of this section. | Must | Every action can be taken from the UI. |
-| AT-28 | The interactive CLI shows the plan and the code (paged, highlighted) and asks for the decision. `hephaestus tools list`, `review` and `remove` manage the library. Built on the CLI branch, through the Python API's `on_tool_proposal` callback and `tool_library`, `approve_tool` and `remove_tool`. | Must | Every action can be taken from the CLI. |
-| AT-29 | The Python API takes a decision callback (`Experiment(goal, on_tool_proposal=fn)`) and exposes `exp.decide(proposal_id, action, message)` for step-by-step use. | Should | A scripted callback drives a run through both stages. |
+| AT-28 | The interactive CLI shows the plan and the code (paged, highlighted) and asks for the decision. `hephaestus tools list`, `review`, `show` and `remove` manage the library. Built through the Python API: `waiting()` and `decide()` from the CLI's own thread (the `on_tool_proposal` callback runs on the run's thread, where the terminal is not safe to use), and `tool_library`, `approve_tool` and `remove_tool`. | Must | Every action can be taken from the CLI. |
+| AT-29 | The Python API takes a decision callback (`Experiment(goal, on_tool_proposal=fn)`) and exposes `exp.waiting()` and `exp.decide(proposal_id, action, message)` for step-by-step use, covering every capability phase of the run. | Should | A scripted callback drives a run through both stages; `waiting()` and `tool_proposals()` list a second target's phase. |
 
 ### Functions
 
