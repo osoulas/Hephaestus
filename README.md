@@ -248,33 +248,6 @@ Tools run in a sandboxed worker process: a fixed import allowlist, no network, t
 building blocks (relaxations, phonons, single points) served by the main process. The sandbox only blocks
 accidents, so reviewing the code before you approve it is a necessary safeguard.
 
-## Project layout
-
-```
-hephaestus/
-  core/          shared types, configuration, cache, event bus
-  llm/           Claude backends (API, Claude Code), structured calls, sign-in
-  tools/         tools the agent calls: literature, Materials Project, structures, simulation, agent-built
-  harness/       orchestrator loop, reviewer, gates, capability phase, final re-check, briefs, runner
-  interfaces/    Python API, HTTP API, CLI, web UI
-docs/            requirements, tool contract, stability method, Valency tools
-tests/           unit, integration, slow (real MACE and MEGNet) and live suites
-```
-
-
-
-## Testing
-
-```bash
-pytest -q                              # default suite: offline, no GPU, no API key
-pytest -m slow                         # real MACE and MEGNet on cached tiny cases
-pytest -m live                         # real LLM, Valency and Materials Project
-ruff check . && ruff format --check .
-```
-
-The default suite blocks outbound network access. Mark a test `live` to let it use the network.
-
-
 ## Acknowledgements
 
 Built for the OSI Hackathon, 21–22 October 2026, by Oskar Soulas, Peter Russell, and Peter Graham.
