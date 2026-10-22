@@ -11,12 +11,13 @@ import { formula, h, icon, label } from "./dom.js";
 export function specGrid(spec, cfg) {
   const cell = (k, v) => h("div.spec-cell", null, h("div.k", null, k), h("div.v", null, v));
   const target = targetText(spec);
+  const several = (spec.extra_targets || []).length > 0;
   const thr = spec.stability_thresholds || {};
   const grid = h(
     "div.spec-grid",
     null,
     cell("Material family", spec.material_family || "–"),
-    cell("Target", target),
+    cell(several ? "Targets (all must be met)" : "Target", target),
     cell("Thermodynamic stability", `≤ ${thr.e_hull_max_eV_per_atom ?? 0.05} eV/atom above hull`),
     cell("Dynamic stability", "Phonons with mode mapping"),
     cell("Excluded elements", spec.excluded_elements && spec.excluded_elements.length ? spec.excluded_elements.join(", ") : "None"),
@@ -39,6 +40,18 @@ export function specGrid(spec, cfg) {
  * @returns {Node}
  */
 export function targetText(spec) {
+  const extra = spec.extra_targets || [];
+  if (!extra.length) return oneTarget(spec);
+  const all = [oneTarget(spec), ...extra.map((t) => oneTarget({ target_property: t.property, direction: t.direction, reference_material: t.reference_material, reference_value: t.reference_value, target_value: t.value, target_tolerance: t.tolerance, target_units: t.units }))];
+  return h("span", null, all.flatMap((x, i) => (i ? [" · ", x] : [x])));
+}
+
+/**
+ * One target in words.
+ * @param {object} spec SearchSpec, or a target in its field names.
+ * @returns {Node}
+ */
+function oneTarget(spec) {
   const prop = label(spec.target_property);
   const dir = { minimise: "below", maximise: "above", hit: "near" }[spec.direction] || spec.direction;
   if (spec.reference_material) {

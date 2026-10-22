@@ -3621,3 +3621,13 @@ details.issues[open] > summary {
   display: grid;
   gap: 6px;
 }
+
+/* overview stats with more than one target: five in a row, or rows of three */
+@media (min-width: 901px) {
+  .stats.cols-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .stats.cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

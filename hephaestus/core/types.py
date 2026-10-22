@@ -90,6 +90,23 @@ class StabilityThresholds(Record):
     dynamic: bool = True
 
 
+class Target(Record):
+    """One property target; every target of a spec must be met.
+
+    The spec's own ``target_*`` fields are the primary target; more go in ``SearchSpec.extra_targets``.
+    """
+
+    property: str
+    value: float | None = None
+    units: str = ""
+    direction: Direction = "minimise"
+    tolerance: float | None = None  # only for direction "hit"
+    reference_material: str | None = None
+    reference_value: Quantity | None = None
+    tool: str | None = None  # agent-built tool that computes it (Section 14)
+    evaluable: bool = True  # false when no tool can compute it in this run
+
+
 class SearchSpec(Record):
     """Structured search specification produced by the goal parser (Section 1)."""
 
@@ -114,6 +131,78 @@ class SearchSpec(Record):
     # target can be evaluated at all (false when the user cancelled the tool for it, AT-8)
     target_tool: str | None = None
     target_evaluable: bool = True
+    # Further property targets; every target must be met (the fields above are the primary one)
+    extra_targets: list[Target] = Field(default_factory=list)
+
+    def targets(self) -> list[Target]:
+        """Return every target: the primary one, then ``extra_targets``.
+
+        Returns
+        -------
+        list of Target
+            At least one target.
+        """
+        primary = Target(
+            property=self.target_property,
+            value=self.target_value,
+            units=self.target_units,
+            direction=self.direction,
+            tolerance=self.target_tolerance,
+            reference_material=self.reference_material,
+            reference_value=self.reference_value,
+            tool=self.target_tool,
+            evaluable=self.target_evaluable,
+        )
+        return [primary, *self.extra_targets]
+
+    def target_view(self, i: int) -> SearchSpec:
+        """Return a copy whose primary target is target ``i``, for single-target code.
+
+        Parameters
+        ----------
+        i : int
+            Index into ``targets()``.
+
+        Returns
+        -------
+        SearchSpec
+            The copy; ``extra_targets`` is emptied.
+        """
+        return self.with_target(0, self.targets()[i]).model_copy(update={"extra_targets": []})
+
+    def with_target(self, i: int, t: Target) -> SearchSpec:
+        """Return a copy with target ``i`` replaced.
+
+        Parameters
+        ----------
+        i : int
+            Index into ``targets()``; 0 is the primary target.
+        t : Target
+            The new target.
+
+        Returns
+        -------
+        SearchSpec
+            The copy.
+        """
+        if i == 0:
+            return self.model_copy(
+                update={
+                    "target_property": t.property,
+                    "target_value": t.value,
+                    "target_units": t.units,
+                    "direction": t.direction,
+                    "target_tolerance": t.tolerance,
+                    "reference_material": t.reference_material,
+                    "reference_value": t.reference_value,
+                    "target_tool": t.tool,
+                    "target_evaluable": t.evaluable,
+                },
+                deep=True,
+            )
+        extra = [x.model_copy(deep=True) for x in self.extra_targets]
+        extra[i - 1] = t
+        return self.model_copy(update={"extra_targets": extra}, deep=True)
 
 
 class Paper(Record):

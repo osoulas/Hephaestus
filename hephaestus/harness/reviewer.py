@@ -190,6 +190,7 @@ def review_prompt(
             "units": ws.spec.target_units,
             "reference": ws.spec.reference_material,
         },
+        "all_targets": [t.model_dump(exclude={"reference_value"}) for t in ws.spec.targets()],
         "conditions": ws.spec.conditions.model_dump(),
         "round": ws.round,
         "orchestrator_summary": summary,

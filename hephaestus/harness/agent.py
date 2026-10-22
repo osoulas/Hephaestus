@@ -308,6 +308,7 @@ class Campaign:
             "novelty": cs.candidate.novelty,
             "rationale": cs.candidate.rationale,
             "evidence_ids": cs.candidate.evidence_ids,
+            "targets": f.get("targets"),  # per-target results when there is more than one target
         }
 
     # ------------------------------------------------------------------ tools

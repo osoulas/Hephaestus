@@ -23,7 +23,14 @@ import numpy as np
 
 from hephaestus.core.store import cached
 from hephaestus.core.types import ErrorRecord, Lattice, PhononResult, PropertyPrediction, Quantity
-from hephaestus.tools.registry import PROPERTY_KEYS, CandidateState, ToolError, Workspace, register
+from hephaestus.tools.registry import (
+    PROPERTY_KEYS,
+    CandidateState,
+    ToolError,
+    Workspace,
+    register,
+    target_info,
+)
 
 GPU_LOCK = threading.RLock()
 """One GPU model call at a time across the process: MACE and MEGNet share it (SE-15)."""
@@ -1819,10 +1826,6 @@ def predict_property(ws: Workspace, candidate_id: str, property: str) -> dict[st
         "scale_note": entry["scale_note"] or entry["error_note"],
         **extra,
     }
-    if property == ws.spec.target_property:
-        out["target"] = {
-            "direction": ws.spec.direction,
-            "value": ws.spec.target_value,
-            "reference": ws.spec.reference_material,
-        }
+    if (target := target_info(ws.spec, property)) is not None:
+        out["target"] = target
     return out

@@ -32,7 +32,7 @@ from typing import Any
 from hephaestus.core.config import RunConfig
 from hephaestus.core.store import atomic_write_text, cached
 from hephaestus.core.types import CustomTool, PropertyPrediction, Quantity, utcnow
-from hephaestus.tools.registry import PROPERTY_KEYS, TOOLS, Handler, ToolError, Workspace
+from hephaestus.tools.registry import PROPERTY_KEYS, TOOLS, Handler, ToolError, Workspace, target_info
 
 WORKER = Path(__file__).with_name("sandbox_worker.py")
 MANIFEST = "manifest.json"
@@ -1545,12 +1545,8 @@ def make_handler(tool: CustomTool, toolkit_factory: ToolkitFactory | None = None
             "note": AGENT_LABEL,
             "details": r["details"],
         }
-        if tool.property == ws.spec.target_property:
-            out["target"] = {
-                "direction": ws.spec.direction,
-                "value": ws.spec.target_value,
-                "reference": ws.spec.reference_material,
-            }
+        if (target := target_info(ws.spec, tool.property)) is not None:
+            out["target"] = target
         return out
 
     return handler

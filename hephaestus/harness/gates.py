@@ -119,20 +119,61 @@ def check_target(cs: CandidateState, spec: SearchSpec) -> dict[str, bool | None]
         ``all_passed``. Missing results count as not passed; a stability check turned off for
         the run is ``None`` and does not count towards ``all_passed``.
     """
-    pred = cs.predictions.get(spec.target_property) if spec.target_evaluable else None
-    central = pred is not None and target_met(pred.value.value, spec)
-    # An agent-built tool has no uncertainty, so both readings agree (AT-17)
-    conservative = pred is not None and target_met(pessimistic(pred.value, spec), spec)
+    rows = target_rows(cs, spec)
+    central = all(r["met_central"] for r in rows)
+    conservative = all(r["met_conservative"] for r in rows)
     st = spec.stability_thresholds
     thermo = cs.e_hull is not None and not cs.hull_stale and cs.e_hull <= st.e_hull_max_eV_per_atom
     dyn = cs.phonon is not None and cs.phonon.stable
-    return {
+    out: dict[str, Any] = {
         "target_met_central": central,
         "target_met_conservative": conservative,
         "thermo_stable": thermo if st.thermodynamic else None,
         "dyn_stable": dyn if st.dynamic else None,
         "all_passed": central and (thermo or not st.thermodynamic) and (dyn or not st.dynamic),
     }
+    if len(rows) > 1:
+        out["targets"] = rows
+    return out
+
+
+def target_rows(cs: CandidateState, spec: SearchSpec) -> list[dict[str, Any]]:
+    """Check every property target on its own; all must be met (central and conservative readings).
+
+    Parameters
+    ----------
+    cs : CandidateState
+        Candidate state.
+    spec : SearchSpec
+        Targets.
+
+    Returns
+    -------
+    list of dict
+        Per target: ``property``, ``value``, ``uncertainty``, ``units``, ``met_central``,
+        ``met_conservative``, ``evaluable`` and ``agent_built``. A target with no prediction, or
+        that cannot be evaluated in this run, is not met.
+    """
+    rows = []
+    for i, t in enumerate(spec.targets()):
+        view = spec.target_view(i)
+        pred = cs.predictions.get(t.property) if t.evaluable else None
+        rows.append(
+            {
+                "property": t.property,
+                "value": pred.value.value if pred else None,
+                "uncertainty": pred.value.uncertainty if pred else None,
+                "units": pred.value.units if pred else t.units,
+                "target": t.value,
+                "direction": t.direction,
+                "met_central": pred is not None and target_met(pred.value.value, view),
+                # An agent-built tool has no uncertainty, so both readings agree (AT-17)
+                "met_conservative": pred is not None and target_met(pessimistic(pred.value, view), view),
+                "evaluable": t.evaluable,
+                "agent_built": bool(pred and pred.model.startswith("agent-built:")),
+            }
+        )
+    return rows
 
 
 def missing_steps(cs: CandidateState, spec: SearchSpec) -> list[str]:
@@ -160,8 +201,9 @@ def missing_steps(cs: CandidateState, spec: SearchSpec) -> list[str]:
         out.append("energy_above_hull")
     if st.dynamic and cs.phonon is None:
         out.append("phonons")
-    if spec.target_evaluable and spec.target_property not in cs.predictions:
-        out.append(spec.target_tool or f"predict_property({spec.target_property})")
+    for t in spec.targets():
+        if t.evaluable and t.property not in cs.predictions:
+            out.append(t.tool or f"predict_property({t.property})")
     return out
 
 
@@ -200,6 +242,7 @@ def facts(ws: Workspace, candidate_id: str) -> dict[str, Any]:
         "in_domain": pred.in_domain if pred else None,
         "agent_built": bool(pred and pred.model.startswith("agent-built:")),
         **checks,
+        "distance": _finite(distance_all(cs, ws.spec)),  # None when a target has no value (JSON has no inf)
         "missing": missing_steps(cs, ws.spec),
     }
 
@@ -220,7 +263,54 @@ def _rank_key(f: dict[str, Any], spec: SearchSpec) -> tuple[Any, ...]:
         Ascending sort key.
     """
     passed = sum(bool(f[k]) for k in ("target_met_central", "thermo_stable", "dyn_stable"))
-    return (-passed, distance_to_target(f["value"], spec), f["candidate_id"])
+    distance = f.get("distance", distance_to_target(f["value"], spec))
+    distance = math.inf if distance is None else distance
+    return (-passed, distance, f["candidate_id"])
+
+
+def _finite(x: float) -> float | None:
+    """Return ``x``, or ``None`` when it is not finite.
+
+    Parameters
+    ----------
+    x : float
+        Number.
+
+    Returns
+    -------
+    float or None
+        ``x`` or ``None``.
+    """
+    return x if math.isfinite(x) else None
+
+
+def distance_all(cs: CandidateState, spec: SearchSpec) -> float:
+    """Distance to every target at once; lower is better (ranking only).
+
+    One target: the plain distance, in its units. Several: the sum of distances relative to each
+    target value, so properties in different units can be added.
+
+    Parameters
+    ----------
+    cs : CandidateState
+        Candidate state.
+    spec : SearchSpec
+        Targets.
+
+    Returns
+    -------
+    float
+        ``inf`` when any target has no prediction.
+    """
+    targets = spec.targets()
+    total = 0.0
+    for i, t in enumerate(targets):
+        pred = cs.predictions.get(t.property) if t.evaluable else None
+        d = distance_to_target(pred.value.value if pred else None, spec.target_view(i))
+        if len(targets) > 1 and math.isfinite(d):
+            d /= max(abs(t.value or 0.0), 1e-9)
+        total += d
+    return total
 
 
 def select_best(all_facts: list[dict[str, Any]], spec: SearchSpec) -> str | None:
@@ -324,17 +414,17 @@ def score_rubric(
     """
     checks = check_target(cs, spec)
     thr = spec.stability_thresholds.e_hull_max_eV_per_atom
-    if checks["target_met_conservative"]:
-        prop = 30
-    elif checks["target_met_central"]:
-        prop = 15
-    else:
-        prop = 0
+    # 30 per target met conservatively, 15 at the central value; averaged over the targets
+    rows = target_rows(cs, spec)
+    prop = round(
+        sum(30 if r["met_conservative"] else 15 if r["met_central"] else 0 for r in rows) / len(rows)
+    )
     thermo = 0
     if checks["thermo_stable"] and cs.e_hull is not None:
         thermo = 20 if cs.e_hull <= thr / 2 else 10
-    pred = cs.predictions.get(spec.target_property)
-    reliability = 5 * sum([cs.converged, cs.potential_in_domain is True, bool(pred and pred.in_domain)])
+    preds = [cs.predictions.get(t.property) for t in spec.targets()]
+    models_in_domain = all(p is not None and p.in_domain for p in preds)
+    reliability = 5 * sum([cs.converged, cs.potential_in_domain is True, models_in_domain])
     breakdown = {
         "property": prop,
         "thermo": thermo,
@@ -479,12 +569,20 @@ def submission_gate(
         ("thermo_stable", "not thermodynamically stable"),
         ("dyn_stable", "not dynamically stable"),
     ]:
+        if key == "target_met_central" and len(ws.spec.targets()) > 1:
+            continue  # named per target below
         if key == "target_met_central" and not ws.spec.target_evaluable:
             continue
         if checks[key] is False:  # None: the check is turned off for the run
             reasons.append(label)
-    if not ws.spec.target_evaluable:
-        reasons.append(f"{ws.spec.target_property} was not evaluated: the user cancelled the tool for it")
+    rows = target_rows(cs, ws.spec)
+    if len(rows) > 1:
+        for r in rows:
+            if r["evaluable"] and not r["met_central"] and r["value"] is not None:
+                reasons.append(f"{r['property']} target not met")
+    for t in ws.spec.targets():
+        if not t.evaluable:
+            reasons.append(f"{t.property} was not evaluated: the user cancelled the tool for it")
     if ws.cfg.require_novel and novelty_hits != 0:
         reasons.append(
             "novelty required but the composition has prior reports"

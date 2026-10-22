@@ -25,6 +25,7 @@ unchanged; new ones are marked *(new)*. Tool-level detail lives in `docs/TOOLS.m
   - crash diagnostics (DL-11)
   - new UI controls (UI-12 to UI-16)
 - **Shared types:** `Critique` gains `llm_confidence` and `llm_confidence_reason`; `RunConfig` is now listed.
+- **Several property targets** *(22 October)*: `SearchSpec.extra_targets`; every target must be met. References are computed per target, each target without a tool gets its own capability phase, and the rubric's property points are averaged over the targets.
 - **Agent-built tools** *(22 October, new Section 14)*. When no tool can compute the goal's property, the agent
   proposes a tool, writes it once the user accepts the plan, and the user reviews the code before it runs.
   Approved tools are saved as files in the working directory and reused by later runs. A capability phase is
@@ -108,7 +109,7 @@ Every function in the package passes one of the records below. Define them once,
 | Type | Key fields (type, units) | Produced by | Stored as |
 | --- | --- | --- | --- |
 | `Quantity` | value (float), uncertainty (float or null), units (str), source (str: model name, paper ID or database ID) | Many | Inside other records |
-| `SearchSpec` | raw\_goal (str); material\_family (str); elements (list\[str\]); excluded\_elements (list\[str\]); target\_property (str, registry key); target\_value (float); target\_units (str); direction (maximise, minimise or hit); reference\_material (str or null); reference\_value (Quantity or null); conditions (temperature\_K, pressure\_GPa); hard\_constraints (list\[str\]); soft\_preferences (list\[str\]); stability\_thresholds (e\_hull\_max\_eV\_per\_atom, phonon\_min\_THz); assumptions (list\[str\]) | Goal Parser | `spec.json` |
+| `SearchSpec` | raw\_goal (str); material\_family (str); elements (list\[str\]); excluded\_elements (list\[str\]); target\_property (str, registry key); target\_value (float); target\_units (str); direction (maximise, minimise or hit); reference\_material (str or null); reference\_value (Quantity or null); conditions (temperature\_K, pressure\_GPa); hard\_constraints (list\[str\]); soft\_preferences (list\[str\]); stability\_thresholds (e\_hull\_max\_eV\_per\_atom, phonon\_min\_THz); assumptions (list\[str\]); target\_tool, target\_evaluable (agent-built tools); **extra\_targets (list\[Target\]: property, value, units, direction, tolerance, reference\_material, reference\_value, tool, evaluable): further property targets, every one of which must be met** | Goal Parser | `spec.json` |
 | `Paper` | paper\_id; title; authors (list\[str\]); year (int or null); doi; url; source (arxiv, pubmed, biorxiv, medrxiv); abstract; citation\_count (int or null); relevance (float 0 to 1); found\_via (semantic, cited, negative, similar, citing) | Literature Miner | Inside `literature.json` |
 | `Insight` | composition (str or null); property (str); value (Quantity or null); conditions (str); finding\_type (positive, negative, mechanism, synthesis, method); summary (str); paper\_id (str) | Literature Miner | Inside `literature.json` |
 | `LiteratureContext` | papers (list\[Paper\]); insights (list\[Insight\]); property\_map (dict: composition to Quantity); failed\_approaches (list\[str\]); mechanisms (list\[str\]); synthesis\_routes (list\[str\]); open\_questions (list\[str\]); field\_trend (dict: year to count); coverage\_note (str) | Literature Miner | `literature.json` |
@@ -138,7 +139,7 @@ The Goal Parser turns a free-text research goal into a structured search specifi
 
 | ID | Requirement | Priority | Acceptance check |
 | --- | --- | --- | --- |
-| GP-1 | Extract material family, elements, target property, target value, units and direction from the goal. | Must | 10 test goals parsed correctly by hand review. |
+| GP-1 | Extract material family, elements, target property, target value, units and direction from the goal. A goal with several property targets keeps the main one in the target fields and the rest in `extra_targets`; every target must be met by the target check, the submission gate and the stop rule. | Must | 10 test goals parsed correctly by hand review; "smaller gap and higher bulk modulus than SrTiO3" gives two targets. |
 | GP-2 | Map the target property to one the Property Predictor supports, or flag it as unsupported before the run starts. An unsupported property keeps its plain name and units, and becomes a capability gap (AT-1). | Must | An unsupported property (e.g. creep rate) is flagged, not silently swapped. |
 | GP-3 | Separate hard constraints (must hold: "no lead") from soft preferences ("cheap if possible"). | Must | Constraints are labelled hard or soft in the output. |
 | GP-4 | Expand implied constraints into explicit ones, e.g. "lead-free" becomes an excluded element. | Must | Excluded-element list is populated from wording. |

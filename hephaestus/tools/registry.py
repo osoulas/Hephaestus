@@ -100,6 +100,27 @@ def target_step(spec: SearchSpec, candidate_id: str) -> tuple[str, dict[str, Any
     return "predict_property", {"candidate_id": candidate_id, "property": spec.target_property}
 
 
+def target_info(spec: SearchSpec, prop: str) -> dict[str, Any] | None:
+    """Return the target a property result is checked against, for tool results.
+
+    Parameters
+    ----------
+    spec : SearchSpec
+        Targets.
+    prop : str
+        Property key.
+
+    Returns
+    -------
+    dict or None
+        ``{direction, value, reference}``; ``None`` when the property is not a target.
+    """
+    t = next((t for t in spec.targets() if t.property == prop), None)
+    if t is None:
+        return None
+    return {"direction": t.direction, "value": t.value, "reference": t.reference_material}
+
+
 class ToolError(Exception):
     """A tool failure reported to the LLM as ``{"error": message}``, never raised past dispatch."""
 
