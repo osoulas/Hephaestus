@@ -59,3 +59,33 @@ def test_dl12_unicode_round_trips() -> None:
     """Units such as "Å" and "≤" survive JSON."""
     q = T.Quantity(value=3.9, uncertainty=0.01, units="Å", source="≤ test")
     assert T.Quantity.model_validate_json(q.model_dump_json()) == q
+
+
+def test_pp1_band_gap_model_replaces_fidelity() -> None:
+    """Old configs with band_gap_fidelity load as the matching band gap model; the fidelity is derived."""
+    from hephaestus.core.config import BAND_GAP_MODELS, RunConfig
+
+    old = RunConfig.model_validate({"band_gap_fidelity": "pbe"})
+    assert old.band_gap_model == "megnet-pbe" and old.band_gap_fidelity == "pbe"
+    assert "band_gap_fidelity" not in old.model_dump()
+    assert RunConfig().band_gap_model == "megnet-hse" and set(BAND_GAP_MODELS) == {
+        "megnet-hse",
+        "megnet-pbe",
+        "megnet-gllb-sc",
+        "megnet-scan",
+    }
+
+
+def test_or9_or10_budget_of_zero_means_no_limit() -> None:
+    """A budget of 0 is no limit; negative budgets are rejected."""
+    import math
+
+    import pytest
+    from pydantic import ValidationError
+
+    from hephaestus.core.config import RunConfig, budget_limit
+
+    assert budget_limit(0) == math.inf and budget_limit(90) == 90
+    assert RunConfig(max_tool_calls=0, time_budget_s=0).max_tool_calls == 0
+    with pytest.raises(ValidationError):
+        RunConfig(max_iterations=-1)

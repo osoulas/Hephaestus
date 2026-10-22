@@ -23,7 +23,14 @@ import numpy as np
 
 from hephaestus.core.store import cached
 from hephaestus.core.types import ErrorRecord, Lattice, PhononResult, PropertyPrediction, Quantity
-from hephaestus.tools.registry import PROPERTY_KEYS, CandidateState, ToolError, Workspace, register
+from hephaestus.tools.registry import (
+    PROPERTY_KEYS,
+    CandidateState,
+    ToolError,
+    Workspace,
+    register,
+    target_info,
+)
 
 GPU_LOCK = threading.RLock()
 """One GPU model call at a time across the process: MACE and MEGNet share it (SE-15)."""
@@ -1084,8 +1091,10 @@ def hull(ws: Workspace, candidate_id: str) -> dict[str, Any]:
     Raises
     ------
     ToolError
-        If not relaxed, or the hull cannot be built.
+        If not relaxed, the hull cannot be built, or the hull is turned off for the run.
     """
+    if not ws.cfg.run_hull:
+        raise ToolError("Energy above hull is turned off for this run (run_hull=false).")
     cs = ws.get(candidate_id)
     _needs_relax(cs)
     assert cs.potential and cs.structure and cs.energy_eV_per_atom is not None
@@ -1270,8 +1279,8 @@ def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
 
     Parameters
     ----------
-    fidelity : {"hse", "pbe"}
-        Band gap fidelity.
+    fidelity : {"hse", "pbe", "gllb-sc", "scan"}
+        Output fidelity of the chosen band gap model.
 
     Returns
     -------
@@ -1282,6 +1291,8 @@ def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
     gap_err = {
         "hse": (0.65, "MAE against 15 measured perovskite gaps"),
         "pbe": (0.57, "MAE against MP PBE gaps; about 1.6 eV below experiment"),
+        "gllb-sc": (None, "no uncertainty available: GLLB-SC output not benchmarked against measured gaps"),
+        "scan": (None, "no uncertainty available: SCAN output not benchmarked against measured gaps"),
     }[fidelity]
     reg: dict[str, dict[str, Any]] = {
         "band_gap": {
@@ -1720,9 +1731,12 @@ def predict_property(ws: Workspace, candidate_id: str, property: str) -> dict[st
     ToolError
         For unsupported properties (PP-6), or when a prerequisite step has not run.
     """
-    reg = property_registry(ws.cfg.band_gap_fidelity)
+    from hephaestus.tools.custom import disabled_properties
+
+    off = disabled_properties(ws.cfg)
+    reg = {k: v for k, v in property_registry(ws.cfg.band_gap_fidelity).items() if k not in off}
     if property not in reg:
-        raise ToolError(f"{property!r} is not available; supported: {', '.join(reg)}.")
+        raise ToolError(f"{property!r} is not available in this run; supported: {', '.join(reg)}.")
     cs = ws.get(candidate_id)
     _needs_relax(cs)
     assert cs.structure is not None and cs.potential
@@ -1812,10 +1826,6 @@ def predict_property(ws: Workspace, candidate_id: str, property: str) -> dict[st
         "scale_note": entry["scale_note"] or entry["error_note"],
         **extra,
     }
-    if property == ws.spec.target_property:
-        out["target"] = {
-            "direction": ws.spec.direction,
-            "value": ws.spec.target_value,
-            "reference": ws.spec.reference_material,
-        }
+    if (target := target_info(ws.spec, property)) is not None:
+        out["target"] = target
     return out

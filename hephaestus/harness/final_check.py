@@ -22,9 +22,17 @@ from typing import Any
 
 from pymatgen.core import Composition
 
+from hephaestus.core.config import budget_limit
 from hephaestus.core.types import SearchSpec, Submission, ValidationCheck, ValidationReport
 from hephaestus.harness.gates import pessimistic, target_met
-from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
+from hephaestus.tools.registry import (
+    CandidateState,
+    Handler,
+    Workspace,
+    execute,
+    load_default_handlers,
+    target_step,
+)
 
 FINAL_FMAX = 0.005  # eV/Å (FC-1)
 MD_PS = 2.0  # ps (FC-5)
@@ -180,10 +188,11 @@ def _must_steps(fws: Workspace, handlers: Mapping[str, Handler], fin: _Finalist)
     ]
     if cfg.run_phonons:
         steps.append(("phonons", {"candidate_id": cid, "mode": "full"}))
-    steps += [
-        ("energy_above_hull", {"candidate_id": cid}),
-        ("predict_property", {"candidate_id": cid, "property": fws.spec.target_property}),
-    ]
+    if cfg.run_hull:
+        steps.append(("energy_above_hull", {"candidate_id": cid}))
+    for i, t in enumerate(fws.spec.targets()):
+        if t.evaluable:
+            steps.append(target_step(fws.spec.target_view(i), cid))
     supercell = None
     for name, args in steps:
         out, err = _call(fws, handlers, name, args)
@@ -352,7 +361,7 @@ def cross_check(fws: Workspace, handlers: Mapping[str, Handler], fin: _Finalist,
 
 
 def final_reference(fws: Workspace, handlers: Mapping[str, Handler]) -> tuple[SearchSpec, list[str]]:
-    """Recompute a relative target's reference with the final potential (GP-11).
+    """Recompute every relative target's reference with the final potential (GP-11).
 
     Parameters
     ----------
@@ -364,30 +373,44 @@ def final_reference(fws: Workspace, handlers: Mapping[str, Handler]) -> tuple[Se
     Returns
     -------
     spec : SearchSpec
-        Spec whose ``target_value`` is the reference at final fidelity; the screening spec when
-        the target is absolute or the reference failed.
+        Spec whose targets use the references at final fidelity; a target keeps its screening
+        value when it is absolute or its reference failed.
     notes : list of str
         What happened.
     """
     spec = fws.spec
-    if not spec.reference_material:
+    targets = spec.targets()
+    if not any(t.reference_material for t in targets):
         return spec, []
     from hephaestus.harness.runner import resolve_reference
 
-    probe = fws.model_copy(update={"spec": spec.model_copy(update={"reference_value": None})})
+    cleared = spec
+    for i, t in enumerate(targets):
+        if t.reference_material:
+            cleared = cleared.with_target(i, t.model_copy(update={"reference_value": None}))
+    probe = fws.model_copy(update={"spec": cleared})
     new, errors = resolve_reference(probe, handlers, potential=fws.cfg.final_potential, fmax=FINAL_FMAX)
-    if errors or new.reference_value is None:
-        reason = errors[0].message if errors else "no value"
-        return spec, [
-            f"Reference {spec.reference_material} not recomputed at final fidelity ({reason}); screening target used."
-        ]
-    old = spec.reference_value.value if spec.reference_value else spec.target_value
-    return spec.model_copy(
-        update={"reference_value": new.reference_value, "target_value": new.target_value}
-    ), [
-        f"Reference {spec.reference_material} recomputed with {fws.cfg.final_potential}: "
-        f"{old:.3g} → {new.reference_value.value:.3g} {new.reference_value.units}."
-    ]
+    out, notes = spec, []
+    for i, (t, n) in enumerate(zip(targets, new.targets(), strict=True)):
+        if not t.reference_material:
+            continue
+        if n.reference_value is None:
+            reason = next((e.message for e in errors if e.message.startswith(f"{t.property}:")), "no value")
+            notes.append(
+                f"Reference {t.reference_material} for {t.property} not recomputed at final fidelity ({reason}); "
+                "screening target used."
+            )
+            continue
+        old = t.reference_value.value if t.reference_value else t.value
+        out = out.with_target(
+            i, t.model_copy(update={"reference_value": n.reference_value, "value": n.value})
+        )
+        notes.append(
+            f"Reference {t.reference_material} recomputed with {fws.cfg.final_potential}: "
+            f"{old:.3g} → {n.reference_value.value:.3g} {n.reference_value.units}"
+            + (f" ({t.property})." if len(targets) > 1 else ".")
+        )
+    return out, notes
 
 
 def facts(cs: CandidateState | None, spec: SearchSpec) -> dict[str, Any]:
@@ -408,13 +431,37 @@ def facts(cs: CandidateState | None, spec: SearchSpec) -> dict[str, Any]:
     """
     if cs is None:
         return {}
-    pred = cs.predictions.get(spec.target_property)
     e_hull = None if cs.e_hull is None or cs.hull_stale else cs.e_hull
     thr = spec.stability_thresholds.e_hull_max_eV_per_atom
+    values, met, met_cons = {}, [], []
+    for i, t in enumerate(spec.targets()):
+        pred = cs.predictions.get(t.property)
+        view = spec.target_view(i)
+        values[t.property] = None if pred is None else pred.value.value
+        met.append(None if pred is None else target_met(pred.value.value, view))
+        met_cons.append(None if pred is None else target_met(pessimistic(pred.value, view), view))
+    extra = {f"value:{p}": v for p, v in list(values.items())[1:]}  # further targets, one row each
+
+    def every(xs: list[bool | None]) -> bool | None:
+        """Combine per-target readings: unknown if any is unknown.
+
+        Parameters
+        ----------
+        xs : list
+            Per-target booleans or None.
+
+        Returns
+        -------
+        bool or None
+            All true, or None when one is missing.
+        """
+        return None if any(x is None for x in xs) else all(xs)
+
     return {
-        "target": None if pred is None else pred.value.value,
-        "target_met": None if pred is None else target_met(pred.value.value, spec),
-        "target_met_conservative": None if pred is None else target_met(pessimistic(pred.value, spec), spec),
+        "target": values[spec.target_property],
+        **extra,
+        "target_met": every(met),
+        "target_met_conservative": every(met_cons),
         "e_hull": e_hull,
         "thermo_stable": None if e_hull is None else e_hull <= thr,
         "dyn_stable": None if cs.phonon is None else cs.phonon.stable,
@@ -468,8 +515,10 @@ def verdict(
     """
     s, f = facts(screening, spec), facts(final, final_spec)
     checks = []
+    extra_rows = [(f"value:{t.property}", t.property) for t in spec.extra_targets]
     for key, name in (
         ("target", spec.target_property),
+        *extra_rows,
         ("target_met", "target_met"),
         ("target_met_conservative", "target_met_conservative"),
         ("e_hull", "e_hull_eV_per_atom"),
@@ -540,7 +589,7 @@ def validate_finalists(
     """
     times: dict[str, float] = {}
     handlers = _timed(handlers if handlers is not None else load_default_handlers(), times, on_step, clock)
-    budget = ws.cfg.final_time_budget_s if time_budget_s is None else time_budget_s
+    budget = budget_limit(ws.cfg.final_time_budget_s if time_budget_s is None else time_budget_s)
     start = clock()
     remaining = lambda: budget - (clock() - start)  # noqa: E731
     fws = ws.model_copy(deep=True)
@@ -594,7 +643,7 @@ def validate_finalists(
         optional(f"runner-up {rid} (FC-6)", check_runner_up, cost=must_cost)
     optional("MD (FC-5)", lambda: run_md(fws, handlers, winner), cost=MD_COST_FACTOR * relax_s)
     second = ws.cfg.cross_check_potential
-    if second:
+    if second and ws.cfg.run_hull:
         optional(
             "second potential (FC-3)",
             lambda: cross_check(fws, handlers, winner, second),

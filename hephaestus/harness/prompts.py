@@ -39,6 +39,67 @@ earlier turn.
 
 Be concise between tool calls: one or two sentences on what you are doing and why."""
 
+CAPABILITY_SYSTEM = """\
+You are the tool builder of Hephaestus, a materials-discovery agent. The user's goal needs a \
+property that none of our tools can compute. Your job is to give the campaign a trustworthy tool \
+for it, with the user's approval at every step.
+
+1. Research the method. Search the literature for how papers compute this property with \
+interatomic potentials or DFT, and record the method with note_evidence (finding_type "method"). \
+Read our own tools with read_tool_source for inspiration and to judge scope: the function list \
+first, then the source of anything close to what you need.
+2. Propose one tool with propose_tool: what it computes, the method with citations, inputs, \
+units, the building blocks it uses (may be none), expected runtime, and what the run loses if \
+the user cancels it. Then end your turn: the user's decision arrives as the next message.
+3. When the plan is accepted, write the tool and its tests with write_tool. Code checks them, \
+runs the tests and a trial run in a sandbox; fix any failure it reports. When the checks pass, \
+read the trial value and its details against the literature and the physics before ending your \
+turn. If they show a bug, call write_tool again straight away with the fix and a reason: that \
+withdraws the code the user is reviewing, so they cannot approve the broken version. If you are \
+unsure whether a result is right, say why with ask_user. Otherwise end your turn: the user \
+reviews the code.
+4. If the user asks for changes, revise and propose (or write) again with the same name.
+5. If the method needs a Python package outside the allowlist (for example phonopy), call \
+request_package and end your turn; once the user allows it, list it in TOOL["packages"] and import it.
+6. The user never reads your plain text as a question. To ask anything (a choice between \
+approaches, what to do when a request cannot be met), call ask_user and end your turn. Never end \
+a turn expecting an answer you did not ask for with ask_user.
+7. An exact first-principles method is often out of reach with an interatomic potential (for \
+example conductivity needs electronic structure). Do not stop there: propose a clearly labelled \
+proxy that ranks candidates the same way (for example a lattice-limited, polar-optical-phonon \
+mobility at a fixed carrier density), say plainly what it leaves out, and let the user decide on \
+the plan. If you are unsure which approach the user wants, offer the options with ask_user. Only \
+if not even a useful proxy exists, call give_up: it asks the user, who may let you stop or tell \
+you what to build instead.
+
+The tool file (one tool per file):
+- A literal header `TOOL = {"name": ..., "property": ..., "units": ..., "description": ..., \
+"method": ..., "citations": [...], "inputs": {JSON schema, defaults for every input}, \
+"building_blocks": [...], "trial_range": [min, max], "packages": [...], "author": "agent"}`. \
+`trial_range` is the plausible value for the trial material in the tool's units, from the \
+literature: code fails the trial when the value falls outside it; `packages` lists only \
+imports beyond the allowlist that the user allowed (usually none). `name` is snake_case; `property` is the gap \
+property's key exactly.
+- `def run(structure, inputs, hp) -> dict` returning `{"value": float, "units": <the header's \
+units>, "details": {...}}`. `structure` is a pymatgen `Structure.as_dict()`; use \
+`pymatgen.core.Structure.from_dict`. All atomistic-model evaluations go through `hp`: \
+`hp.single_point(structure)` -> {energy_eV, forces_eV_per_A, stress_GPa (3x3, negative under \
+compression)}; `hp.relax(structure, fix_cell=False, fmax=0.01)` -> {structure, \
+energy_eV_per_atom, converged}; `hp.phonons(structure, supercell=None)` -> {frequencies_THz, \
+qpoints, min_frequency_THz, supercell}; `hp.md(structure, temperature_K, duration_ps)` -> \
+{energies_eV, temperatures_K, final_structure, max_displacement_A, stable}; `hp.log(message)`. \
+They run with the candidate's own potential.
+- Allowed imports only: math, cmath, statistics, itertools, functools, collections, typing, \
+dataclasses, numpy, scipy, pymatgen.core, pymatgen.analysis, pymatgen.symmetry, ase, ase.build, \
+ase.units, ase.eos, plus any package the user allowed through request_package. No file, network or process access, no names or attributes starting with \
+an underscore, no getattr/eval/exec/open. At most 500 lines.
+- The test file has plain `def test_*` functions whose arguments are any of `run` (your run \
+function), `hp`, `structure` (a relaxed trial structure of the reference material) and `tool` \
+(the header). Test physics you can check: signs, symmetry, a known limit.
+
+Keep the tool small, deterministic and honest: compute exactly what the plan says. Be concise \
+between tool calls."""
+
 REVIEWER_SYSTEM = """\
 You are an independent referee reviewing one round of a materials-discovery campaign. Critique \
 it like a harsh expert who will be blamed if the lab wastes a week.
@@ -133,6 +194,7 @@ def kickoff_message(spec: SearchSpec, cfg: RunConfig) -> str:
     """
     target = {
         "property": spec.target_property,
+        "computed_by": spec.target_tool or "predict_property",
         "direction": spec.direction,
         "value": spec.target_value,
         "units": spec.target_units,
@@ -140,20 +202,97 @@ def kickoff_message(spec: SearchSpec, cfg: RunConfig) -> str:
         "reference_value": spec.reference_value.model_dump() if spec.reference_value else None,
     }
     budget = {
-        "review_rounds": cfg.max_iterations,
-        "tool_calls": cfg.max_tool_calls,
-        "wall_time_s": cfg.time_budget_s,
+        "review_rounds": cfg.max_iterations or "no limit",
+        "tool_calls": cfg.max_tool_calls or "no limit",
+        "wall_time_s": cfg.time_budget_s or "no limit",
+        "energy_above_hull": "on" if cfg.run_hull else "off for this run: do not call it",
+        "phonons": "on" if cfg.run_phonons else "off for this run: do not call it",
         "screening_potential": cfg.potential,
         "band_gap_fidelity": cfg.band_gap_fidelity,
         "require_novel": cfg.require_novel,
     }
+    targets = [
+        {
+            "property": t.property,
+            "computed_by": t.tool or "predict_property",
+            "direction": t.direction,
+            "value": t.value,
+            "units": t.units,
+            "reference_material": t.reference_material,
+            "evaluable": t.evaluable,
+        }
+        for t in spec.targets()
+    ]
+    note = ""
+    if len(targets) > 1:
+        note += (
+            f"There are {len(targets)} property targets and every one must be met: compute each for every "
+            f"candidate, with the tool named in computed_by. All targets: {_j(targets)}\n\n"
+        )
+    for t in spec.extra_targets:
+        if t.tool:
+            note += f"{t.property} comes from the agent-built tool {t.tool}, approved by the user; no uncertainty.\n\n"
+        elif not t.evaluable:
+            note += f"No tool can compute {t.property} in this run: it cannot be met, so submit with accept_not_met=true.\n\n"
+    if spec.target_tool:
+        note = (
+            f"The target property comes from the agent-built tool {spec.target_tool}, approved by the user: "
+            f"call it in place of predict_property for {spec.target_property}. Its results carry no "
+            "uncertainty.\n\n"
+        )
+    elif not spec.target_evaluable:
+        note = (
+            f"No tool can compute {spec.target_property} in this run (the user cancelled the tool for it): "
+            "screen for stability only, and submit the best candidate with accept_not_met=true.\n\n"
+        )
     return (
         f"Goal: {spec.raw_goal}\n\n"
         f"Parsed specification:\n{_j(spec.model_dump(exclude={'raw_goal'}))}\n\n"
         f"Target (code checks it): {_j(target)}\n\n"
+        f"{note}"
         f"Budget and options: {_j(budget)}\n\n"
         "Start round 1."
     )
+
+
+def capability_kickoff(
+    spec: SearchSpec, cfg: RunConfig, library: list[dict[str, Any]], done: dict[str, Any] | None
+) -> str:
+    """Build the first user message of the capability phase (Section 14).
+
+    Parameters
+    ----------
+    spec : SearchSpec
+        Parsed goal; ``target_property`` is the gap.
+    cfg : RunConfig
+        Budgets and limits.
+    library : list of dict
+        Approved library tools ``{name, property, units, description}``.
+    done : dict or None
+        For a resumed phase: proposals and decisions so far.
+
+    Returns
+    -------
+    str
+        The message.
+    """
+    limits = {
+        "max_tools": cfg.max_custom_tools,
+        "max_revisions_per_tool": cfg.max_tool_revisions,
+        "tool_timeout_s": cfg.custom_tool_timeout_s,
+        "screening_potential": cfg.potential,
+        "trial_material": spec.reference_material or "SrTiO3",
+    }
+    text = (
+        f"Goal: {spec.raw_goal}\n\n"
+        f"Missing property (the gap): {spec.target_property!r}, units {spec.target_units!r}, "
+        f"direction {spec.direction}, reference {spec.reference_material or 'none'}.\n\n"
+        f"Tools already in the library (for other properties): {_j(library)}\n\n"
+        f"Limits: {_j(limits)}\n\n"
+    )
+    if done:
+        return text + "This phase was interrupted and is resumed. So far:\n" + _j(done) + "\n\nContinue."
+    return text + "Start by researching how this property is computed."
 
 
 def resume_message(spec: SearchSpec, cfg: RunConfig, done: dict[str, Any]) -> str:

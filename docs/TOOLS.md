@@ -23,6 +23,7 @@ live in the owning module and are registered by name.
 - **Caching.** Every external call and every relaxation is cached by its exact inputs (`core/store.py`), so
   repeating a tool call is cheap and the demo works offline.
 - **Budget.** Each call counts towards `RunConfig.max_tool_calls`. Compute tools also add to `ws.compute_s`.
+  A budget of 0 (`max_iterations`, `max_tool_calls`, `time_budget_s`, `final_time_budget_s`) means no limit.
 - **Events.** The harness, not the tool, emits a `ProgressEvent` before and after each call. The payload
   carries `tool`, `input`, `result`, plus flat fields for the UI (see *Event payloads*).
 
@@ -260,6 +261,10 @@ The first use of a new chemical system relaxes its competing phases, which can t
 n_competing_phases, thermo_stable, threshold, wall_time_s}`. `thermo_stable` (code) means
 E_hull ≤ `spec.stability_thresholds.e_hull_max_eV_per_atom`.
 
+`RunConfig.run_hull = false` turns the tool off (it returns an error) and the gate stops requiring it.
+`RunConfig.e_hull_max_eV_per_atom`, when set, replaces the goal's threshold; `null` keeps the goal's
+(0.05 eV/atom if the goal names none). `run_phonons = false` does the same for `phonons`.
+
 #### `phonons`
 Finite-displacement phonons with phonopy, at commensurate q-points (SE-6 to SE-8).
 - `mode=fast`: supercell ≥ 7 Å.
@@ -299,7 +304,7 @@ domain flag (PP-5). The registry (`simulation.property_registry`) lists every ke
 
 | Property | Model | Units | Uncertainty |
 | --- | --- | --- | --- |
-| `band_gap` | MEGNet-BandGap-mfi-MP-2019.4.1, fidelity from `RunConfig.band_gap_fidelity` (`hse` default, or `pbe`) | eV | HSE ±0.65 (MAE vs 15 measured perovskite gaps); PBE ±0.57 vs MP PBE gaps, about 1.6 eV below experiment |
+| `band_gap` | MEGNet-BandGap-mfi-MP-2019.4.1; `RunConfig.band_gap_model` picks the output: `megnet-hse` (default), `megnet-pbe`, `megnet-gllb-sc`, `megnet-scan` | eV | HSE ±0.65 (MAE vs 15 measured perovskite gaps); PBE ±0.57 vs MP PBE gaps, about 1.6 eV below experiment; GLLB-SC and SCAN not benchmarked, so no uncertainty |
 | `bulk_modulus`, `shear_modulus` | elastic tensor from strain-stress with the run's potential (±0.25 and ±0.5 % strains, ions relaxed at each strain), Voigt-Reuss-Hill | GPa | 15 / 20 (typical MLIP MAE) |
 | `youngs_modulus`, `poisson_ratio`, `pugh_ratio` | from K and G | GPa, –, – | propagated from K and G |
 | `sound_velocity_longitudinal`, `sound_velocity_transverse`, `sound_velocity_mean`, `debye_temperature` | from K, G and the density | km/s, K | propagated from K and G |
@@ -352,8 +357,9 @@ reviewer confidence below the threshold.
 #### `submit_final`
 Submit the recommended candidate. **Code gate:**
 - **Required calculations:** `relax`, `energy_above_hull` (not stale), `phonons` and the target
-  `predict_property` must have run.
-- **Checks:** the target check and both stability verdicts must pass.
+  `predict_property` must have run. A stability check turned off for the run is not required.
+- **Checks:** the target check and both stability verdicts must pass. A check turned off for the run
+  reports `null` and is left out; the code rubric is then rescaled to 0–100 without it.
 - **Novelty** (when `require_novel`): the literature search must find no prior report of the composition.
 - **A failing gate** returns `accepted: false` with the reasons. The agent can improve the candidate, or
   resubmit with `accept_not_met: true` to report the best attempt as not meeting the target.
@@ -403,6 +409,7 @@ so events of different calls can interleave: pair them by `call_id`. The payload
 
 Other event sections:
 - `agent` — the orchestrator's text and thinking: `{kind: "text" | "thinking", text}`.
+- `capability` — agent-built tools; see *Agent-built tools* below.
 - `orchestrator` — round results `{best, stop, rule, scores, llm_scores}`, and the end of the campaign
   `{submitted, usage}`.
 - `final_calculation` — `{verdict, checks, notes}`.
@@ -419,3 +426,160 @@ Other event sections:
 4. **Add a scripted-model case** in `tests/integration/test_agent_loop.py` if the harness must react to the
    new tool's result.
 5. **Tell the UI and CLI owners** if the event payload gains fields.
+
+## Agent-built tools
+
+When the goal's property has no tool, a capability phase runs before the campaign: the agent proposes a tool,
+the user accepts the plan, the agent writes it, and the user reviews the code (`docs/REQUIREMENTS.md`,
+Section 14). This section is the contract for the phase's tools, the tool file, the toolkit and the events.
+
+### Capability-phase tools
+
+These exist only in the capability phase's conversation, never in the campaign (AT-2). The literature tools
+are also available in the phase.
+
+#### `read_tool_source`
+Read our own tools for inspiration and scope (AT-5). **Input:** `function` (string or null). With null it
+returns `{functions: [{module, name, signature, docstring}]}` for the public functions of
+`tools/simulation.py` and `tools/structures.py`; with a name it returns `{module, name, source}`. Functions of
+`RunConfig.disabled_capabilities` are hidden; asking for one returns an error.
+
+#### `propose_tool`
+Propose a plan, or a revised plan, for the user's decision (AT-6, AT-7). **Input:** the plan fields of
+`ToolProposal`: `name`, `property`, `units`, `description`, `method`, `citations`, `inputs` (JSON schema),
+`building_blocks`, `expected_runtime_s`, `supplies_target`, `if_cancelled`. **Returns**, once the user has
+decided: `{proposal_id, decision: {action, message}}`. The call waits for the user; the wait counts against no
+budget (AT-25).
+
+#### `write_tool`
+Submit the source for an accepted plan (AT-10 to AT-13). **Input:** `proposal_id`, `source` (the tool file),
+`tests` (the test file), `reason` (null, or why it replaces code the user is reviewing). Code runs the
+static check, the tests and the trial run. **Returns** either
+`{checks}` with the failing check's report (the agent fixes it and calls again, up to 3 times), or, once the
+checks pass and the user has decided, `{proposal_id, checks, decision: {action, message}}`.
+
+#### `request_package`
+Ask the user to allow a package outside the allowlist, e.g. phonopy (and to install it with pip when the
+server lacks it). **Input:** `module` (import name), `pip_name` (or null), `reason`. Returns at once; the
+answer (`allow`, `deny` or `cancel_run`) is the next message. An allowed package goes in `TOOL["packages"]`;
+the static check, the sandbox and later runs then allow it for that tool only (`CustomTool.packages`).
+Names are checked: no URLs, paths or pip flags.
+
+#### `ask_user`
+Ask the user a question (`question`, `options`). The answer is the next message. The user never reads the
+agent's plain text as a question.
+
+#### `give_up`
+Propose to stop without a tool (`reason`, naming the closest proxy considered). It is a request to the user
+(kind `give_up`): `allow` ends the phase and the run cannot evaluate the property; `answer` with a message
+points the agent at something to build instead. The agent is told to prefer a clearly labelled proxy over
+stopping when an exact method is out of reach.
+
+**The agent's second look.** Every tool declares `TOOL["trial_range"]`, the plausible value for the trial
+material from the literature; a trial value outside it fails the checks before the user sees the code. If
+the agent finds a bug after its code is shown, `write_tool` with a `reason` withdraws the open card (event
+`withdrawn`, `{proposal_id, revision, reason}`) and resubmits; it uses none of the user's change requests but
+counts against the three fix attempts, and is refused once the user has decided.
+
+**No dead ends.** A change request at the code stage may be answered with a new plan (`propose_tool`
+again) or new code. Two turns in a row without a tool call, with nothing waiting for the user, end the
+phase with "the agent made no progress", instead of nudging forever.
+
+### The tool file
+
+One tool per file, `<tool_library_dir>/<name>.py`, with its tests in `test_<name>.py`. A user can write one by
+hand; it is reviewed like an agent's (AT-21). The `TOOL` header must be a literal dict, because code reads it
+with `ast.literal_eval` before the file is approved and never imports an unapproved file.
+
+```python
+"""Bulk modulus from a Birch-Murnaghan fit of energy against volume."""
+
+TOOL = {
+    "name": "bulk_modulus_eos",
+    "property": "bulk_modulus",
+    "units": "GPa",
+    "description": "Isotropic strain of ±4 % in 7 steps, ions relaxed at each volume, third-order "
+                   "Birch-Murnaghan fit.",
+    "method": "Equation-of-state fit (Birch 1947).",
+    "citations": ["<paper_id>"],
+    "inputs": {"type": "object", "properties": {}, "additionalProperties": False},
+    "building_blocks": ["relax", "single_point"],
+    "author": "agent",
+}
+
+
+def run(structure: dict, inputs: dict, hp) -> dict:
+    """Compute the bulk modulus of one structure.
+
+    Parameters
+    ----------
+    structure : dict
+        The candidate's current structure, as a pymatgen ``Structure.as_dict()``.
+    inputs : dict
+        The declared inputs, validated against ``TOOL["inputs"]``.
+    hp : Toolkit
+        Building blocks, run by the main process (see *The toolkit*).
+
+    Returns
+    -------
+    dict
+        ``{"value": float, "units": str, "details": dict}``; ``units`` must equal ``TOOL["units"]``.
+    """
+```
+
+The test file holds plain `test_*` functions. Each may take any of `run` (the tool's function), `hp`,
+`structure` (the relaxed trial structure of the reference material, or SrTiO3) and `tool` (the header); they
+run in the sandbox like the tool. Results must be JSON. Allowed imports: `math`, `cmath`, `statistics`,
+`itertools`, `functools`, `collections`, `typing`, `dataclasses`, `numpy`, `scipy`, `pymatgen.core`,
+`pymatgen.analysis`, `pymatgen.symmetry`, `ase`, `ase.atoms`, `ase.build`, `ase.units`, `ase.eos`
+(`ALLOWED_IMPORTS` in `tools/custom.py`). The static check also refuses names and attributes that reach
+files or processes (`open`, `getattr`, `.save`, `.to`, `.write`, anything starting with `_`).
+
+### The toolkit (`hp`)
+
+The worker process sends each call over a pipe; the main process runs it with the run's potential (the final
+potential and dtype in the final re-check), under `model_lock` and the cache (AT-15). Structures are pymatgen
+dicts; units are eV, Å, GPa and THz.
+
+| Call | Returns |
+| --- | --- |
+| `hp.single_point(structure)` | `{energy_eV, forces_eV_per_A, stress_GPa}` (stress 3×3, ASE sign: negative under compression) |
+| `hp.relax(structure, fix_cell=False, fmax=0.01)` | `{structure, energy_eV_per_atom, converged}` |
+| `hp.phonons(structure, supercell=None)` | `{frequencies_THz, qpoints, min_frequency_THz, supercell}` |
+| `hp.md(structure, temperature_K, duration_ps)` | `{energies_eV, temperatures_K, final_structure, max_displacement_A, stable}` (every 10 steps; at most 10 ps) |
+| `hp.log(message)` | none; shown in the orchestrator log |
+
+Each toolkit call adds to the run's compute time and is cached by its exact inputs. A tool may use none of
+them. The worker compiles the tool from source on every call (no bytecode cache), gets no environment
+credentials, and its time limit excludes the time building blocks spend in the main process.
+
+### In the campaign
+
+An approved tool appears as `custom_<name>` with input `candidate_id` plus its declared inputs (AT-16). The
+harness runs it on the candidate's current structure. **Returns:** `{candidate_id, property, value, units,
+model: "agent-built:<name>@<sha8>", uncertainty: null, note: "agent-built tool"}`, plus `target` when it
+supplies the target property (AT-17). It never sets `thermo_stable`, `dyn_stable` or `mechanically_stable`
+(AT-18). Results are cached under the tool's sha256 and the structure (AT-23).
+
+### Capability events
+
+Section `capability`. Each event's payload has `kind` plus:
+
+| `kind` | Payload |
+| --- | --- |
+| `gap` | `{property, units, custom_tools}` |
+| `library` | `{reused: [name], unapproved: [file]}` |
+| `plan` | `{proposal, allowed}`: the `ToolProposal` at the plan stage and the actions offered |
+| `checks` | `{proposal_id, revision, checks}` after each `write_tool` |
+| `code` | `{proposal, allowed}`: the `ToolProposal` with `source`, `tests`, `checks`, `trial` and `toolkit_calls` |
+| `decision` | the `ToolDecision` |
+| `registered` | the `CustomTool` |
+| `cancelled` | `{proposal_id, scope: "tool" or "run", supplies_target, reason}` |
+| `log` | `{message}` from `hp.log` |
+| `package`, `question` | `{request, allowed}`: a `UserRequest` waiting for the user |
+
+Tool calls of the phase are ordinary `tool` events with `phase: "capability"` and string call IDs
+(`cap1`, `cap2`, ...), so they never collide with the campaign's.
+
+A `plan` or `code` event with no later `decision` for the same `proposal_id` means the run is waiting for the
+user; the UI and CLI show the card with its actions (AT-24, AT-27, AT-28).

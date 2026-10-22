@@ -3,9 +3,11 @@
 
 import { api, streamEvents } from "./api.js";
 import { columnChart, confidenceChart, confidenceLegend, scoreRing } from "./chart.js";
-import { ago, check, download, duration, empty, formula, h, icon, label, num, pill, pm, toast } from "./dom.js";
+import { ago, check, cid as cidText, cidLong, cidTag, clamp, download, stripCodes, duration, empty, formula, h, icon, label, num, pill, pm, store, stored, toast } from "./dom.js";
+import { decorateBrief } from "./brief.js";
 import { renderMarkdown } from "./markdown.js";
 import { PHASES, RunModel, toolKind } from "./model.js";
+import { capabilityLine, proposalCard, requestCard } from "./tools.js";
 import { CONFIG_GROUPS, configName, modelName, specGrid, targetText } from "./spec.js";
 import { CrystalViewer, elementStyle, parseCif } from "./viewer.js";
 
@@ -42,10 +44,13 @@ export function mountRun(root, id, tab, hooks) {
     paperQuery: "",
     openAbstracts: new Set(),
     collapsedRounds: new Set(),
-    brief: null,
-    briefLoading: false,
+    briefs: {}, // kind ("lab" | "compute") -> Markdown
+    briefLoading: null, // kind being fetched
+    briefKind: stored("heph-brief-kind", "lab"),
+    toolDrafts: {}, // "proposal:stage" -> {open, text, sent}: change requests being typed
     notFound: false,
-    replaySpeed: 4,
+    replaySpeed: stored("heph-replay-speed", 4),
+    replayInfo: null, // {source, total_events, speed} for a replay
   };
   const head = h("header.run-head");
   const body = h("div.tab-body", { role: "tabpanel" });
@@ -59,8 +64,19 @@ export function mountRun(root, id, tab, hooks) {
   let stateTimer = null;
   let alive = true;
 
+  // Opening a run replays its history; drawing each event would flash "running" and walk through
+  // every phase. Hold drawing until the stored status is known and, for a run that is not live,
+  // until the history has arrived (a safety timeout releases it regardless).
+  let holding = !model.isReplay;
+  const release = () => {
+    if (!holding) return;
+    holding = false;
+    clearTimeout(holdTimer);
+    schedule();
+  };
+  const holdTimer = setTimeout(release, 2000);
   const schedule = () => {
-    if (scheduled) return;
+    if (scheduled || holding) return;
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
@@ -72,9 +88,63 @@ export function mountRun(root, id, tab, hooks) {
     try {
       model.setState(await api(`/runs/${encodeURIComponent(id)}`));
     } catch (e) {
-      if (e.status === 404) ui.notFound = true;
+      if (e.status === 404) {
+        ui.notFound = true;
+        release();
+      }
     }
     schedule();
+  }
+
+  async function loadReplayInfo() {
+    try {
+      const st = await api(`/runs/${encodeURIComponent(id)}`);
+      ui.replayInfo = st.replay || null;
+      if (ui.replayInfo) ui.replaySpeed = ui.replayInfo.speed;
+      if (!model.goal) model.goal = st.raw_goal;
+      if (st.title) ui.title = st.title;
+    } catch (e) {
+      if (e.status === 404) ui.notFound = true;
+    }
+    lastHeadSig = null;
+    schedule();
+  }
+
+  async function setReplaySpeed(sp) {
+    ui.replaySpeed = sp;
+    store("heph-replay-speed", sp);
+    // Update the pickers in place: re-rendering the header would close an open popover.
+    for (const b of head.querySelectorAll(".speed-picker button")) b.setAttribute("aria-pressed", String(Number(b.dataset.speed) === sp));
+    if (model.isReplay) {
+      // also while stopped, so a resumed replay plays at the chosen speed
+      try {
+        await api(`/replay/${encodeURIComponent(id)}/speed`, { body: { speed: sp } });
+      } catch (e) {
+        toast(e.message, "critical");
+      }
+    }
+  }
+
+  async function resumeReplay() {
+    try {
+      await api(`/replay/${encodeURIComponent(id)}/resume`, { method: "POST" });
+      model.ended = false;
+      model.running = true;
+      model.replayIncomplete = false;
+      lastHeadSig = null;
+      connect(); // history first (already shown, skipped by seq), then the rest
+      schedule();
+    } catch (e) {
+      toast(e.message, "critical");
+    }
+  }
+
+  async function stopReplay() {
+    try {
+      await api(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST" });
+    } catch (e) {
+      toast(e.message, "critical");
+    }
   }
 
   const loadStateSoon = () => {
@@ -96,7 +166,14 @@ export function mountRun(root, id, tab, hooks) {
       () => {
         model.ended = true;
         model.running = false;
-        if (model.isReplay) loadState();
+        release();
+        lastHeadSig = null;
+        const total = ui.replayInfo && ui.replayInfo.total_events;
+        // A stopped replay shows only what it replayed; a finished one may show the stored state.
+        if (model.isReplay) {
+          model.replayIncomplete = Boolean(total && model.events.length < total);
+          if (!model.replayIncomplete) loadState();
+        }
         else loadStateSoon();
         hooks.onChange();
         schedule();
@@ -104,7 +181,11 @@ export function mountRun(root, id, tab, hooks) {
     );
   }
 
-  if (!model.isReplay) loadState();
+  if (!model.isReplay) {
+    loadState().then(() => {
+      if (model.state && model.state.running) release(); // live: show progress as it streams
+    });
+  } else loadReplayInfo();
   connect();
   const ticker = setInterval(() => model.running && tick(), 1000);
   const onTheme = () => viewer && viewer.draw();
@@ -112,13 +193,74 @@ export function mountRun(root, id, tab, hooks) {
 
   // ------------------------------------------------------------------ actions
 
-  async function stop() {
+  async function sendStop(mode) {
     try {
-      const r = await api(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST" });
-      toast(r.stopping ? "Stopping: the campaign will submit its best candidate and write a brief." : "The run is not executing in this server.");
+      const r = await api(`/runs/${encodeURIComponent(id)}/stop?mode=${mode}`, { method: "POST" });
+      if (!r.stopping) toast("The run is not executing in this server.", "warning");
+      else if (mode === "all") toast("Stopping the run once the current calculation returns. You can resume it later.");
+      else toast("Stopping the search: the best candidate goes to the final re-check, then the brief.");
     } catch (e) {
       toast(e.message, "critical");
     }
+  }
+
+  // Stop asks what to stop: just the search (re-check and brief still run) or the whole run.
+  function stop() {
+    const searching = model.phase.campaign !== "done";
+    const dlg = h("dialog.modal.stop-dialog", { "aria-labelledby": "stop-title" });
+    const close = () => {
+      dlg.close();
+      dlg.remove();
+    };
+    dlg.addEventListener("cancel", (e) => {
+      e.preventDefault();
+      close();
+    });
+    dlg.addEventListener("click", (e) => {
+      if (e.target === dlg) close(); // backdrop
+    });
+    const option = (mode, ic, title, text, cls, disabled) =>
+      h(
+        `button.stop-option${cls}`,
+        {
+          type: "button",
+          disabled,
+          onclick: () => {
+            close();
+            sendStop(mode);
+          },
+        },
+        h("span.stop-option-icon", null, icon(ic)),
+        h("span.stop-option-text", null, h("strong", null, title), h("span", null, text)),
+      );
+    dlg.append(
+      h(
+        "div.modal-head",
+        null,
+        h("div", null, h("h2", { id: "stop-title" }, "Stop this run?"), h("div.muted", null, "A calculation already running finishes first; nothing new starts.")),
+        h("button.btn.ghost.icon", { onclick: close, "aria-label": "Close" }, icon("x")),
+      ),
+      h(
+        "div.modal-body",
+        null,
+        option(
+          "campaign",
+          "gate",
+          "Stop the search",
+          searching
+            ? "Submit the best candidate so far. It still gets the final re-check and a lab brief."
+            : "The search has already finished; the re-check and brief are running.",
+          "",
+          !searching,
+        ),
+        option("all", "stop", "Stop everything", "End the run now, with no re-check and no brief. You can resume it later.", ".danger", false),
+        h("div.stop-foot", null, h("button.btn", { onclick: close }, "Keep running")),
+      ),
+    );
+    document.body.append(dlg);
+    dlg.showModal();
+    const first = dlg.querySelector(".stop-option:not([disabled])");
+    if (first) first.focus();
   }
 
   async function resume() {
@@ -137,7 +279,8 @@ export function mountRun(root, id, tab, hooks) {
 
   async function replay() {
     try {
-      const { replay_id } = await api(`/replay/${encodeURIComponent(model.isReplay ? sourceId() : id)}`, { body: { speed: ui.replaySpeed } });
+      const src = model.isReplay ? (ui.replayInfo && ui.replayInfo.source) || sourceId() : id;
+      const { replay_id } = await api(`/replay/${encodeURIComponent(src)}`, { body: { speed: ui.replaySpeed } });
       location.hash = `#/run/${encodeURIComponent(replay_id)}/activity`;
     } catch (e) {
       toast(e.message, "critical");
@@ -154,6 +297,7 @@ export function mountRun(root, id, tab, hooks) {
   // ------------------------------------------------------------------ render
 
   function render() {
+    if (holding) return;
     renderHead();
     const sig = tabSignature();
     if (sig === lastTabSig) return;
@@ -180,7 +324,7 @@ export function mountRun(root, id, tab, hooks) {
       case "structure":
         return `${base}|${model.candidateIds.join(",")}|${ui.selected}|${model.useState}`;
       case "brief":
-        return `${base}|${model.phase.brief}|${ui.brief ? ui.brief.length : 0}|${ui.briefLoading}`;
+        return `${base}|${model.phase.brief}|${ui.briefKind}|${(ui.briefs[ui.briefKind] || "").length}|${ui.briefLoading}`;
       case "spec":
         return `${base}|${model.spec ? 1 : 0}`;
       case "literature":
@@ -191,8 +335,9 @@ export function mountRun(root, id, tab, hooks) {
   }
 
   function renderHead() {
+    if (ui.editingTitle) return tick(); // keep the input while the user types, even mid-run
     const fs = model.finalStep;
-    const sig = `${model.status}|${JSON.stringify(model.phase)}|${model.round}|${model.toolCount}|${model.best}|${ui.tab}|${model.running}|${model.resumable}|${ui.replaySpeed}|${model.paperList.length}|${model.candidateIds.length}|${model.log.length}|${fs ? fs.seq + fs.status : ""}`;
+    const sig = `${model.status}|${JSON.stringify(model.phase)}|${model.round}|${model.toolCount}|${model.best}|${ui.tab}|${model.running}|${model.resumable}|${model.paperList.length}|${model.candidateIds.length}|${model.log.length}|${fs ? fs.seq + fs.status : ""}|${model.isReplay ? model.events.length + JSON.stringify(ui.replayInfo) + model.ended : ""}`;
     if (sig === lastHeadSig) return tick();
     lastHeadSig = sig;
     head.replaceChildren(headContent());
@@ -206,11 +351,11 @@ export function mountRun(root, id, tab, hooks) {
     for (const el of root.querySelectorAll("[data-tick]")) {
       const kind = el.dataset.tick;
       if (kind === "elapsed") {
-        el.textContent = model.elapsed != null ? `${duration(model.elapsed)} elapsed` : "";
+        el.textContent = model.elapsed == null ? "" : model.running ? `${duration(model.elapsed)} elapsed` : `took ${duration(model.elapsed)}`;
       } else if (kind === "campaign" || kind === "final") {
         const used = kind === "campaign" ? model.span(model.campaignStart, model.campaignEnd) : model.span(model.finalStart, model.finalEnd);
-        const max = kind === "campaign" ? cfg.time_budget_s || 900 : cfg.final_time_budget_s || 600;
-        setMeter(el, used || 0, max, `${duration(used || 0)} / ${duration(max)}`);
+        const max = kind === "campaign" ? cfg.time_budget_s ?? 900 : cfg.final_time_budget_s ?? 600;
+        setMeter(el, used || 0, max, max ? `${duration(used || 0)} / ${duration(max)}` : `${duration(used || 0)} · no limit`);
       } else if (kind === "finalstep" && model.finalStep && model.finalStep.status === "started") {
         el.textContent = duration((Date.now() - new Date(model.finalStep.started)) / 1000);
       }
@@ -220,10 +365,16 @@ export function mountRun(root, id, tab, hooks) {
   function headContent() {
     const cfg = model.config || (model.state && model.state.config) || {};
     const status = model.status;
+    const replayTotal = ui.replayInfo && ui.replayInfo.total_events;
+    const replayStopped = model.isReplay && model.ended && replayTotal && model.events.length < replayTotal;
     const statusPill = model.running
       ? h("span.pill.live", null, h("span.dot.live"), model.isReplay ? "Replaying" : "Running")
+      : replayStopped
+        ? pill("Replay stopped", "warning", "stop")
       : status === "finished"
         ? pill("Finished", "good", "check")
+      : status === "stopped"
+        ? pill("Stopped", "warning", "stop")
         : status === "needs_input"
           ? pill("Needs input", "warning", "message")
           : status === "failed"
@@ -234,34 +385,36 @@ export function mountRun(root, id, tab, hooks) {
     const actions = [];
     if (model.running && !model.isReplay) actions.push(h("button.btn.danger", { onclick: stop }, icon("stop"), "Stop"));
     if (model.resumable) actions.push(h("button.btn.primary", { onclick: resume }, icon("resume"), "Resume"));
-    if (!model.running && (model.events.length || model.state)) {
+    if (!model.running && !model.isReplay && (model.events.length || model.state)) {
       actions.push(
         h(
-          "div.segmented",
-          { title: "Replay speed" },
-          [1, 4, 10].map((sp) =>
+          "details.menu.replay-menu",
+          null,
+          h("summary.btn", { title: "Replay this run" }, icon("replay"), "Replay"),
+          h(
+            "div.menu-list.replay-pop",
+            null,
+            h("div.replay-pop-title", null, "Replay this run"),
+            h("div.muted.replay-pop-sub", null, "Plays the recorded events back with no network, as they happened."),
+            speedPicker(),
             h(
-              "button",
+              "button.btn.primary",
               {
-                "aria-pressed": String(ui.replaySpeed === sp),
-                onclick: () => {
-                  ui.replaySpeed = sp;
-                  renderHead();
+                onclick: (e) => {
+                  e.currentTarget.closest("details").open = false;
+                  replay();
                 },
               },
-              `${sp}×`,
+              icon("play"),
+              "Start replay",
             ),
           ),
         ),
-        h("button.btn", { onclick: replay }, icon("replay"), "Replay"),
       );
     }
     const meta = [
-      h("span.mono", null, id),
-      model.isReplay ? pill(`Replay of ${sourceId()}`, "info", "replay") : null,
       cfg.llm_model ? h("span", null, modelName(cfg.llm_model)) : null,
-      model.backend && model.backend !== cfg.llm_model ? h("span", null, model.backend === "claude-code" ? "Claude Code" : model.backend === "api" ? "Anthropic API" : model.backend) : null,
-      model.startTime ? h("span", null, `Started ${ago(model.startTime)}`) : model.state ? h("span", null, `Created ${ago(model.state.created_at)}`) : null,
+      model.startTime ? h("span", null, `${model.isReplay ? "Recorded" : "Started"} ${ago(model.startTime)}`) : model.state ? h("span", null, `Created ${ago(model.state.created_at)}`) : null,
       model.startTime ? h("span.num", { dataset: { tick: "elapsed" } }) : null,
       cfg.require_novel ? pill("Novel only", "info", "star") : null,
     ].filter(Boolean);
@@ -281,10 +434,12 @@ export function mountRun(root, id, tab, hooks) {
       h(
         "div.run-title-row",
         null,
-        h("div", null, h("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } }, statusPill), h("h1.run-goal", null, model.goal || (model.state && model.state.raw_goal) || id), h("div.run-meta", null, metaWithSeps)),
+        h("div", null, h("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } }, statusPill), titleEl(), h("div.run-meta", null, metaWithSeps)),
         h("div.run-actions", null, actions),
       ),
+      model.isReplay ? replayBar() : null,
       stepper(),
+      ui.tab !== "activity" ? waitingBanner() : null,
       h(
         "nav.tabs",
         { role: "tablist" },
@@ -301,15 +456,142 @@ export function mountRun(root, id, tab, hooks) {
     );
   }
 
+  function speedPicker() {
+    const speeds = [
+      [1, "1×"],
+      [2, "2×"],
+      [4, "4×"],
+      [10, "10×"],
+      [0, "Instant"],
+    ];
+    return h(
+      "div.segmented.speed-picker",
+      { role: "group", "aria-label": "Replay speed" },
+      speeds.map(([sp, text]) => h("button", { type: "button", dataset: { speed: String(sp) }, "aria-pressed": String(ui.replaySpeed === sp), onclick: (e) => (e.preventDefault(), setReplaySpeed(sp)) }, text)),
+    );
+  }
+
+  function replayBar() {
+    const info = ui.replayInfo || {};
+    const total = info.total_events || 0;
+    const seen = model.events.length;
+    const frac = total ? Math.min(1, seen / total) : model.ended ? 1 : 0;
+    const source = info.source || sourceId();
+    const live = model.running || (!model.ended && seen < total);
+    const stopped = !live && model.ended && total > 0 && seen < total;
+    return h(
+      "div.replay-bar",
+      null,
+      h("div.replay-icon", null, icon("replay")),
+      h(
+        "div.replay-main",
+        null,
+        h(
+          "div.replay-line",
+          null,
+          h("strong", null, live ? "Replaying" : model.ended && seen < total ? "Replay stopped" : "Replay finished"),
+          h("span.muted", null, " · recorded run "),
+          h("a.mono", { href: `#/run/${encodeURIComponent(source)}/${ui.tab}` }, source),
+          h("span.muted.num", { style: { marginLeft: "auto" } }, total ? `${seen} / ${total} events` : `${seen} events`),
+        ),
+        h("div.meter-track.replay-track", null, h("div.meter-fill", { style: { width: `${frac * 100}%` } })),
+      ),
+      live
+        ? h("div.replay-actions", null, speedPicker(), h("button.btn.sm", { onclick: stopReplay }, icon("stop"), "Stop"))
+        : stopped
+          ? h(
+              "div.replay-actions",
+              null,
+              speedPicker(),
+              h("button.btn.sm.primary", { onclick: resumeReplay }, icon("play"), "Resume"),
+              h("button.btn.sm", { onclick: replay }, icon("replay"), "Restart"),
+              h("a.btn.sm", { href: `#/run/${encodeURIComponent(source)}/${ui.tab}` }, icon("x"), "Close replay"),
+            )
+          : h(
+            "div.replay-actions",
+            null,
+            h("button.btn.sm", { onclick: replay }, icon("replay"), "Replay again"),
+            h("a.btn.sm", { href: `#/run/${encodeURIComponent(source)}/${ui.tab}` }, icon("x"), "Close replay"),
+          ),
+    );
+  }
+
+  // The run's title: the user's edit, else the parser's; the goal itself is in the Spec tab.
+  function runTitle() {
+    const spec = model.spec || (model.state && model.state.spec);
+    return ui.title || (model.state && model.state.title) || (spec && spec.title) || model.goal || id;
+  }
+
+  function titleEl() {
+    if (ui.editingTitle) {
+      const input = h("input.title-input", {
+        value: runTitle(),
+        maxlength: 120,
+        "aria-label": "Run title",
+        onkeydown: (e) => {
+          if (e.key === "Enter") saveTitle(e.target.value);
+          if (e.key === "Escape") {
+            ui.editingTitle = false;
+            lastHeadSig = null;
+            renderHead();
+          }
+        },
+        onblur: (e) => ui.editingTitle && saveTitle(e.target.value),
+      });
+      requestAnimationFrame(() => {
+        input.focus();
+        input.select();
+      });
+      return input;
+    }
+    const editable = !model.isReplay && (model.state || model.events.length);
+    return h(
+      "div.title-row",
+      null,
+      h(`h1.run-goal${editable ? ".editable" : ""}`, { title: editable ? "Click to rename" : model.goal || id, onclick: editable ? startEditTitle : null }, runTitle()),
+      editable ? h("button.btn.ghost.icon.title-edit", { title: "Rename run", "aria-label": "Rename run", onclick: startEditTitle }, icon("edit")) : null,
+    );
+  }
+
+  function startEditTitle() {
+    ui.editingTitle = true;
+    lastHeadSig = null;
+    head.replaceChildren(headContent());
+    tick();
+  }
+
+  async function saveTitle(value) {
+    const clean = value.trim().replace(/\s+/g, " ");
+    ui.editingTitle = false;
+    if (clean && clean !== runTitle()) {
+      try {
+        ui.title = (await api(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", body: { title: clean } })).title;
+        hooks.onChange();
+      } catch (e) {
+        toast(e.message, "critical");
+      }
+    }
+    lastHeadSig = null;
+    renderHead();
+  }
+
   function stepper() {
     const cfg = model.config || (model.state && model.state.config) || {};
     const detail = {
       parse: { pending: "Waiting", active: "Reading the goal…", done: model.spec ? h("span", null, targetText(model.spec)) : "Done", input: "Needs answers", failed: "Failed" },
+      tools: {
+        pending: "Not started",
+        active: "Researching and writing a tool…",
+        input: "Waiting for your decision",
+        done: model.capability && model.capability.registered ? `Using ${model.capability.registered.name}` : "No tool: stability only",
+        skipped: "Cancelled",
+        failed: "Failed",
+      },
       campaign: {
         failed: "Failed: see Overview",
         pending: "Not started",
-        active: `Round ${Math.max(model.round, 1)} of ${cfg.max_iterations ?? "?"} · ${model.toolCount} tool calls`,
-        done: `${model.roundRows.length} round${model.roundRows.length === 1 ? "" : "s"}${model.submitted ? ` · submitted ${model.submitted.candidate_id}` : ""}`,
+        active: `Round ${Math.max(model.round, 1)}${cfg.max_iterations === 0 ? "" : ` of ${cfg.max_iterations ?? "?"}`} · ${model.toolCount} tool calls`,
+        done: `${model.roundRows.length} round${model.roundRows.length === 1 ? "" : "s"}${model.submitted ? ` · submitted ${cidText(model.submitted.candidate_id)}` : ""}`,
       },
       final: {
         pending: cfg.run_final === false ? "Off" : "Not started",
@@ -322,14 +604,29 @@ export function mountRun(root, id, tab, hooks) {
       },
       brief: { pending: "Not started", active: "Writing…", done: "Ready", failed: "Failed" },
     };
+    const phases = PHASES.filter((p) => p.key !== "tools" || model.capability);
     return h(
-      "div.stepper",
+      `div.stepper${model.running ? ".live" : ""}${phases.length === 5 ? ".five" : ""}`,
       null,
-      PHASES.map((p) => {
+      phases.map((p) => {
         const st = model.phase[p.key];
-        const cls = st === "done" ? "done" : st === "active" && model.running ? "active" : st === "failed" ? "failed" : st === "input" ? "failed" : "";
-        const ic = st === "done" ? icon("check") : st === "active" && model.running ? h("span.spinner") : null;
-        return h(`div.step${cls ? "." + cls : ""}`, null, h("div.step-name", null, ic, p.name), h("div.step-detail", null, (detail[p.key] || {})[st] || ""));
+        const waiting = p.key === "tools" && st === "input";
+        const cls = st === "done" ? "done" : (st === "active" || waiting) && model.running ? "active" : st === "failed" ? "failed" : st === "input" ? "failed" : "";
+        const n = phases.indexOf(p) + 1;
+        const mark =
+          cls === "done"
+            ? h("span.step-mark.done", null, icon("check"))
+            : cls === "active"
+              ? h("span.step-mark.active", null, h("span.spinner"))
+              : cls === "failed"
+                ? h("span.step-mark.failed", null, icon("x"))
+                : h("span.step-mark", null, n);
+        return h(
+          `div.step${cls ? "." + cls : ""}`,
+          null,
+          h("div.step-name", null, mark, p.name),
+          h("div.step-detail", null, (detail[p.key] || {})[st] || ""),
+        );
       }),
     );
   }
@@ -365,8 +662,8 @@ export function mountRun(root, id, tab, hooks) {
       h(
       "div.grid.overview",
       null,
-      h("div.grid", null, heroCard(), confidenceCard(rows, cfg.confidence_threshold ?? 72, cfg.max_iterations || 3)),
-      h("div.grid", { style: { alignContent: "start" } }, outcomeCard(), budgetCard(cfg), latestReviewCard()),
+      h("div.grid", null, heroCard(), confidenceCard(rows, cfg.confidence_threshold ?? 72, cfg.max_iterations ?? 3)),
+      h("div.grid", { style: { alignContent: "start" } }, budgetCard(cfg), latestReviewCard()),
       ),
     );
   }
@@ -420,7 +717,7 @@ export function mountRun(root, id, tab, hooks) {
               ? h("span", null, "Latest step: ", h("span.mono", null, lastTool.tool), " ", summary(lastTool))
               : "The orchestrator is reading the goal and the literature."
             : model.status === "needs_input"
-              ? "The goal parser asked clarifying questions. Start a new experiment and answer them."
+              ? "The goal parser asked clarifying questions. Start a new run and answer them."
               : "This run ended before a review picked a best candidate.",
         ),
       );
@@ -428,8 +725,23 @@ export function mountRun(root, id, tab, hooks) {
     const c = model.candidate(best);
     const thr = spec.stability_thresholds || {};
     const review = [...model.reviews].reverse().find((r) => r.best_of_round === best);
-    const met = review && review.checks ? review.checks.target_met_central : null;
-    const metCons = review && review.checks ? review.checks.target_met_conservative : null;
+    // Several targets: the review (else the latest candidate fields) carries one row per target
+    const rows = (review && review.checks && review.checks.targets) || c.targets || null;
+    const met = rows && rows[0] ? (review ? rows[0].met_central : null) : review && review.checks ? review.checks.target_met_central : null;
+    const metCons = rows && rows[0] ? (review ? rows[0].met_conservative : null) : review && review.checks ? review.checks.target_met_conservative : null;
+    const extraStats = (rows || []).slice(1).map((r) =>
+      stat(
+        label(r.property),
+        r.value != null ? h("span", null, num(r.value), h("small", null, r.uncertainty != null ? `± ${num(r.uncertainty)} ${r.units || ""}` : r.units || "")) : "–",
+        !r.evaluable
+          ? h("span.muted", null, "Not evaluated")
+          : !review || r.value == null
+            ? null
+            : r.agent_built
+              ? check(r.met_central, "Met · agent-built", "Not met · agent-built")
+              : check(r.met_central, r.met_conservative ? "Met, within error" : "Met (central)", "Not met"),
+      ),
+    );
     const verdict = (model.final && model.final.verdict) || (model.useState && model.state.validation[0] && model.state.validation[0].verdict);
     const finished = model.submitted || (model.useState && model.state.submission);
     return h(
@@ -440,25 +752,45 @@ export function mountRun(root, id, tab, hooks) {
       h(
         "div.hero-sub",
         null,
-        h("span.mono", null, best),
+        cidTag(best, "span.muted"),
         c.space_group ? pill(c.space_group, "outline") : null,
         c.novelty ? pill(label(c.novelty), c.novelty === "novel" ? "info" : null) : null,
         verdict ? verdictPill(verdict) : null,
       ),
-      c.rationale || (c.proposal && c.proposal.rationale) ? h("p.hero-why", null, c.rationale || c.proposal.rationale) : null,
+      c.rationale || (c.proposal && c.proposal.rationale) ? h("div.hero-why", null, clamp(c.rationale || c.proposal.rationale, 2)) : null,
       h(
-        "div.stats",
+        `div.stats${extraStats.length === 1 ? ".cols-5" : extraStats.length >= 2 ? ".cols-3" : ""}`,
         null,
         stat(
           label(c.property || spec.target_property || "target"),
           c.value != null ? h("span", null, num(c.value), h("small", null, c.uncertainty != null ? `± ${num(c.uncertainty)} ${c.units || ""}` : c.units || "")) : "–",
-          met == null ? h("span.muted", null, spec.reference_material ? h("span", null, "vs ", formula(spec.reference_material)) : "") : h("span", { title: metCons ? "Met even at the conservative end of the error bar" : "Met at the central value" }, check(met, metCons ? "Met, within error" : "Met (central)", "Not met")),
+          met == null
+            ? h("span.muted", null, spec.target_evaluable === false ? "Not evaluated" : spec.reference_material ? h("span", null, "vs ", formula(spec.reference_material)) : "")
+            : spec.target_tool || c.agentBuilt
+              ? h("span", { title: "Computed by a tool the agent wrote and you approved; it carries no error bar" }, check(met, "Met · agent-built", "Not met · agent-built"))
+              : h("span", { title: metCons ? "Met even at the conservative end of the error bar" : "Met at the central value" }, check(met, metCons ? "Met, within error" : "Met (central)", "Not met")),
         ),
+        extraStats,
         stat("Energy above hull", c.e_hull != null ? h("span", null, num(c.e_hull, 3), h("small", null, "eV/atom")) : "–", c.thermo_stable == null ? null : check(c.thermo_stable, `≤ ${thr.e_hull_max_eV_per_atom ?? 0.05}`, `> ${thr.e_hull_max_eV_per_atom ?? 0.05}`)),
         stat("Lowest phonon", c.min_freq != null ? h("span", null, num(c.min_freq), h("small", null, "THz")) : "–", c.dyn_stable == null ? null : check(c.dyn_stable, "Dynamically stable", "Unstable")),
         stat("Final re-check", verdict ? label(verdict) : model.phase.final === "active" ? "Running…" : "–", verdict ? h("span.muted", null, model.config ? model.config.final_potential : "") : null),
       ),
+      outcomeLine(),
     );
+  }
+
+  function outcomeLine() {
+    const st = model.useState ? model.state : null;
+    const sub = model.submitted || (st && st.submission);
+    if (!sub) return null;
+    const rule = (model.runResult && model.runResult.stop_reason) || (st && st.stop_reason) || (model.log.filter((e) => e.type === "submit").pop() || {}).rule;
+    const parts = [
+      rule ? `Stopped: ${label(rule).toLowerCase()}` : null,
+      `submit gate ${sub.gate_passed ? "passed" : sub.accept_not_met ? "not met (accepted)" : "failed"}`,
+      `picked by ${sub.picked_by}`,
+      sub.runner_up_id ? `runner-up ${cidText(sub.runner_up_id)}` : null,
+    ].filter(Boolean);
+    return h("div.hero-foot", null, parts.join(" · "));
   }
 
   function confidenceCard(rows, threshold, maxRounds) {
@@ -482,7 +814,7 @@ export function mountRun(root, id, tab, hooks) {
           h(
             "tbody",
             null,
-            rows.map((r) => h("tr", null, h("td", null, r.round), h("td.mono", null, r.best || "–"), h("td.num", null, r.score ?? "–"), h("td.num", null, r.llm ?? "–"), h("td", null, r.stop ? label(r.rule || "yes") : r.gateNote ? "Blocked" : "No"))),
+            rows.map((r) => h("tr", null, h("td", null, r.round), h("td", null, r.best ? cidTag(r.best) : "–"), h("td.num", null, r.score ?? "–"), h("td.num", null, r.llm ?? "–"), h("td", null, r.stop ? label(r.rule || "yes") : r.gateNote ? "Blocked" : "No"))),
           ),
         ),
       );
@@ -490,32 +822,15 @@ export function mountRun(root, id, tab, hooks) {
     return h(
       "section.card",
       null,
-      h("div.card-head", null, h("div", null, h("div.card-title", null, "Confidence by round"), h("div.card-sub", null, `A stop needs both at or above ${threshold}, passing code checks and no critical finding.`)), toggle),
+      h("div.card-head", null, h("div", null, h("div.card-title", null, "Confidence by round"), h("div.card-sub", null, `Stops on target when both reach ${threshold}.`)), toggle),
       h("div.card-body", null, bodyEl),
     );
   }
 
-  function outcomeCard() {
-    const st = model.useState ? model.state : null;
-    const sub = model.submitted || (st && st.submission);
-    const stopReason = (model.runResult && model.runResult.stop_reason) || (st && st.stop_reason) || (model.submitted ? model.log.filter((e) => e.type === "submit").pop()?.rule : null);
-    const items = [
-      ["Status", label(model.status)],
-      ["Stop rule", stopReason ? label(stopReason) : model.running ? "Still running" : "–"],
-      ["Submission", sub ? h("span", null, h("span.mono", null, sub.candidate_id), sub.runner_up_id ? h("span.muted", null, ` · runner-up ${sub.runner_up_id}`) : null) : "–"],
-      ["Submit gate", sub ? check(sub.gate_passed, "Passed", sub.accept_not_met ? "Not met (accepted)" : "Failed") : "–"],
-      ["Picked by", sub ? label(sub.picked_by) : "–"],
-    ];
-    return h(
-      "section.card",
-      null,
-      h("div.card-head", null, h("div.card-title", null, "Outcome")),
-      h("div.card-body", null, h("dl.kv", null, items.map(([k, v]) => [h("dt", null, k), h("dd", null, v)]))),
-    );
-  }
-
   function budgetCard(cfg) {
-    const maxCalls = cfg.max_tool_calls || 90;
+    const maxCalls = cfg.max_tool_calls ?? 90;
+    const maxRounds = cfg.max_iterations ?? 3;
+    const of = (v, max) => (max ? `${v} / ${max}` : `${v} · no limit`);
     const used = model.toolCount || (model.state && model.state.usage ? 0 : 0);
     const rounds = model.roundRows.length;
     const meter = (lab, v, max, text, tickKind) => {
@@ -528,24 +843,33 @@ export function mountRun(root, id, tab, hooks) {
       setMeter(el, v, max, text);
       return el;
     };
-    const usage = (model.state && model.state.usage) || {};
     return h(
       "section.card",
       null,
-      h("div.card-head", null, h("div.card-title", null, "Budgets"), h("span.card-sub", null, "Enforced by code")),
+      h("div.card-head", null, h("div.card-title", null, "Budgets")),
       h(
         "div.card-body",
         { style: { display: "grid", gap: "14px" } },
-        meter("Tool calls", used, maxCalls, `${used} / ${maxCalls}`),
-        meter("Review rounds", rounds, cfg.max_iterations || 3, `${rounds} / ${cfg.max_iterations || 3}`),
-        meter("Campaign time", 0, cfg.time_budget_s || 900, "", "campaign"),
-        model.finalStart || model.phase.final === "active"
-          ? meter("Final re-check time", 0, cfg.final_time_budget_s || 600, "", "final")
-          : null,
-        usage.input_tokens || usage.output_tokens
-          ? h("div.muted", { style: { fontSize: "12px" } }, `${(usage.input_tokens || 0).toLocaleString()} input · ${(usage.output_tokens || 0).toLocaleString()} output tokens`)
-          : null,
+        meter("Tool calls", used, maxCalls, of(used, maxCalls)),
+        meter("Review rounds", rounds, maxRounds, of(rounds, maxRounds)),
+        meter("Campaign time", 0, cfg.time_budget_s ?? 900, "", "campaign"),
+        tokensRow(),
       ),
+    );
+  }
+
+  function tokensRow() {
+    const t = model.tokens;
+    const breakdown = t
+      ? `Input: ${t.fresh.toLocaleString()} fresh, ${t.cacheWrite.toLocaleString()} written to cache, ${t.cacheRead.toLocaleString()} read from cache. Output: ${t.output.toLocaleString()}.`
+      : "";
+    return h(
+      "div.tokens",
+      { title: breakdown },
+      h("span.secondary", null, "Tokens"),
+      t
+        ? h("span.tokens-values", null, h("span.tok", null, h("strong.num", null, compact(t.input)), " in"), h("span.tok", null, h("strong.num", null, compact(t.output)), " out"))
+        : h("span.muted", null, model.running ? "Counting…" : "–"),
     );
   }
 
@@ -562,8 +886,7 @@ export function mountRun(root, id, tab, hooks) {
         "div.card-body",
         { style: { display: "grid", gap: "12px" } },
         gate ? h("div.callout.warning", null, icon("gate"), h("div", null, gate)) : null,
-        findingsList((r.findings || []).slice(0, 3)),
-        r.recommended_next ? h("div.secondary", { style: { fontSize: "13px" } }, "Next suggested: ", h("strong", null, formula(r.recommended_next)), r.why ? h("span.muted", null, ` — ${r.why}`) : null) : null,
+        findingsList((r.findings || []).slice(0, 2), 2),
       ),
     );
   }
@@ -571,7 +894,7 @@ export function mountRun(root, id, tab, hooks) {
   // ---------------------------------------------------------------- activity
 
   function activityTab() {
-    const groups = { all: () => true, reasoning: (e) => e.type === "thinking" || e.type === "text", tools: (e) => e.type === "tool" && e.call.tool !== "request_review", reviews: (e) => ["round", "submit", "final", "brief"].includes(e.type) || (e.type === "tool" && e.call.tool === "request_review"), issues: (e) => (e.type === "tool" && e.call.error) || e.status === "failed" };
+    const groups = { all: () => true, reasoning: (e) => e.type === "thinking" || e.type === "text", tools: (e) => e.type === "tool" && e.call.tool !== "request_review", reviews: (e) => ["round", "submit", "final", "brief", "capability"].includes(e.type) || (e.type === "tool" && e.call.tool === "request_review"), issues: (e) => (e.type === "tool" && e.call.error) || e.status === "failed" };
     const count = (k) => model.log.filter(groups[k]).length;
     const chips = [
       ["all", "All"],
@@ -595,6 +918,8 @@ export function mountRun(root, id, tab, hooks) {
     );
     const entries = model.log.filter(groups[ui.filter]);
     const list = h("div.log", { role: "log", "aria-live": model.running ? "polite" : "off" });
+    const waitingCard = toolWaiting();
+    if (waitingCard && ui.filter !== "all" && ui.filter !== "reviews") list.append(waitingBanner());
     let round = null;
     for (const e of entries) {
       const r = e.type === "tool" ? e.call.round : e.round && typeof e.round === "number" ? e.round : e.type === "round" ? e.round.round : null;
@@ -631,6 +956,48 @@ export function mountRun(root, id, tab, hooks) {
     );
   }
 
+  /** The proposal waiting for the user's decision, if any. */
+  function toolWaiting() {
+    const w = model.capability && model.capability.waiting;
+    return w && model.running && !model.isReplay ? w : null;
+  }
+
+  function waitingBanner() {
+    const w = toolWaiting();
+    if (!w) return null;
+    return h(
+      "div.callout.warning.tool-banner",
+      null,
+      icon("wrench"),
+      h(
+        "div",
+        null,
+        h(
+          "strong",
+          null,
+          { plan: "The agent proposes a new tool.", code: "The tool's code is ready for review.", package: "The agent asks to use a package outside the sandbox.", question: "The agent has a question for you.", give_up: "The agent proposes to stop without a tool." }[w.stage],
+        ),
+        " The run waits for your answer.",
+      ),
+      h(
+        "button.btn.sm.primary",
+        {
+          onclick: () => {
+            ui.filter = "all";
+            if (ui.tab !== "activity") location.hash = `#/run/${encodeURIComponent(id)}/activity`;
+            else render();
+            setTimeout(() => {
+              const all = document.querySelectorAll(`[data-tool="${w.proposal_id}-${w.stage}"]`);
+              const el = all[all.length - 1]; // the newest card: earlier ones may be withdrawn
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 50);
+          },
+        },
+        "Review",
+      ),
+    );
+  }
+
   function toggleOpen(key) {
     if (ui.open.has(key)) ui.open.delete(key);
     else ui.open.add(key);
@@ -641,32 +1008,51 @@ export function mountRun(root, id, tab, hooks) {
   function logEntry(e) {
     const key = String(e.seq);
     const open = ui.open.has(key);
-    const time = h("span.nowrap", null, new Date(e.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    const time = h("span.nowrap.log-time", null, new Date(e.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     switch (e.type) {
       case "thinking":
       case "text": {
         const thinking = e.type === "thinking";
         const long = e.text.length > 280;
         return h(
-          `div.log-entry${long ? ".expandable" : ""}${open ? ".open" : ""}`,
-          { onclick: long ? () => toggleOpen(key) : null },
+          `div.log-entry.reasoning${thinking ? ".is-thinking" : ""}${long ? ".expandable" : ""}${open ? ".open" : ""}`,
+          {
+            onclick: long ? () => toggleOpen(key) : null,
+            role: long ? "button" : null,
+            tabindex: long ? 0 : null,
+            "aria-expanded": long ? String(open) : null,
+            onkeydown: long ? (ev) => (ev.key === "Enter" || ev.key === " ") && (ev.preventDefault(), toggleOpen(key)) : null,
+          },
           h("div.log-icon", null, icon(thinking ? "sparkles" : "message")),
-          h("div.log-main", null, h(`div.${thinking ? "log-thinking" : "log-text"}`, null, long && !open ? e.text.slice(0, 280) + "…" : e.text)),
-          h("div.log-side", null, time),
+          h(
+            "div.log-main",
+            null,
+            h("div.reasoning-kind", null, thinking ? "Thinking" : "Orchestrator"),
+            h(`div.${thinking ? "log-thinking" : "log-text"}`, null, long && !open ? e.text.slice(0, 280) + "…" : e.text),
+          ),
+          h("div.log-side", null, time, long ? h("span.expand-hint", null, open ? "Show less" : "Show more", icon("chevron")) : null),
         );
       }
       case "tool":
         return toolEntry(e, key, open, time);
+      case "capability": {
+        if (!e.proposal && !e.request) return capabilityLine(e, time);
+        const w = model.capability && model.capability.waiting;
+        const itemId = e.proposal ? e.proposal.proposal_id : e.request.request_id;
+        const waiting = Boolean(w && !e.decision && !e.withdrawn && w.proposal_id === itemId && w.stage === e.kind && model.running && !model.isReplay);
+        const ctx = { runId: id, waiting, drafts: ui.toolDrafts, open, onSent: () => ((lastTabSig = null), render()) };
+        return e.request ? requestCard(e, ctx) : proposalCard(e, ctx);
+      }
       case "round": {
         const r = e.round;
         return h(
           "div.log-entry",
           null,
-          h("div.log-icon.review", null, icon("gate")),
+          h("div.log-icon.decision", null, icon("gate")),
           h(
             "div.log-main",
             null,
-            h("div.log-line", null, h("strong", null, `Round ${r.round} decided`), h("span.log-summary", null, r.best ? `best ${r.best}` : "")),
+            h("div.log-line", null, h("strong", null, `Round ${r.round} decided`), h("span.log-summary", null, r.best ? `best ${cidText(r.best)}` : "")),
             h(
               "div.log-result",
               null,
@@ -682,12 +1068,12 @@ export function mountRun(root, id, tab, hooks) {
         return h(
           "div.log-entry",
           null,
-          h("div.log-icon.review", null, icon("star")),
+          h("div.log-icon.decision", null, icon("star")),
           h(
             "div.log-main",
             null,
-            h("div.log-line", null, h("strong", null, "Submitted"), s ? h("span.log-summary", null, formula(model.candidate(s.candidate_id).composition || s.candidate_id), ` (${s.candidate_id})`) : h("span.log-summary", null, "nothing")),
-            s ? h("div.log-result", null, `Gate ${s.gate_passed ? "passed" : "failed"} · picked by ${s.picked_by}${s.runner_up_id ? ` · runner-up ${s.runner_up_id}` : ""}`) : null,
+            h("div.log-line", null, h("strong", null, "Submitted"), s ? h("span.log-summary", null, formula(model.candidate(s.candidate_id).composition || cidText(s.candidate_id)), ` (${cidText(s.candidate_id)})`) : h("span.log-summary", null, "nothing")),
+            s ? h("div.log-result", null, `Gate ${s.gate_passed ? "passed" : "failed"} · picked by ${s.picked_by}${s.runner_up_id ? ` · runner-up ${cidText(s.runner_up_id)}` : ""}`) : null,
           ),
           h("div.log-side", null, s ? check(s.gate_passed, "Gate passed", "Gate failed") : null, time),
         );
@@ -761,7 +1147,7 @@ export function mountRun(root, id, tab, hooks) {
 
   function toolEntry(e, key, open, time) {
     const c = e.call;
-    const kind = c.error ? "error" : { lit: "lit", db: "lit", sim: "sim", review: "review" }[toolKind(c.tool)] || "";
+    const kind = c.error ? "error" : { lit: "lit", db: "lit", sim: "sim", review: "decision" }[toolKind(c.tool)] || "";
     const ic = { lit: "book", db: "database", sim: c.tool === "phonons" ? "wave" : c.tool === "predict_property" ? "gauge" : c.tool === "build_structure" ? "cube" : "atom", review: "gate", candidate: "flask", control: c.tool === "submit_final" ? "star" : "info" }[toolKind(c.tool)];
     const dur = c.finished ? (new Date(c.finished) - new Date(c.started)) / 1000 : null;
     const statusEl = c.status === "started" ? h("span.spinner") : c.error ? h("span.check.bad", null, icon("x")) : null;
@@ -988,7 +1374,7 @@ export function mountRun(root, id, tab, hooks) {
             "span.muted",
             null,
             `${cands.length} candidate${cands.length === 1 ? "" : "s"}`,
-            row && row.best ? ` · best ${row.best}` : "",
+            row && row.best ? ` · best ${cidText(row.best)}` : "",
             row && row.score != null ? ` · rubric ${row.score}` : "",
             row && row.llm != null ? ` · reviewer ${row.llm}` : "",
           ),
@@ -1012,6 +1398,7 @@ export function mountRun(root, id, tab, hooks) {
                     h("th", null, "Candidate"),
                     h("th", null, "Structure"),
                     h("th.num", null, label(spec.target_property || "Target")),
+                    (spec.extra_targets || []).map((t) => h("th.num", null, label(t.property))),
                     h("th.num", null, "E above hull"),
                     h("th", null, "Thermo"),
                     h("th.num", null, "Min phonon"),
@@ -1030,11 +1417,15 @@ export function mountRun(root, id, tab, hooks) {
                       h(
                         "td",
                         null,
-                        h("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, c.candidate_id === best ? h("span.star", { title: "Best candidate" }, icon("star")) : null, h("span.cand-formula", null, formula(c.composition || c.candidate_id))),
-                        h("div.cand-id", null, c.candidate_id),
+                        h("div", { style: { display: "flex", alignItems: "center", gap: "6px" } }, c.candidate_id === best ? h("span.star", { title: "Best candidate" }, icon("star")) : null, h("span.cand-formula", null, formula(c.composition || cidText(c.candidate_id)))),
+                        cidTag(c.candidate_id, "div.cand-id"),
                       ),
                       h("td", null, c.space_group || (c.proposal && label(c.proposal.structure_type)) || "–"),
                       h("td.num", null, c.value != null ? pm(c.value, c.uncertainty, c.units) : "–"),
+                      (spec.extra_targets || []).map((t) => {
+                        const r = (c.targets || []).find((x) => x.property === t.property);
+                        return h("td.num", null, r && r.value != null ? pm(r.value, r.uncertainty, r.units) : "–");
+                      }),
                       h("td.num", null, c.e_hull != null ? `${num(c.e_hull, 3)} eV/atom` : "–"),
                       h("td", null, c.e_hull == null ? h("span.muted", null, "–") : check(c.thermo_stable, "Stable", "Off hull")),
                       h("td.num", null, c.min_freq != null ? `${num(c.min_freq)} THz` : "–"),
@@ -1076,8 +1467,8 @@ export function mountRun(root, id, tab, hooks) {
               render();
             },
           },
-          h("span", { style: { display: "flex", alignItems: "center", gap: "6px" } }, x === model.best ? h("span.star", null, icon("star")) : null, h("span.cand-formula", null, formula(cc.composition || x))),
-          h("span.cand-id", null, x),
+          h("span", { style: { display: "flex", alignItems: "center", gap: "6px" } }, x === model.best ? h("span.star", null, icon("star")) : null, h("span.cand-formula", null, formula(cc.composition || cidText(x)))),
+          cidTag(x, "span.cand-id"),
         );
       }),
     );
@@ -1179,7 +1570,7 @@ export function mountRun(root, id, tab, hooks) {
             `div.verdict.${kind}`,
             null,
             h("div.verdict-icon", null, icon(kind === "good" ? "check" : kind === "critical" ? "x" : "alert")),
-            h("div", null, h("div.verdict-title", null, `${label(r.verdict)}: `, formula(model.candidate(r.candidate_id).composition || r.candidate_id), h("span.muted.mono", { style: { fontSize: "13px", marginLeft: "8px" } }, r.candidate_id)), h("div.secondary", null, text)),
+            h("div", null, h("div.verdict-title", null, `${label(r.verdict)}: `, formula(model.candidate(r.candidate_id).composition || cidText(r.candidate_id)), h("span.muted", { style: { fontSize: "13px", marginLeft: "8px" }, title: cidLong(r.candidate_id) }, cidText(r.candidate_id))), h("div.secondary", null, text)),
           ),
           r.checks && r.checks.length
             ? h(
@@ -1199,7 +1590,7 @@ export function mountRun(root, id, tab, hooks) {
                         h("td", null, checkName(ch.name)),
                         h("td.num", null, fmtCheck(ch.screening_value)),
                         h("td.num", null, fmtCheck(ch.final_value)),
-                        h("td.num", null, ch.delta != null ? `${ch.delta > 0 ? "+" : ""}${num(ch.delta, 3)}` : "–"),
+                        h("td.num", null, ch.delta != null ? `${ch.delta > 0 ? "+" : ""}${num(ch.delta, Math.abs(ch.delta) >= 10 ? 1 : 3)}` : "–"),
                       ),
                     ),
                   ),
@@ -1224,31 +1615,33 @@ export function mountRun(root, id, tab, hooks) {
               "dl.kv",
               null,
               [
-                ["Winner", h("span", null, formula(model.candidate(sub.candidate_id).composition || ""), " ", h("span.mono.muted", null, sub.candidate_id))],
-                ["Runner-up", sub.runner_up_id ? h("span", null, formula(model.candidate(sub.runner_up_id).composition || ""), " ", h("span.mono.muted", null, sub.runner_up_id)) : "–"],
+                ["Winner", h("span", null, formula(model.candidate(sub.candidate_id).composition || ""), " ", cidTag(sub.candidate_id, "span.muted"))],
+                ["Runner-up", sub.runner_up_id ? h("span", null, formula(model.candidate(sub.runner_up_id).composition || ""), " ", cidTag(sub.runner_up_id, "span.muted")) : "–"],
                 ["Submit gate", check(sub.gate_passed, "Passed", "Failed")],
-                ["Accepted not met", sub.accept_not_met ? "Yes" : "No"],
+                sub.accept_not_met ? ["Accepted not met", "Yes"] : null,
                 ["Picked by", label(sub.picked_by)],
-                ["Justification", sub.justification || "–"],
-              ].map(([k, v]) => [h("dt", null, k), h("dd", null, v)]),
+                ["Justification", sub.justification ? clamp(sub.justification, 5) : "–"],
+              ]
+                .filter(Boolean)
+                .map(([k, v]) => [h("dt", null, k), h("dd", null, v)]),
             ),
           ),
         ),
       );
     }
     side.push(
-      h(
-        "section.card",
-        null,
-        h("div.card-head", null, h("div.card-title", null, "Run issues"), h("span.card-sub.num", null, errors.length || "")),
-        h(
-          "div.card-body",
-          null,
-          errors.length
-            ? h("ul.list-plain", null, errors.map((e) => h("li", null, h("span.check.bad", null, icon("alert")), h("span", null, h("strong", null, `${label(e.step)}: `), h("span.secondary", null, e.message), h("span.muted.mono", { style: { fontSize: "11.5px" } }, ` ${e.code}`)))))
-            : h("div.muted", null, "No recorded failures. A failed optional step degrades a run but never stops it, and would be listed here."),
-        ),
-      ),
+      errors.length
+        ? h(
+            "details.card.issues",
+            null,
+            h("summary.card-head", null, h("div.card-title", null, icon("chevron", "round-chevron"), `${errors.length} recorded issue${errors.length === 1 ? "" : "s"}`), h("span.card-sub", null, "Degraded steps; the run continued")),
+            h(
+              "div.card-body",
+              null,
+              h("ul.list-plain", null, errors.map((e) => h("li", null, h("span.check.bad", null, icon("alert")), h("span", null, h("strong", null, `${label(e.step)}: `), h("span.secondary", null, e.message))))),
+            ),
+          )
+        : null,
     );
     return h("div.grid", { style: { gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)", alignItems: "start" } }, h("div.grid", null, parts), h("div.grid", null, side));
   }
@@ -1260,44 +1653,72 @@ export function mountRun(root, id, tab, hooks) {
     if (!ready) {
       return h("section.card", null, model.phase.brief === "active" ? empty("doc", "Writing the brief…", "Numbers come only from stored results; a number check blocks anything else.") : empty("doc", "No brief yet", "The lab brief is written after the final re-check."));
     }
-    if (ui.brief == null) {
-      if (!ui.briefLoading) {
-        ui.briefLoading = true;
-        api(`/runs/${encodeURIComponent(model.isReplay ? sourceId() : id)}/brief`, { text: true })
-          .then((md) => (ui.brief = md))
-          .catch(() => (ui.brief = (model.state && model.state.brief && model.state.brief.markdown) || ""))
+    const kind = ui.briefKind === "compute" ? "compute" : "lab";
+    const rid = model.isReplay ? sourceId() : id;
+    const md = ui.briefs[kind];
+    const kindSwitch = h(
+      "div.segmented.brief-kind",
+      { role: "group", "aria-label": "Brief" },
+      [
+        ["lab", "flask", "Lab"],
+        ["compute", "cpu", "Computational"],
+      ].map(([k, ic, text]) =>
+        h(
+          "button",
+          {
+            type: "button",
+            "aria-pressed": String(k === kind),
+            title: k === "lab" ? "How to make and test it" : "How to check it with DFT first",
+            onclick: () => {
+              ui.briefKind = k;
+              store("heph-brief-kind", k);
+              schedule();
+            },
+          },
+          icon(ic),
+          text,
+        ),
+      ),
+    );
+    if (md == null) {
+      if (ui.briefLoading !== kind) {
+        ui.briefLoading = kind;
+        api(`/runs/${encodeURIComponent(rid)}/brief?kind=${kind}`, { text: true })
+          .then((text) => (ui.briefs[kind] = text))
+          .catch(() => (ui.briefs[kind] = kind === "lab" ? (model.state && model.state.brief && model.state.brief.markdown) || "" : ""))
           .finally(() => {
-            ui.briefLoading = false;
+            ui.briefLoading = null;
             schedule();
           });
       }
-      return h("section.card", null, empty("doc", "Loading the brief…"));
+      return h("div.brief-wrap", null, kindSwitch, h("section.card", null, empty("doc", "Loading the brief…")));
     }
-    const { html, headings } = renderMarkdown(ui.brief);
+    if (!md) return h("div.brief-wrap", null, kindSwitch, h("section.card", null, empty("doc", "No computational brief", "It is written with the lab brief once the run has a candidate.")));
+    const { html, headings } = renderMarkdown(md);
     const doc = h("article.card.doc");
     doc.innerHTML = html; // escaped by renderMarkdown
-    const pdf = model.state && model.state.brief && model.state.brief.pdf_path;
-    const rid = model.isReplay ? sourceId() : id;
-    const cited = (model.state && model.state.brief && model.state.brief.cited_paper_ids) || [];
+    decorateBrief(doc);
+    const file = `${rid}_${kind === "compute" ? "compute_" : ""}brief`;
+    const cited = kind === "lab" ? (model.state && model.state.brief && model.state.brief.cited_paper_ids) || [] : [];
     return h(
       "div.brief-layout",
       null,
-      doc,
+      h("div.brief-wrap", null, kindSwitch, doc),
       h(
         "aside.toc",
         null,
         h(
           "div",
           { style: { display: "grid", gap: "8px" } },
-          h("button.btn", { onclick: () => download(`${rid}_brief.md`, ui.brief, "text/markdown") }, icon("download"), "Markdown"),
-          pdf ? h("a.btn", { href: `/runs/${encodeURIComponent(rid)}/brief?format=pdf`, download: `${rid}_brief.pdf` }, icon("download"), "PDF") : null,
+          h("button.btn", { onclick: () => download(`${file}.md`, stripCodes(md), "text/markdown") }, icon("download"), "Markdown"),
+          h("a.btn.primary", { href: `/runs/${encodeURIComponent(rid)}/brief?format=pdf&kind=${kind}`, download: `${file}.pdf` }, icon("download"), "PDF"),
           h("button.btn", { onclick: () => window.print() }, icon("printer"), "Print"),
           h(
             "button.btn",
             {
               onclick: async () => {
                 try {
-                  await navigator.clipboard.writeText(ui.brief);
+                  await navigator.clipboard.writeText(stripCodes(md));
                   toast("Brief copied as Markdown.");
                 } catch (e) {
                   toast("Copy failed: your browser blocked clipboard access.", "critical");
@@ -1326,7 +1747,7 @@ export function mountRun(root, id, tab, hooks) {
                         onclick: (e) => {
                           e.preventDefault();
                           const t = doc.querySelector(`#${CSS.escape(x.id)}`);
-                          if (t) root.scrollTo({ top: t.offsetTop - 210, behavior: "smooth" });
+                          if (t) root.scrollTo({ top: t.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - 230, behavior: "smooth" });
                         },
                       },
                       x.text,
@@ -1351,9 +1772,21 @@ export function mountRun(root, id, tab, hooks) {
           ...CONFIG_GROUPS.map((g) => [g.name, Object.keys(g.fields)]),
         ]
       : [];
+    const goal = model.goal || (model.state && model.state.raw_goal) || "";
     return h(
       "div.grid",
       { style: { gridTemplateColumns: "minmax(0, 1.5fr) minmax(0, 1fr)", alignItems: "start" } },
+      h(
+        "div.grid",
+        null,
+        goal
+          ? h(
+              "section.card.goal-card",
+              null,
+              h("div.card-head", null, h("div.card-title", null, "Your goal"), spec && spec.title ? h("span.card-sub", null, "Titled by the parser") : null),
+              h("div.card-body", null, h("blockquote.goal-quote", null, goal)),
+            )
+          : null,
       h(
         "section.card",
         { style: { overflow: "hidden" } },
@@ -1362,6 +1795,7 @@ export function mountRun(root, id, tab, hooks) {
         spec && spec.reference_value
           ? h("div.card-body", null, h("div.callout.info", null, icon("info"), h("div", null, "Reference value ", h("strong", null, pm(spec.reference_value.value, spec.reference_value.uncertainty, spec.reference_value.units)), ` from ${spec.reference_value.source}: computed with the same model as every candidate, not quoted.`)))
           : null,
+      ),
       ),
       h(
         "section.card",
@@ -1388,26 +1822,23 @@ export function mountRun(root, id, tab, hooks) {
   function reviewBlock(r, gateNote) {
     const breakdown = Object.entries(r.score_breakdown || {});
     const checks = r.checks || {};
-    return h(
-      "div.review",
+    const scores = h(
+      "div.review-scores",
       null,
       h(
-        "div.score-head",
+        "div.score-pair",
         null,
-        scoreRing(r.score, "var(--series-1)"),
-        h("div", null, h("div", { style: { fontWeight: 600 } }, "Code rubric"), h("div.muted", { style: { fontSize: "12px" } }, `Round ${r.round} · best ${r.best_of_round || "–"}`)),
-        scoreRing(r.llm_confidence, "var(--series-2)"),
-        h("div", { style: { minWidth: 0 } }, h("div", { style: { fontWeight: 600 } }, "Reviewer confidence"), h("div.muted", { style: { fontSize: "12px" } }, r.llm_confidence_reason || "Independent reviewer LLM")),
+        h("div.score-item", null, scoreRing(r.score, "var(--series-1)"), h("div", null, h("div.score-name", null, "Code rubric"), h("div.muted.score-sub", null, `best ${cidText(r.best_of_round)}`))),
+        h("div.score-item", null, scoreRing(r.llm_confidence, "var(--series-2)"), h("div", null, h("div.score-name", null, "Reviewer"), h("div.muted.score-sub", null, "own confidence"))),
       ),
       h(
-        "div.chips",
+        "div.check-list",
         null,
-        check(checks.target_met_central, "Target met (central)", "Target not met"),
-        checks.target_met_conservative != null ? check(checks.target_met_conservative, "Met within error bar", "Not within error bar") : null,
-        check(checks.thermo_stable, "Thermodynamically stable", "Off hull"),
+        check(checks.target_met_central, "Target met", "Target not met"),
+        checks.target_met_conservative != null && !(model.spec && model.spec.target_tool) ? check(checks.target_met_conservative, "Within error bar", "Not within error bar") : null,
+        check(checks.thermo_stable, "On the hull", "Off hull"),
         check(checks.dyn_stable, "Dynamically stable", "Dynamically unstable"),
       ),
-      gateNote || r.gate_note ? h("div.callout.warning", null, icon("gate"), h("div", null, gateNote || r.gate_note)) : null,
       breakdown.length
         ? h(
             "div.breakdown",
@@ -1418,12 +1849,19 @@ export function mountRun(root, id, tab, hooks) {
             }),
           )
         : null,
-      findingsList(r.findings || []),
+    );
+    const words = h(
+      "div.review-words",
+      null,
+      gateNote || r.gate_note ? h("div.callout.warning", null, icon("gate"), h("div", null, gateNote || r.gate_note)) : null,
+      r.llm_confidence_reason ? h("div", null, h("div.field-label", null, "Reviewer's view"), clamp(r.llm_confidence_reason, 3)) : null,
+      (r.findings || []).length ? h("div", null, h("div.field-label", null, "Findings"), findingsList(r.findings, 3)) : null,
       r.recommended_next ? h("div.secondary", { style: { fontSize: "13px" } }, "Recommended next: ", h("strong", null, formula(r.recommended_next)), r.why ? h("span.muted", null, ` — ${r.why}`) : null) : null,
     );
+    return h("div.review", null, scores, words);
   }
 
-  function findingsList(findings) {
+  function findingsList(findings, lines = 3) {
     if (!findings.length) return null;
     return h(
       "ul.findings",
@@ -1433,7 +1871,7 @@ export function mountRun(root, id, tab, hooks) {
           "li.finding",
           null,
           pill(label(f.severity), SEVERITY[f.severity], f.severity === "critical" ? "alert" : null),
-          h("div", null, h("span.muted", null, `${label(f.category)} · `), f.text, f.suggestion ? h("div.suggest", null, f.suggestion) : null),
+          clamp([h("span.muted", null, `${label(f.category)} · `), f.text, f.suggestion ? h("div.suggest", null, f.suggestion) : null], lines),
         ),
       ),
     );
@@ -1489,11 +1927,23 @@ function summary(c) {
     case "request_review":
       return i.summary || "";
     case "submit_final":
-      return `${i.candidate_id}${i.runner_up_id ? ` (runner-up ${i.runner_up_id})` : ""}`;
+      return `${cidText(i.candidate_id)}${i.runner_up_id ? ` (runner-up ${cidText(i.runner_up_id)})` : ""}`;
     case "predict_property":
-      return `${i.candidate_id}${comp ? ` ${comp}` : ""} · ${label(i.property)}`;
+      return `${cidText(i.candidate_id)}${comp ? ` ${comp}` : ""} · ${label(i.property)}`;
+    case "read_tool_source":
+      return i.function ? `source of ${i.function}` : "our simulation and structure tools";
+    case "propose_tool":
+      return `${i.name} · ${label(i.property || "")}`;
+    case "write_tool":
+      return `code for proposal ${i.proposal_id}`;
+    case "request_package":
+      return `asks to use ${i.module}`;
+    case "ask_user":
+      return i.question || "";
+    case "give_up":
+      return i.reason || "";
     default:
-      return i.candidate_id ? `${i.candidate_id}${comp ? ` ${comp}` : ""}` : Object.values(i).slice(0, 2).join(" · ");
+      return i.candidate_id ? `${cidText(i.candidate_id)}${comp ? ` ${comp}` : ""}` : Object.values(i).slice(0, 2).join(" · ");
   }
 }
 
@@ -1519,7 +1969,7 @@ function resultLine(c) {
     case "lookup_materials_project":
       return `${r.n_entries ?? 0} entries${r.default_polymorph ? ` · default ${r.default_polymorph}` : ""}${r.note ? ` · ${r.note}` : ""}`;
     case "propose_candidate":
-      return r.accepted ? `Accepted as ${r.candidate_id}${r.tolerance_factor ? ` · tolerance factor ${num(r.tolerance_factor)}` : ""}` : `Rejected: ${(r.reasons || []).join("; ")}`;
+      return r.accepted ? `Accepted as ${cidText(r.candidate_id)}${r.tolerance_factor ? ` · tolerance factor ${num(r.tolerance_factor)}` : ""}` : `Rejected: ${(r.reasons || []).join("; ")}`;
     case "build_structure":
       return `${r.n_atoms} atoms from ${r.source}${r.supercell ? ` · ${r.supercell.join("×")} supercell` : ""}`;
     case "relax":
@@ -1560,9 +2010,20 @@ const FINAL_STEP_NAMES = {
  * @returns {string}
  */
 function finalStepName(e) {
-  const cid = e.info && e.info.candidate_id;
-  const who = cid === "ref" ? "reference" : cid;
+  const id = e.info && e.info.candidate_id;
+  const who = id ? cidText(id) : null;
   return `${FINAL_STEP_NAMES[e.tool] || label(e.tool)}${who ? ` · ${who}` : ""}`;
+}
+
+/**
+ * Compact count: 814445 -> "814k", 15134 -> "15.1k", 2918277 -> "2.92M".
+ * @param {number} n Count.
+ * @returns {string}
+ */
+function compact(n) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 1 : 2)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e5 ? 0 : 1)}k`;
+  return String(n);
 }
 
 /**
@@ -1576,7 +2037,7 @@ function setMeter(el, used, max, text) {
   const frac = max > 0 ? used / max : 0;
   const fill = el.querySelector(".meter-fill");
   fill.style.width = `${Math.min(1, frac) * 100}%`;
-  fill.className = `meter-fill${frac >= 1 ? " critical" : frac > 0.8 ? " warning" : ""}`;
+  fill.className = `meter-fill${frac > 1.001 ? " critical" : frac >= 0.9 ? " warning" : ""}`; // red only when over
   const t = el.querySelector(".meter-text");
   if (t) t.textContent = text;
 }
@@ -1618,9 +2079,16 @@ function verdictPill(v) {
 
 const CHECK_NAMES = {
   e_hull_eV_per_atom: "Energy above hull (eV/atom)",
+  thermo_stable: "On the hull",
   dyn_stable: "Dynamically stable",
   min_freq_THz: "Lowest phonon (THz)",
+  min_frequency_THz: "Lowest phonon (THz)",
+  md_stable: "Stable in MD",
+  target_met: "Target met",
+  target_met_conservative: "Target met within error",
   band_gap: "Band gap (eV)",
+  bulk_modulus: "Bulk modulus (GPa)",
+  disorder_spread_eV_per_atom: "Disorder spread (eV/atom)",
 };
 
 /**
