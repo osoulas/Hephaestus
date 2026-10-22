@@ -1724,9 +1724,12 @@ def predict_property(ws: Workspace, candidate_id: str, property: str) -> dict[st
     ToolError
         For unsupported properties (PP-6), or when a prerequisite step has not run.
     """
-    reg = property_registry(ws.cfg.band_gap_fidelity)
+    from hephaestus.tools.custom import disabled_properties
+
+    off = disabled_properties(ws.cfg)
+    reg = {k: v for k, v in property_registry(ws.cfg.band_gap_fidelity).items() if k not in off}
     if property not in reg:
-        raise ToolError(f"{property!r} is not available; supported: {', '.join(reg)}.")
+        raise ToolError(f"{property!r} is not available in this run; supported: {', '.join(reg)}.")
     cs = ws.get(candidate_id)
     _needs_relax(cs)
     assert cs.structure is not None and cs.potential

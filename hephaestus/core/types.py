@@ -18,13 +18,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from hephaestus.core.config import RunConfig
 
 Direction = Literal["maximise", "minimise", "hit"]
-FindingType = Literal["positive", "negative", "mechanism", "synthesis"]
+FindingType = Literal["positive", "negative", "mechanism", "synthesis", "method"]
 Novelty = Literal["known", "variant", "novel"]
 Feasibility = Literal["easy", "moderate", "difficult", "unknown"]
 Severity = Literal["critical", "major", "minor", "info"]
 EventStatus = Literal["started", "finished", "failed"]
 RunStatus = Literal[
-    "created", "needs_input", "running", "final_check", "writing_brief", "finished", "failed", "stopped"
+    "created",
+    "needs_input",
+    "capability",
+    "running",
+    "final_check",
+    "writing_brief",
+    "finished",
+    "failed",
+    "stopped",
 ]
 
 
@@ -102,6 +110,10 @@ class SearchSpec(Record):
     soft_preferences: list[str] = Field(default_factory=list)
     stability_thresholds: StabilityThresholds = Field(default_factory=StabilityThresholds)
     assumptions: list[str] = Field(default_factory=list)
+    # Agent-built tools (Section 14): the tool that supplies the target property, and whether the
+    # target can be evaluated at all (false when the user cancelled the tool for it, AT-8)
+    target_tool: str | None = None
+    target_evaluable: bool = True
 
 
 class Paper(Record):
@@ -339,3 +351,65 @@ class RunState(Record):
     errors: list[ErrorRecord] = Field(default_factory=list)
     usage: dict[str, int] = Field(default_factory=dict)
     versions: dict[str, str] = Field(default_factory=dict)
+
+
+ToolStage = Literal["plan", "code"]
+ToolAction = Literal["accept", "revise", "cancel_tool", "cancel_run"]
+
+
+class ToolCheck(Record):
+    """One code check on an agent-built tool (AT-11, AT-12)."""
+
+    passed: bool
+    report: str = ""
+
+
+class ToolProposal(Record):
+    """A plan for an agent-built tool, and later its code, waiting for the user (Section 14)."""
+
+    proposal_id: str
+    name: str
+    property: str
+    units: str
+    description: str
+    method: str
+    citations: list[str] = Field(default_factory=list)
+    inputs: dict[str, Any] = Field(default_factory=dict)  # JSON schema beyond candidate_id
+    building_blocks: list[str] = Field(default_factory=list)
+    expected_runtime_s: float | None = None
+    supplies_target: bool = True
+    if_cancelled: str = ""
+    revision: int = 1
+    stage: ToolStage = "plan"
+    status: Literal["waiting", "accepted", "revise", "cancelled", "registered"] = "waiting"
+    author: Literal["agent", "user"] = "agent"
+    source: str | None = None
+    tests: str | None = None
+    checks: dict[str, ToolCheck] = Field(default_factory=dict)  # static, tests, trial
+    trial: dict[str, Any] | None = None  # trial-run output on the reference material
+    toolkit_calls: list[str] = Field(default_factory=list)
+    revisions_left: int = 0
+
+
+class ToolDecision(Record):
+    """The user's decision on a proposal at the plan or the code stage (AT-7, AT-13)."""
+
+    proposal_id: str
+    stage: ToolStage
+    action: ToolAction
+    message: str | None = None
+    time: datetime = Field(default_factory=utcnow)
+
+
+class CustomTool(Record):
+    """An approved tool in the tool library (AT-20); ``sha256`` covers the tool and its tests."""
+
+    name: str
+    property: str
+    units: str
+    file: str
+    sha256: str
+    author: Literal["agent", "user"] = "agent"
+    approved_at: datetime = Field(default_factory=utcnow)
+    run_id: str | None = None
+    description: str = ""

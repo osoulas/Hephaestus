@@ -23,7 +23,9 @@ You turn a materials research goal into a structured search specification. Extra
 the goal says or clearly implies; never invent a target value. If the goal compares with a \
 known material ("smaller band gap than SrTiO3"), set reference_material and leave target_value \
 null: code computes the reference with the same model as the candidates. Map the property to \
-one of the supported keys, or to "unsupported" if none fits. Separate hard constraints (must \
+one of the supported keys, or to "unsupported" if none fits; either way give property_name, \
+the property asked for as a short snake_case name (e.g. "thermal_expansion_coefficient"), and \
+its units in target_units. Separate hard constraints (must \
 hold) from soft preferences. Record every assumption in plain words. Ask at most three \
 clarifying questions, only when a required field (target property, value or reference, \
 direction) is missing or ambiguous. Give the run a short title (at most eight words, sentence \
@@ -32,22 +34,48 @@ with a smaller gap than SrTiO3"."""
 TITLE_MAX = 70
 
 
-def property_registry(fidelity: str = "hse") -> dict[str, dict[str, Any]]:
-    """Return the property registry (PP-1).
+def property_registry(fidelity: str = "hse", cfg: RunConfig | None = None) -> dict[str, dict[str, Any]]:
+    """Return the property registry (PP-1); with ``cfg``, the run's registry (AT-1, AT-26).
 
     Parameters
     ----------
     fidelity : {"hse", "pbe"}
-        Band gap fidelity.
+        Band gap fidelity; ignored when ``cfg`` is given.
+    cfg : RunConfig, optional
+        Run options: removes disabled capabilities and adds approved library tools.
 
     Returns
     -------
     dict
         Property key to ``{units, published_error, ...}``.
     """
+    if cfg is not None:
+        from hephaestus.tools.custom import run_registry
+
+        return run_registry(cfg)
     from hephaestus.tools.simulation import property_registry as registry
 
     return registry(fidelity)
+
+
+PROPERTY_NAME_RE = re.compile(r"[^a-z0-9]+")
+
+
+def property_key(name: str | None) -> str:
+    """Normalise a free-text property name to a snake_case key.
+
+    Parameters
+    ----------
+    name : str or None
+        Property name from the parser, e.g. ``"Thermal expansion"``.
+
+    Returns
+    -------
+    str
+        ``"thermal_expansion"``; ``"unsupported"`` when empty.
+    """
+    key = PROPERTY_NAME_RE.sub("_", (name or "").strip().lower()).strip("_")[:60]
+    return key or "unsupported"
 
 
 def goal_schema(keys: list[str]) -> dict[str, Any]:
@@ -71,6 +99,7 @@ def goal_schema(keys: list[str]) -> dict[str, Any]:
         "elements": sa,
         "excluded_elements": sa,
         "target_property": {"type": "string", "enum": [*keys, "unsupported"]},
+        "property_name": s,
         "target_value": nn,
         "target_units": s,
         "direction": {"type": "string", "enum": ["maximise", "minimise", "hit"]},
@@ -112,7 +141,7 @@ def parse_goal(
     errors : list of ErrorRecord
         Parser failures and validation problems.
     """
-    registry = property_registry(cfg.band_gap_fidelity)
+    registry = property_registry(cfg=cfg)
     prompt = json.dumps(
         {
             "goal": raw_goal,
@@ -135,7 +164,7 @@ def parse_goal(
         material_family=raw.get("material_family") or "",
         elements=list(raw.get("elements") or []),
         excluded_elements=list(raw.get("excluded_elements") or []),
-        target_property=raw.get("target_property") or "unsupported",
+        target_property=target_key(raw),
         target_value=raw.get("target_value"),
         target_units=raw.get("target_units") or "",
         direction=raw.get("direction") or "minimise",
@@ -154,9 +183,27 @@ def parse_goal(
     spec = expand_constraints(spec, cfg)
     questions = [] if answers else list(raw.get("questions") or [])[:3]
     errors = [
-        ErrorRecord(step="goal_parser", code="invalid_spec", message=m) for m in validate_spec(spec, registry)
+        ErrorRecord(step="goal_parser", code="invalid_spec", message=m)
+        for m in validate_spec(spec, registry, gaps_ok=cfg.custom_tools == "ask")
     ]
     return spec, questions, errors
+
+
+def target_key(raw: dict[str, Any]) -> str:
+    """Return the target property: a registry key, or the plain name of an unsupported one (GP-2).
+
+    Parameters
+    ----------
+    raw : dict
+        Parser answer with ``target_property`` and ``property_name``.
+
+    Returns
+    -------
+    str
+        A registry key, a snake_case property name (a capability gap), or ``"unsupported"``.
+    """
+    key = raw.get("target_property") or "unsupported"
+    return key if key != "unsupported" else property_key(raw.get("property_name"))
 
 
 def run_title(proposed: str | None, raw_goal: str) -> str:
@@ -270,8 +317,10 @@ def apply_stability_options(spec: SearchSpec, cfg: RunConfig) -> SearchSpec:
     return spec
 
 
-def validate_spec(spec: SearchSpec, registry: dict[str, dict[str, Any]] | None = None) -> list[str]:
-    """Check a spec before a run starts (GP-2, GP-5, GP-8).
+def validate_spec(
+    spec: SearchSpec, registry: dict[str, dict[str, Any]] | None = None, gaps_ok: bool = False
+) -> list[str]:
+    """Check a spec before a run starts (GP-2, GP-5, GP-8, AT-3).
 
     Parameters
     ----------
@@ -279,6 +328,9 @@ def validate_spec(spec: SearchSpec, registry: dict[str, dict[str, Any]] | None =
         Spec to check.
     registry : dict, optional
         Property registry; defaults to ``property_registry()``.
+    gaps_ok : bool
+        Accept a named property that no tool computes: the run opens a capability phase for
+        it (``RunConfig.custom_tools == "ask"``). ``"unsupported"`` is always a problem.
 
     Returns
     -------
@@ -295,7 +347,10 @@ def validate_spec(spec: SearchSpec, registry: dict[str, dict[str, Any]] | None =
         except Exception:
             problems.append(f"Unknown element symbol {sym!r}.")
     if spec.target_property not in reg:
-        problems.append(f"Property {spec.target_property!r} is not supported; supported: {', '.join(reg)}.")
+        if not gaps_ok or spec.target_property == "unsupported":
+            problems.append(
+                f"Property {spec.target_property!r} is not supported; supported: {', '.join(reg)}."
+            )
     else:
         units = reg[spec.target_property].get("units")
         if units and spec.target_units and spec.target_units.replace("³", "3") != units.replace("³", "3"):
@@ -307,3 +362,21 @@ def validate_spec(spec: SearchSpec, registry: dict[str, dict[str, Any]] | None =
     if set(spec.elements) & set(spec.excluded_elements):
         problems.append("An element is both required and excluded.")
     return problems
+
+
+def validate_for_run(spec: SearchSpec, cfg: RunConfig) -> list[str]:
+    """Check a spec against the run's own registry (AT-1, AT-3, AT-26).
+
+    Parameters
+    ----------
+    spec : SearchSpec
+        Spec to check.
+    cfg : RunConfig
+        Disabled capabilities, the tool library and ``custom_tools``.
+
+    Returns
+    -------
+    list of str
+        Problems; empty when valid. A capability gap is a problem only with ``custom_tools="off"``.
+    """
+    return validate_spec(spec, property_registry(cfg=cfg), gaps_ok=cfg.custom_tools == "ask")

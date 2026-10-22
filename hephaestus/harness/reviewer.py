@@ -202,6 +202,7 @@ def review_prompt(
             {"paper_id": p.paper_id, "title": p.title, "year": p.year} for p in list(ws.papers.values())[-40:]
         ],
         "tried_compositions": [cs.candidate.composition for cs in ws.candidates.values()],
+        "agent_built_tool": agent_tool_review(ws),
         "earlier_reviews": [
             {
                 "round": c.iteration,
@@ -345,3 +346,35 @@ def _minimal(base: dict[str, Any], reason: str) -> Critique:
     """
     note = Finding(severity="info", category="other", text=f"Review unavailable: {reason[:200]}")
     return Critique(**base, findings=[note], llm_confidence=None, llm_confidence_reason=None)
+
+
+def agent_tool_review(ws: Workspace) -> dict[str, Any] | None:
+    """Return the agent-built tool behind the target, with its source, for the reviewer (AT-17).
+
+    Parameters
+    ----------
+    ws : Workspace
+        Run workspace.
+
+    Returns
+    -------
+    dict or None
+        ``{name, property, units, note, source}``; ``None`` when the target uses a built-in model.
+    """
+    from hephaestus.tools.custom import load_sources
+
+    name = (ws.spec.target_tool or "").removeprefix("custom_")
+    tool = ws.custom_tools.get(name)
+    if tool is None:
+        return None
+    try:
+        source = load_sources(tool)[0]
+    except Exception as exc:
+        source = f"(source unavailable: {exc})"
+    return {
+        "name": tool.name,
+        "property": tool.property,
+        "units": tool.units,
+        "note": "Written by the agent and approved by the user; its values carry no uncertainty. Judge the method.",
+        "source": source[:12000],
+    }

@@ -31,7 +31,7 @@ from hephaestus.core.store import atomic_write_text, load_model, new_run_id
 from hephaestus.core.types import ProgressEvent, RunState, SearchSpec
 from hephaestus.harness import runner
 from hephaestus.harness.agent import Campaign
-from hephaestus.harness.goal import parse_goal, validate_spec
+from hephaestus.harness.goal import parse_goal, validate_for_run
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot
 from hephaestus.llm.base import LLM, api_credentials_present, make_llm, resolve_backend
 from hephaestus.tools.registry import Workspace, load_default_handlers
@@ -416,7 +416,7 @@ class Experiment:
         spec, questions, errors = parse_goal(llm, self.goal, self.config, self.answers)
         messages = [e.message for e in errors]
         if spec is not None:
-            messages += [m for m in validate_spec(spec) if m not in messages]
+            messages += [m for m in validate_for_run(spec, self.config) if m not in messages]
         result = ParseResult(spec, questions, messages, {"backend": llm.backend, "model": llm.model})
         if result.ready:
             self.spec = spec

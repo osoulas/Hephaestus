@@ -119,8 +119,9 @@ def check_target(cs: CandidateState, spec: SearchSpec) -> dict[str, bool | None]
         ``all_passed``. Missing results count as not passed; a stability check turned off for
         the run is ``None`` and does not count towards ``all_passed``.
     """
-    pred = cs.predictions.get(spec.target_property)
+    pred = cs.predictions.get(spec.target_property) if spec.target_evaluable else None
     central = pred is not None and target_met(pred.value.value, spec)
+    # An agent-built tool has no uncertainty, so both readings agree (AT-17)
     conservative = pred is not None and target_met(pessimistic(pred.value, spec), spec)
     st = spec.stability_thresholds
     thermo = cs.e_hull is not None and not cs.hull_stale and cs.e_hull <= st.e_hull_max_eV_per_atom
@@ -159,8 +160,8 @@ def missing_steps(cs: CandidateState, spec: SearchSpec) -> list[str]:
         out.append("energy_above_hull")
     if st.dynamic and cs.phonon is None:
         out.append("phonons")
-    if spec.target_property not in cs.predictions:
-        out.append(f"predict_property({spec.target_property})")
+    if spec.target_evaluable and spec.target_property not in cs.predictions:
+        out.append(spec.target_tool or f"predict_property({spec.target_property})")
     return out
 
 
@@ -197,6 +198,7 @@ def facts(ws: Workspace, candidate_id: str) -> dict[str, Any]:
         "uncertainty": pred.value.uncertainty if pred else None,
         "units": pred.value.units if pred else ws.spec.target_units,
         "in_domain": pred.in_domain if pred else None,
+        "agent_built": bool(pred and pred.model.startswith("agent-built:")),
         **checks,
         "missing": missing_steps(cs, ws.spec),
     }
@@ -477,8 +479,12 @@ def submission_gate(
         ("thermo_stable", "not thermodynamically stable"),
         ("dyn_stable", "not dynamically stable"),
     ]:
+        if key == "target_met_central" and not ws.spec.target_evaluable:
+            continue
         if checks[key] is False:  # None: the check is turned off for the run
             reasons.append(label)
+    if not ws.spec.target_evaluable:
+        reasons.append(f"{ws.spec.target_property} was not evaluated: the user cancelled the tool for it")
     if ws.cfg.require_novel and novelty_hits != 0:
         reasons.append(
             "novelty required but the composition has prior reports"
