@@ -499,9 +499,13 @@ def run(structure: dict, inputs: dict, hp) -> dict:
     """
 ```
 
-The test file holds plain `test_*` functions that take `hp`; they run in the sandbox like the tool. Results
-must be JSON. Allowed imports: `math`, `statistics`, `itertools`, `functools`, `numpy`, `scipy`,
-`pymatgen.core`, `pymatgen.analysis`, `pymatgen.symmetry`, `ase`, `ase.build`, `ase.units`, `ase.eos`.
+The test file holds plain `test_*` functions. Each may take any of `run` (the tool's function), `hp`,
+`structure` (the relaxed trial structure of the reference material, or SrTiO3) and `tool` (the header); they
+run in the sandbox like the tool. Results must be JSON. Allowed imports: `math`, `cmath`, `statistics`,
+`itertools`, `functools`, `collections`, `typing`, `dataclasses`, `numpy`, `scipy`, `pymatgen.core`,
+`pymatgen.analysis`, `pymatgen.symmetry`, `ase`, `ase.atoms`, `ase.build`, `ase.units`, `ase.eos`
+(`ALLOWED_IMPORTS` in `tools/custom.py`). The static check also refuses names and attributes that reach
+files or processes (`open`, `getattr`, `.save`, `.to`, `.write`, anything starting with `_`).
 
 ### The toolkit (`hp`)
 
@@ -511,13 +515,15 @@ dicts; units are eV, Å, GPa and THz.
 
 | Call | Returns |
 | --- | --- |
-| `hp.single_point(structure)` | `{energy_eV, forces_eV_per_A, stress_GPa}` (stress as a 3×3 list) |
+| `hp.single_point(structure)` | `{energy_eV, forces_eV_per_A, stress_GPa}` (stress 3×3, ASE sign: negative under compression) |
 | `hp.relax(structure, fix_cell=False, fmax=0.01)` | `{structure, energy_eV_per_atom, converged}` |
-| `hp.phonons(structure, supercell=None)` | `{frequencies_THz, qpoints, min_frequency_THz}` |
-| `hp.md(structure, temperature_K, duration_ps)` | `{energies_eV, temperatures_K, final_structure, stable}` |
+| `hp.phonons(structure, supercell=None)` | `{frequencies_THz, qpoints, min_frequency_THz, supercell}` |
+| `hp.md(structure, temperature_K, duration_ps)` | `{energies_eV, temperatures_K, final_structure, max_displacement_A, stable}` (every 10 steps; at most 10 ps) |
 | `hp.log(message)` | none; shown in the orchestrator log |
 
-Each toolkit call adds to the run's compute time. A tool may use none of them.
+Each toolkit call adds to the run's compute time and is cached by its exact inputs. A tool may use none of
+them. The worker compiles the tool from source on every call (no bytecode cache), gets no environment
+credentials, and its time limit excludes the time building blocks spend in the main process.
 
 ### In the campaign
 
@@ -535,12 +541,16 @@ Section `capability`. Each event's payload has `kind` plus:
 | --- | --- |
 | `gap` | `{property, units, custom_tools}` |
 | `library` | `{reused: [name], unapproved: [file]}` |
-| `plan` | the `ToolProposal` at the plan stage, with `revision` |
+| `plan` | `{proposal, allowed}`: the `ToolProposal` at the plan stage and the actions offered |
 | `checks` | `{proposal_id, revision, checks}` after each `write_tool` |
-| `code` | the `ToolProposal` at the code stage, with `source`, `tests`, `checks` and the trial output |
+| `code` | `{proposal, allowed}`: the `ToolProposal` with `source`, `tests`, `checks`, `trial` and `toolkit_calls` |
 | `decision` | the `ToolDecision` |
 | `registered` | the `CustomTool` |
-| `cancelled` | `{proposal_id, scope: "tool" or "run", supplies_target}` |
+| `cancelled` | `{proposal_id, scope: "tool" or "run", supplies_target, reason}` |
+| `log` | `{message}` from `hp.log` |
+
+Tool calls of the phase are ordinary `tool` events with `phase: "capability"` and string call IDs
+(`cap1`, `cap2`, ...), so they never collide with the campaign's.
 
 A `plan` or `code` event with no later `decision` for the same `proposal_id` means the run is waiting for the
 user; the UI and CLI show the card with its actions (AT-24, AT-27, AT-28).
