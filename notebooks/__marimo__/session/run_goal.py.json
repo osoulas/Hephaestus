@@ -7,7 +7,7 @@
   "cells": [
     {
       "id": "Hbol",
-      "code_hash": "8b46aef218eb8dcde8a8cd0ee9e94501",
+      "code_hash": "e027c4bc47aaab2ab4bd918418f2bd63",
       "outputs": [
         {
           "type": "data",
@@ -25,7 +25,7 @@
         {
           "type": "data",
           "data": {
-            "text/html": "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='MJUe-0' random-id='adb275fa-d97b-6f8c-b8b9-06ac8cfec3ec'><marimo-text-area data-initial-value='&quot;a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable (\u2264 0.05 eV/atom above hull) and dynamically stable&quot;' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eGoal&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-placeholder='&quot;&quot;' data-disabled='false' data-debounce='true' data-full-width='true'></marimo-text-area></marimo-ui-element><div style='display: flex;flex: 1;flex-direction: row;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='MJUe-1' random-id='63e409ab-8b87-7831-31eb-59dfb3cfe854'><marimo-dropdown data-initial-value='[&quot;auto&quot;]' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eModel access&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-options='[&quot;auto&quot;,&quot;api&quot;,&quot;claude-code&quot;]' data-allow-select-none='false' data-searchable='false' data-full-width='false' data-disabled='false'></marimo-dropdown></marimo-ui-element><marimo-ui-element object-id='MJUe-2' random-id='632f0efd-880c-94a3-cbe2-04a3c29e66b9'><marimo-dropdown data-initial-value='[&quot;ask&quot;]' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eWhen no tool fits&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-options='[&quot;ask&quot;,&quot;off&quot;]' data-allow-select-none='false' data-searchable='false' data-full-width='false' data-disabled='false'></marimo-dropdown></marimo-ui-element><marimo-ui-element object-id='MJUe-3' random-id='4bf8da5a-dc59-cdc3-5c86-e13aaf9a2a12'><marimo-button data-initial-value='0' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eReview goal&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-kind='&quot;success&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element></div></div>"
+            "text/html": "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='MJUe-0' random-id='0c562bba-c686-02e2-f720-de37d2a44036'><marimo-text-area data-initial-value='&quot;a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable (\u2264 0.05 eV/atom above hull) and dynamically stable&quot;' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eGoal&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-placeholder='&quot;&quot;' data-disabled='false' data-debounce='true' data-full-width='true'></marimo-text-area></marimo-ui-element><div style='display: flex;flex: 1;flex-direction: row;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='MJUe-1' random-id='e17e2a89-3081-5f94-7943-256ca6c97d1e'><marimo-dropdown data-initial-value='[&quot;auto&quot;]' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eModel access&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-options='[&quot;auto&quot;,&quot;api&quot;,&quot;claude-code&quot;]' data-allow-select-none='false' data-searchable='false' data-full-width='false' data-disabled='false'></marimo-dropdown></marimo-ui-element><marimo-ui-element object-id='MJUe-2' random-id='5bfe0e79-c868-6b9e-a5e3-749caf7751e0'><marimo-dropdown data-initial-value='[&quot;ask&quot;]' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eWhen no tool fits&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-options='[&quot;ask&quot;,&quot;off&quot;]' data-allow-select-none='false' data-searchable='false' data-full-width='false' data-disabled='false'></marimo-dropdown></marimo-ui-element><marimo-ui-element object-id='MJUe-3' random-id='463080ae-25d2-b14c-81e2-0af14dfd723b'><marimo-button data-initial-value='0' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eReview goal&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-kind='&quot;success&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element></div></div>"
           }
         }
       ],
@@ -33,12 +33,12 @@
     },
     {
       "id": "vblA",
-      "code_hash": "6919f9b9c0202aaf042269ca2a91b404",
+      "code_hash": "8b9d336c7d8131dd6bfd432e7cbd22d9",
       "outputs": [
         {
           "type": "data",
           "data": {
-            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><em>Review a goal to see its parsed specification.</em></span></span>"
+            "text/html": "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><strong>Target:</strong> band_gap \u00b7 minimise \u00b7 None eV</span></span><span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><em>Parsed by claude-opus-5-5</em></span></span></div>"
           }
         }
       ],
@@ -47,66 +47,31 @@
     {
       "id": "bkHC",
       "code_hash": "01d4d81dac1ff5607be431ebdcfb03ed",
-      "outputs": [
-        {
-          "type": "error",
-          "ename": "ancestor-stopped",
-          "evalue": "This cell wasn't run because an ancestor was stopped with `mo.stop`: ",
-          "traceback": []
-        }
-      ],
+      "outputs": [],
       "console": []
     },
     {
       "id": "lEQa",
       "code_hash": "306b8f18d43d913c4e3d068596f7dbb0",
-      "outputs": [
-        {
-          "type": "data",
-          "data": {
-            "text/html": "<marimo-ui-element object-id='lEQa-0' random-id='90801ea3-0329-8d39-9f6e-513eaef59cc7'><marimo-refresh data-initial-value='&quot;&quot;' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eLive view&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-options='[&quot;2s&quot;]' data-default-interval='&quot;2s&quot;'></marimo-refresh></marimo-ui-element>"
-          }
-        }
-      ],
+      "outputs": [],
       "console": []
     },
     {
       "id": "PKri",
-      "code_hash": "aac3e16d8c824a0a04d46a6a9e81f142",
-      "outputs": [
-        {
-          "type": "error",
-          "ename": "ancestor-stopped",
-          "evalue": "This cell wasn't run because an ancestor was stopped with `mo.stop`: ",
-          "traceback": []
-        }
-      ],
+      "code_hash": "c7472ef492e21b69c88c924c042d98bc",
+      "outputs": [],
       "console": []
     },
     {
       "id": "Xref",
-      "code_hash": "4e8315f9d115ddbb5b39881ec12a0e73",
-      "outputs": [
-        {
-          "type": "error",
-          "ename": "ancestor-stopped",
-          "evalue": "This cell wasn't run because an ancestor was stopped with `mo.stop`: ",
-          "traceback": []
-        }
-      ],
+      "code_hash": "383a116f58480e5f95bbfe8414c2acd7",
+      "outputs": [],
       "console": []
     },
     {
       "id": "SFPL",
-      "code_hash": "3369abb6c7536683c78be49970989efa",
-      "outputs": [
-        {
-          "type": "error",
-          "ename": "ancestor-stopped",
-          "evalue": "This cell wasn't run because an ancestor was stopped with `mo.stop`: ",
-          "traceback": []
-        }
-      ],
+      "code_hash": "4019fe5d9a7eb76d064a889301b31760",
+      "outputs": [],
       "console": []
     }
   ]
