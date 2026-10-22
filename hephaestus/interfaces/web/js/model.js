@@ -42,6 +42,7 @@ export class RunModel {
     this.lastSeq = -1;
     this.events = [];
     this.state = null; // RunState from the server
+    this.paused = null; // {reason, resetsAt, message} when the run stopped at a usage limit
     this.running = false;
     this.ended = false;
     this.goal = "";
@@ -98,6 +99,13 @@ export class RunModel {
   }
 
   on_run(e, p) {
+    if (p.status === "paused") {
+      // A usage limit: the run is paused, not failed (it resumes from the same folder)
+      this.running = false;
+      this.paused = { reason: p.reason, resetsAt: p.resets_at, message: p.message };
+      this.log.push({ type: "marker", seq: e.seq, text: "Run paused: usage limit reached", status: "failed", detail: p, time: e.time });
+      return;
+    }
     if (e.status === "started") {
       this.running = true;
       this.ended = false;
@@ -376,6 +384,7 @@ export class RunModel {
   /** @returns {string} Status shown in the header. */
   get status() {
     if (this.running) return "running";
+    if (this.paused || (this.state && this.state.pause)) return "paused";
     if (this.runResult) return this.runResult.status || (this.phase.brief === "done" ? "finished" : "failed");
     return (this.state && this.state.status) || (this.events.length ? "interrupted" : "created");
   }

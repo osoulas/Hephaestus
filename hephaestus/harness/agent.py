@@ -23,7 +23,7 @@ from hephaestus.harness import gates as G
 from hephaestus.harness.prompts import ORCHESTRATOR_SYSTEM, kickoff_message, resume_message
 from hephaestus.harness.reviewer import review_round
 from hephaestus.harness.state import resume_summary
-from hephaestus.llm.base import LLM, LLMError
+from hephaestus.llm.base import LLM, LLMError, UsageLimitError
 from hephaestus.tools.registry import (
     EXCLUSIVE_TOOLS,
     HANDLERS,
@@ -801,6 +801,8 @@ class Campaign:
             if callable(driver):
                 try:
                     driver(ORCHESTRATOR_SYSTEM, self.kickoff(resume), self.tools, self)
+                except UsageLimitError:
+                    raise  # the runner pauses the run (Claude usage limit)
                 except LLMError as exc:
                     self.errors.append(
                         ErrorRecord(step="orchestrator", code="llm_failed", message=str(exc)[:500])
@@ -831,6 +833,8 @@ class Campaign:
         while not self.ws.submitted and not self.hard_limit_hit():
             try:
                 turn = self.llm.step(ORCHESTRATOR_SYSTEM, self.messages, self.tools)
+            except UsageLimitError:
+                raise
             except LLMError as exc:
                 failures += 1
                 self.errors.append(

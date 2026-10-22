@@ -373,6 +373,8 @@ export function mountRun(root, id, tab, hooks) {
         ? pill("Replay stopped", "warning", "stop")
       : status === "finished"
         ? pill("Finished", "good", "check")
+      : status === "paused"
+        ? pill("Paused: usage limit", "warning", "stop")
       : status === "stopped"
         ? pill("Stopped", "warning", "stop")
         : status === "needs_input"
@@ -384,7 +386,10 @@ export function mountRun(root, id, tab, hooks) {
               : pill("Interrupted", "warning", "alert");
     const actions = [];
     if (model.running && !model.isReplay) actions.push(h("button.btn.danger", { onclick: stop }, icon("stop"), "Stop"));
-    if (model.resumable) actions.push(h("button.btn.primary", { onclick: resume }, icon("resume"), "Resume"));
+    if (model.resumable) {
+      const when = model.paused && model.paused.resetsAt ? ` after ${new Date(model.paused.resetsAt * 1000).toLocaleString()}` : "";
+      actions.push(h("button.btn.primary", { onclick: resume, title: model.paused ? `Paused at the Claude usage limit${when}` : "" }, icon("resume"), "Resume"));
+    }
     if (!model.running && !model.isReplay && (model.events.length || model.state)) {
       actions.push(
         h(

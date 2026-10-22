@@ -25,6 +25,7 @@ unchanged; new ones are marked *(new)*. Tool-level detail lives in `docs/TOOLS.m
   - crash diagnostics (DL-11)
   - new UI controls (UI-12 to UI-16)
 - **Shared types:** `Critique` gains `llm_confidence` and `llm_confidence_reason`; `RunConfig` is now listed.
+- **Usage limits pause the run** *(22 October)*: when the Claude account hits its usage limit (AT-30), the run stops with status `paused` and its reason and reset time, and resumes from the same folder with Resume. Nothing is recorded as a failure.
 - **Several property targets** *(22 October)*: `SearchSpec.extra_targets`; every target must be met. References are computed per target, each target without a tool gets its own capability phase, and the rubric's property points are averaged over the targets.
 - **Agent-built tools** *(22 October, new Section 14)*. When no tool can compute the goal's property, the agent
   proposes a tool, writes it once the user accepts the plan, and the user reviews the code before it runs.
