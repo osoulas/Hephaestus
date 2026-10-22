@@ -12,6 +12,9 @@ Describe the material you need in plain English. Hephaestus designs it, checks i
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-2a78d6)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-16130f)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-offline-0ca30c)](#testing)
+[![Demo video](https://img.shields.io/badge/demo-watch%20on%20YouTube-c4302b?logo=youtube&logoColor=white)](https://youtu.be/dMtOxIb95V0)
+
+**[▶ Watch the 4-minute demo](https://youtu.be/dMtOxIb95V0)**
 
 </div>
 
