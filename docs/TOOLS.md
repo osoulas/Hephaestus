@@ -453,9 +453,37 @@ budget (AT-25).
 
 #### `write_tool`
 Submit the source for an accepted plan (AT-10 to AT-13). **Input:** `proposal_id`, `source` (the tool file),
-`tests` (the test file). Code runs the static check, the tests and the trial run. **Returns** either
+`tests` (the test file), `reason` (null, or why it replaces code the user is reviewing). Code runs the
+static check, the tests and the trial run. **Returns** either
 `{checks}` with the failing check's report (the agent fixes it and calls again, up to 3 times), or, once the
 checks pass and the user has decided, `{proposal_id, checks, decision: {action, message}}`.
+
+#### `request_package`
+Ask the user to allow a package outside the allowlist, e.g. phonopy (and to install it with pip when the
+server lacks it). **Input:** `module` (import name), `pip_name` (or null), `reason`. Returns at once; the
+answer (`allow`, `deny` or `cancel_run`) is the next message. An allowed package goes in `TOOL["packages"]`;
+the static check, the sandbox and later runs then allow it for that tool only (`CustomTool.packages`).
+Names are checked: no URLs, paths or pip flags.
+
+#### `ask_user`
+Ask the user a question (`question`, `options`). The answer is the next message. The user never reads the
+agent's plain text as a question.
+
+#### `give_up`
+Propose to stop without a tool (`reason`, naming the closest proxy considered). It is a request to the user
+(kind `give_up`): `allow` ends the phase and the run cannot evaluate the property; `answer` with a message
+points the agent at something to build instead. The agent is told to prefer a clearly labelled proxy over
+stopping when an exact method is out of reach.
+
+**The agent's second look.** Every tool declares `TOOL["trial_range"]`, the plausible value for the trial
+material from the literature; a trial value outside it fails the checks before the user sees the code. If
+the agent finds a bug after its code is shown, `write_tool` with a `reason` withdraws the open card (event
+`withdrawn`, `{proposal_id, revision, reason}`) and resubmits; it uses none of the user's change requests but
+counts against the three fix attempts, and is refused once the user has decided.
+
+**No dead ends.** A change request at the code stage may be answered with a new plan (`propose_tool`
+again) or new code. Two turns in a row without a tool call, with nothing waiting for the user, end the
+phase with "the agent made no progress", instead of nudging forever.
 
 ### The tool file
 
@@ -499,9 +527,13 @@ def run(structure: dict, inputs: dict, hp) -> dict:
     """
 ```
 
-The test file holds plain `test_*` functions that take `hp`; they run in the sandbox like the tool. Results
-must be JSON. Allowed imports: `math`, `statistics`, `itertools`, `functools`, `numpy`, `scipy`,
-`pymatgen.core`, `pymatgen.analysis`, `pymatgen.symmetry`, `ase`, `ase.build`, `ase.units`, `ase.eos`.
+The test file holds plain `test_*` functions. Each may take any of `run` (the tool's function), `hp`,
+`structure` (the relaxed trial structure of the reference material, or SrTiO3) and `tool` (the header); they
+run in the sandbox like the tool. Results must be JSON. Allowed imports: `math`, `cmath`, `statistics`,
+`itertools`, `functools`, `collections`, `typing`, `dataclasses`, `numpy`, `scipy`, `pymatgen.core`,
+`pymatgen.analysis`, `pymatgen.symmetry`, `ase`, `ase.atoms`, `ase.build`, `ase.units`, `ase.eos`
+(`ALLOWED_IMPORTS` in `tools/custom.py`). The static check also refuses names and attributes that reach
+files or processes (`open`, `getattr`, `.save`, `.to`, `.write`, anything starting with `_`).
 
 ### The toolkit (`hp`)
 
@@ -511,13 +543,15 @@ dicts; units are eV, Å, GPa and THz.
 
 | Call | Returns |
 | --- | --- |
-| `hp.single_point(structure)` | `{energy_eV, forces_eV_per_A, stress_GPa}` (stress as a 3×3 list) |
+| `hp.single_point(structure)` | `{energy_eV, forces_eV_per_A, stress_GPa}` (stress 3×3, ASE sign: negative under compression) |
 | `hp.relax(structure, fix_cell=False, fmax=0.01)` | `{structure, energy_eV_per_atom, converged}` |
-| `hp.phonons(structure, supercell=None)` | `{frequencies_THz, qpoints, min_frequency_THz}` |
-| `hp.md(structure, temperature_K, duration_ps)` | `{energies_eV, temperatures_K, final_structure, stable}` |
+| `hp.phonons(structure, supercell=None)` | `{frequencies_THz, qpoints, min_frequency_THz, supercell}` |
+| `hp.md(structure, temperature_K, duration_ps)` | `{energies_eV, temperatures_K, final_structure, max_displacement_A, stable}` (every 10 steps; at most 10 ps) |
 | `hp.log(message)` | none; shown in the orchestrator log |
 
-Each toolkit call adds to the run's compute time. A tool may use none of them.
+Each toolkit call adds to the run's compute time and is cached by its exact inputs. A tool may use none of
+them. The worker compiles the tool from source on every call (no bytecode cache), gets no environment
+credentials, and its time limit excludes the time building blocks spend in the main process.
 
 ### In the campaign
 
@@ -535,12 +569,17 @@ Section `capability`. Each event's payload has `kind` plus:
 | --- | --- |
 | `gap` | `{property, units, custom_tools}` |
 | `library` | `{reused: [name], unapproved: [file]}` |
-| `plan` | the `ToolProposal` at the plan stage, with `revision` |
+| `plan` | `{proposal, allowed}`: the `ToolProposal` at the plan stage and the actions offered |
 | `checks` | `{proposal_id, revision, checks}` after each `write_tool` |
-| `code` | the `ToolProposal` at the code stage, with `source`, `tests`, `checks` and the trial output |
+| `code` | `{proposal, allowed}`: the `ToolProposal` with `source`, `tests`, `checks`, `trial` and `toolkit_calls` |
 | `decision` | the `ToolDecision` |
 | `registered` | the `CustomTool` |
-| `cancelled` | `{proposal_id, scope: "tool" or "run", supplies_target}` |
+| `cancelled` | `{proposal_id, scope: "tool" or "run", supplies_target, reason}` |
+| `log` | `{message}` from `hp.log` |
+| `package`, `question` | `{request, allowed}`: a `UserRequest` waiting for the user |
+
+Tool calls of the phase are ordinary `tool` events with `phase: "capability"` and string call IDs
+(`cap1`, `cap2`, ...), so they never collide with the campaign's.
 
 A `plan` or `code` event with no later `decision` for the same `proposal_id` means the run is waiting for the
 user; the UI and CLI show the card with its actions (AT-24, AT-27, AT-28).

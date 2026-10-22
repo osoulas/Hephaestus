@@ -7,6 +7,7 @@ import { ago, check, cid as cidText, cidLong, cidTag, clamp, download, stripCode
 import { decorateBrief } from "./brief.js";
 import { renderMarkdown } from "./markdown.js";
 import { PHASES, RunModel, toolKind } from "./model.js";
+import { capabilityLine, proposalCard, requestCard } from "./tools.js";
 import { CONFIG_GROUPS, configName, modelName, specGrid, targetText } from "./spec.js";
 import { CrystalViewer, elementStyle, parseCif } from "./viewer.js";
 
@@ -46,6 +47,7 @@ export function mountRun(root, id, tab, hooks) {
     briefs: {}, // kind ("lab" | "compute") -> Markdown
     briefLoading: null, // kind being fetched
     briefKind: stored("heph-brief-kind", "lab"),
+    toolDrafts: {}, // "proposal:stage" -> {open, text, sent}: change requests being typed
     notFound: false,
     replaySpeed: stored("heph-replay-speed", 4),
     replayInfo: null, // {source, total_events, speed} for a replay
@@ -437,6 +439,7 @@ export function mountRun(root, id, tab, hooks) {
       ),
       model.isReplay ? replayBar() : null,
       stepper(),
+      ui.tab !== "activity" ? waitingBanner() : null,
       h(
         "nav.tabs",
         { role: "tablist" },
@@ -576,6 +579,14 @@ export function mountRun(root, id, tab, hooks) {
     const cfg = model.config || (model.state && model.state.config) || {};
     const detail = {
       parse: { pending: "Waiting", active: "Reading the goal…", done: model.spec ? h("span", null, targetText(model.spec)) : "Done", input: "Needs answers", failed: "Failed" },
+      tools: {
+        pending: "Not started",
+        active: "Researching and writing a tool…",
+        input: "Waiting for your decision",
+        done: model.capability && model.capability.registered ? `Using ${model.capability.registered.name}` : "No tool: stability only",
+        skipped: "Cancelled",
+        failed: "Failed",
+      },
       campaign: {
         failed: "Failed: see Overview",
         pending: "Not started",
@@ -593,13 +604,15 @@ export function mountRun(root, id, tab, hooks) {
       },
       brief: { pending: "Not started", active: "Writing…", done: "Ready", failed: "Failed" },
     };
+    const phases = PHASES.filter((p) => p.key !== "tools" || model.capability);
     return h(
-      `div.stepper${model.running ? ".live" : ""}`,
+      `div.stepper${model.running ? ".live" : ""}${phases.length === 5 ? ".five" : ""}`,
       null,
-      PHASES.map((p) => {
+      phases.map((p) => {
         const st = model.phase[p.key];
-        const cls = st === "done" ? "done" : st === "active" && model.running ? "active" : st === "failed" ? "failed" : st === "input" ? "failed" : "";
-        const n = PHASES.indexOf(p) + 1;
+        const waiting = p.key === "tools" && st === "input";
+        const cls = st === "done" ? "done" : (st === "active" || waiting) && model.running ? "active" : st === "failed" ? "failed" : st === "input" ? "failed" : "";
+        const n = phases.indexOf(p) + 1;
         const mark =
           cls === "done"
             ? h("span.step-mark.done", null, icon("check"))
@@ -712,8 +725,23 @@ export function mountRun(root, id, tab, hooks) {
     const c = model.candidate(best);
     const thr = spec.stability_thresholds || {};
     const review = [...model.reviews].reverse().find((r) => r.best_of_round === best);
-    const met = review && review.checks ? review.checks.target_met_central : null;
-    const metCons = review && review.checks ? review.checks.target_met_conservative : null;
+    // Several targets: the review (else the latest candidate fields) carries one row per target
+    const rows = (review && review.checks && review.checks.targets) || c.targets || null;
+    const met = rows && rows[0] ? (review ? rows[0].met_central : null) : review && review.checks ? review.checks.target_met_central : null;
+    const metCons = rows && rows[0] ? (review ? rows[0].met_conservative : null) : review && review.checks ? review.checks.target_met_conservative : null;
+    const extraStats = (rows || []).slice(1).map((r) =>
+      stat(
+        label(r.property),
+        r.value != null ? h("span", null, num(r.value), h("small", null, r.uncertainty != null ? `± ${num(r.uncertainty)} ${r.units || ""}` : r.units || "")) : "–",
+        !r.evaluable
+          ? h("span.muted", null, "Not evaluated")
+          : !review || r.value == null
+            ? null
+            : r.agent_built
+              ? check(r.met_central, "Met · agent-built", "Not met · agent-built")
+              : check(r.met_central, r.met_conservative ? "Met, within error" : "Met (central)", "Not met"),
+      ),
+    );
     const verdict = (model.final && model.final.verdict) || (model.useState && model.state.validation[0] && model.state.validation[0].verdict);
     const finished = model.submitted || (model.useState && model.state.submission);
     return h(
@@ -731,13 +759,18 @@ export function mountRun(root, id, tab, hooks) {
       ),
       c.rationale || (c.proposal && c.proposal.rationale) ? h("div.hero-why", null, clamp(c.rationale || c.proposal.rationale, 2)) : null,
       h(
-        "div.stats",
+        `div.stats${extraStats.length === 1 ? ".cols-5" : extraStats.length >= 2 ? ".cols-3" : ""}`,
         null,
         stat(
           label(c.property || spec.target_property || "target"),
           c.value != null ? h("span", null, num(c.value), h("small", null, c.uncertainty != null ? `± ${num(c.uncertainty)} ${c.units || ""}` : c.units || "")) : "–",
-          met == null ? h("span.muted", null, spec.reference_material ? h("span", null, "vs ", formula(spec.reference_material)) : "") : h("span", { title: metCons ? "Met even at the conservative end of the error bar" : "Met at the central value" }, check(met, metCons ? "Met, within error" : "Met (central)", "Not met")),
+          met == null
+            ? h("span.muted", null, spec.target_evaluable === false ? "Not evaluated" : spec.reference_material ? h("span", null, "vs ", formula(spec.reference_material)) : "")
+            : spec.target_tool || c.agentBuilt
+              ? h("span", { title: "Computed by a tool the agent wrote and you approved; it carries no error bar" }, check(met, "Met · agent-built", "Not met · agent-built"))
+              : h("span", { title: metCons ? "Met even at the conservative end of the error bar" : "Met at the central value" }, check(met, metCons ? "Met, within error" : "Met (central)", "Not met")),
         ),
+        extraStats,
         stat("Energy above hull", c.e_hull != null ? h("span", null, num(c.e_hull, 3), h("small", null, "eV/atom")) : "–", c.thermo_stable == null ? null : check(c.thermo_stable, `≤ ${thr.e_hull_max_eV_per_atom ?? 0.05}`, `> ${thr.e_hull_max_eV_per_atom ?? 0.05}`)),
         stat("Lowest phonon", c.min_freq != null ? h("span", null, num(c.min_freq), h("small", null, "THz")) : "–", c.dyn_stable == null ? null : check(c.dyn_stable, "Dynamically stable", "Unstable")),
         stat("Final re-check", verdict ? label(verdict) : model.phase.final === "active" ? "Running…" : "–", verdict ? h("span.muted", null, model.config ? model.config.final_potential : "") : null),
@@ -861,7 +894,7 @@ export function mountRun(root, id, tab, hooks) {
   // ---------------------------------------------------------------- activity
 
   function activityTab() {
-    const groups = { all: () => true, reasoning: (e) => e.type === "thinking" || e.type === "text", tools: (e) => e.type === "tool" && e.call.tool !== "request_review", reviews: (e) => ["round", "submit", "final", "brief"].includes(e.type) || (e.type === "tool" && e.call.tool === "request_review"), issues: (e) => (e.type === "tool" && e.call.error) || e.status === "failed" };
+    const groups = { all: () => true, reasoning: (e) => e.type === "thinking" || e.type === "text", tools: (e) => e.type === "tool" && e.call.tool !== "request_review", reviews: (e) => ["round", "submit", "final", "brief", "capability"].includes(e.type) || (e.type === "tool" && e.call.tool === "request_review"), issues: (e) => (e.type === "tool" && e.call.error) || e.status === "failed" };
     const count = (k) => model.log.filter(groups[k]).length;
     const chips = [
       ["all", "All"],
@@ -885,6 +918,8 @@ export function mountRun(root, id, tab, hooks) {
     );
     const entries = model.log.filter(groups[ui.filter]);
     const list = h("div.log", { role: "log", "aria-live": model.running ? "polite" : "off" });
+    const waitingCard = toolWaiting();
+    if (waitingCard && ui.filter !== "all" && ui.filter !== "reviews") list.append(waitingBanner());
     let round = null;
     for (const e of entries) {
       const r = e.type === "tool" ? e.call.round : e.round && typeof e.round === "number" ? e.round : e.type === "round" ? e.round.round : null;
@@ -918,6 +953,48 @@ export function mountRun(root, id, tab, hooks) {
         ),
       ),
       list,
+    );
+  }
+
+  /** The proposal waiting for the user's decision, if any. */
+  function toolWaiting() {
+    const w = model.capability && model.capability.waiting;
+    return w && model.running && !model.isReplay ? w : null;
+  }
+
+  function waitingBanner() {
+    const w = toolWaiting();
+    if (!w) return null;
+    return h(
+      "div.callout.warning.tool-banner",
+      null,
+      icon("wrench"),
+      h(
+        "div",
+        null,
+        h(
+          "strong",
+          null,
+          { plan: "The agent proposes a new tool.", code: "The tool's code is ready for review.", package: "The agent asks to use a package outside the sandbox.", question: "The agent has a question for you.", give_up: "The agent proposes to stop without a tool." }[w.stage],
+        ),
+        " The run waits for your answer.",
+      ),
+      h(
+        "button.btn.sm.primary",
+        {
+          onclick: () => {
+            ui.filter = "all";
+            if (ui.tab !== "activity") location.hash = `#/run/${encodeURIComponent(id)}/activity`;
+            else render();
+            setTimeout(() => {
+              const all = document.querySelectorAll(`[data-tool="${w.proposal_id}-${w.stage}"]`);
+              const el = all[all.length - 1]; // the newest card: earlier ones may be withdrawn
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 50);
+          },
+        },
+        "Review",
+      ),
     );
   }
 
@@ -958,6 +1035,14 @@ export function mountRun(root, id, tab, hooks) {
       }
       case "tool":
         return toolEntry(e, key, open, time);
+      case "capability": {
+        if (!e.proposal && !e.request) return capabilityLine(e, time);
+        const w = model.capability && model.capability.waiting;
+        const itemId = e.proposal ? e.proposal.proposal_id : e.request.request_id;
+        const waiting = Boolean(w && !e.decision && !e.withdrawn && w.proposal_id === itemId && w.stage === e.kind && model.running && !model.isReplay);
+        const ctx = { runId: id, waiting, drafts: ui.toolDrafts, open, onSent: () => ((lastTabSig = null), render()) };
+        return e.request ? requestCard(e, ctx) : proposalCard(e, ctx);
+      }
       case "round": {
         const r = e.round;
         return h(
@@ -1313,6 +1398,7 @@ export function mountRun(root, id, tab, hooks) {
                     h("th", null, "Candidate"),
                     h("th", null, "Structure"),
                     h("th.num", null, label(spec.target_property || "Target")),
+                    (spec.extra_targets || []).map((t) => h("th.num", null, label(t.property))),
                     h("th.num", null, "E above hull"),
                     h("th", null, "Thermo"),
                     h("th.num", null, "Min phonon"),
@@ -1336,6 +1422,10 @@ export function mountRun(root, id, tab, hooks) {
                       ),
                       h("td", null, c.space_group || (c.proposal && label(c.proposal.structure_type)) || "–"),
                       h("td.num", null, c.value != null ? pm(c.value, c.uncertainty, c.units) : "–"),
+                      (spec.extra_targets || []).map((t) => {
+                        const r = (c.targets || []).find((x) => x.property === t.property);
+                        return h("td.num", null, r && r.value != null ? pm(r.value, r.uncertainty, r.units) : "–");
+                      }),
                       h("td.num", null, c.e_hull != null ? `${num(c.e_hull, 3)} eV/atom` : "–"),
                       h("td", null, c.e_hull == null ? h("span.muted", null, "–") : check(c.thermo_stable, "Stable", "Off hull")),
                       h("td.num", null, c.min_freq != null ? `${num(c.min_freq)} THz` : "–"),
@@ -1745,7 +1835,7 @@ export function mountRun(root, id, tab, hooks) {
         "div.check-list",
         null,
         check(checks.target_met_central, "Target met", "Target not met"),
-        checks.target_met_conservative != null ? check(checks.target_met_conservative, "Within error bar", "Not within error bar") : null,
+        checks.target_met_conservative != null && !(model.spec && model.spec.target_tool) ? check(checks.target_met_conservative, "Within error bar", "Not within error bar") : null,
         check(checks.thermo_stable, "On the hull", "Off hull"),
         check(checks.dyn_stable, "Dynamically stable", "Dynamically unstable"),
       ),
@@ -1840,6 +1930,18 @@ function summary(c) {
       return `${cidText(i.candidate_id)}${i.runner_up_id ? ` (runner-up ${cidText(i.runner_up_id)})` : ""}`;
     case "predict_property":
       return `${cidText(i.candidate_id)}${comp ? ` ${comp}` : ""} · ${label(i.property)}`;
+    case "read_tool_source":
+      return i.function ? `source of ${i.function}` : "our simulation and structure tools";
+    case "propose_tool":
+      return `${i.name} · ${label(i.property || "")}`;
+    case "write_tool":
+      return `code for proposal ${i.proposal_id}`;
+    case "request_package":
+      return `asks to use ${i.module}`;
+    case "ask_user":
+      return i.question || "";
+    case "give_up":
+      return i.reason || "";
     default:
       return i.candidate_id ? `${cidText(i.candidate_id)}${comp ? ` ${comp}` : ""}` : Object.values(i).slice(0, 2).join(" · ");
   }

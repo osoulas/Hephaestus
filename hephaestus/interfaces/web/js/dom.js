@@ -42,7 +42,7 @@ export function append(el, children) {
 // Requirement IDs from docs/REQUIREMENTS.md (e.g. "FC-1", "GP-11"): useful in code and logs, noise
 // to a user. Server text carries them ("… full phonons (FC-1, FC-2)."), so every string the UI shows
 // passes through stripCodes.
-const CODE = String.raw`\b(?:CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b`;
+const CODE = String.raw`\b(?:AT|CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b`;
 const CODE_LIST = String.raw`${CODE}(?:\s*(?:,|;|and|to|–|—|-|/)\s*${CODE})*`;
 const ONLY_CODES = new RegExp(String.raw`\s*\(\s*${CODE_LIST}\s*\)`, "g"); // " (FC-1, FC-2)"
 const TRAILING = new RegExp(String.raw`\s*[,;]\s*${CODE_LIST}(?=\s*\))`, "g"); // "(note; GP-11)"
@@ -137,6 +137,8 @@ const ICONS = {
   trend: "M3 17l6-6 4 4 8-8M15 7h6v6",
   gate: "M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16M3 21h18M9 11h.01",
   edit: "M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3zM13.5 6.5l3 3",
+  wrench: "M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 1-5-5L14 2zM4 20l3-3",
+  code: "M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16",
 };
 
 /**

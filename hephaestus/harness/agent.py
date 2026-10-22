@@ -111,6 +111,7 @@ class Campaign:
         snapshot: Callable[[Campaign], None] | None = None,
         elapsed_offset_s: float = 0.0,
         clock: Callable[[], float] = time.monotonic,
+        tools: list[dict[str, Any]] | None = None,
     ) -> None:
         """Set up a campaign.
 
@@ -136,8 +137,12 @@ class Campaign:
             Wall time already spent before a resume, in seconds.
         clock : callable
             Monotonic clock, injectable for tests.
+        tools : list of dict, optional
+            Tool definitions the model sees; ``TOOLS`` by default. Runs with agent-built tools or
+            disabled capabilities pass their own list (AT-16, AT-26).
         """
         self.ws = ws
+        self.tools = list(TOOLS if tools is None else tools)
         self.llm = llm
         self.reviewer_llm = reviewer_llm or llm
         self.handlers = dict(HANDLERS if handlers is None else handlers)
@@ -303,6 +308,7 @@ class Campaign:
             "novelty": cs.candidate.novelty,
             "rationale": cs.candidate.rationale,
             "evidence_ids": cs.candidate.evidence_ids,
+            "targets": f.get("targets"),  # per-target results when there is more than one target
         }
 
     # ------------------------------------------------------------------ tools
@@ -794,7 +800,7 @@ class Campaign:
             driver = getattr(self.llm, "run_campaign", None)
             if callable(driver):
                 try:
-                    driver(ORCHESTRATOR_SYSTEM, self.kickoff(resume), TOOLS, self)
+                    driver(ORCHESTRATOR_SYSTEM, self.kickoff(resume), self.tools, self)
                 except LLMError as exc:
                     self.errors.append(
                         ErrorRecord(step="orchestrator", code="llm_failed", message=str(exc)[:500])
@@ -824,7 +830,7 @@ class Campaign:
         failures = 0
         while not self.ws.submitted and not self.hard_limit_hit():
             try:
-                turn = self.llm.step(ORCHESTRATOR_SYSTEM, self.messages, TOOLS)
+                turn = self.llm.step(ORCHESTRATOR_SYSTEM, self.messages, self.tools)
             except LLMError as exc:
                 failures += 1
                 self.errors.append(

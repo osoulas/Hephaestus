@@ -136,6 +136,15 @@ class RunConfig(BaseModel):
     # Reproducibility and offline replay (SYS-7, SYS-8)
     seed: int = 0
     offline: bool = False
+    # Agent-built tools (Section 14). "ask": a capability gap lets the agent propose a tool for
+    # the user to approve; "off": a gap ends the run before the campaign (AT-3)
+    custom_tools: Literal["off", "ask"] = "off"
+    capability_time_budget_s: float = Field(default=600.0, ge=0)  # agent time only, not waiting
+    max_custom_tools: int = Field(default=3, ge=1)
+    max_tool_revisions: int = Field(default=3, ge=0)
+    custom_tool_timeout_s: float = Field(default=300.0, gt=0)
+    tool_library_dir: str = "hephaestus_tools"  # relative to the working directory
+    disabled_capabilities: list[Literal["elastic"]] = Field(default_factory=list)  # demos and tests
 
     @model_validator(mode="before")
     @classmethod

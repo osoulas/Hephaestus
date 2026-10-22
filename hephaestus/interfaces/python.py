@@ -13,6 +13,13 @@ Examples
 >>> for event in exp.events():          # history, then live, until the run ends
 ...     print(event.section, event.status)
 >>> exp.state.best, exp.brief
+
+When the goal needs a property no tool computes, and ``custom_tools="ask"``, the agent proposes a
+tool before the campaign (Section 14). Answer in code with a callback, or one decision at a time:
+
+>>> exp = Experiment(goal, custom_tools="ask", on_tool_proposal=lambda p: "accept")
+>>> exp.tool_proposals()                 # plans and code waiting for a decision
+>>> exp.decide("t1", "revise", "use an equation-of-state fit")
 """
 
 from __future__ import annotations
@@ -28,12 +35,14 @@ from typing import Any
 from hephaestus.core.config import BAND_GAP_MODELS, MODELS, RunConfig, runs_root
 from hephaestus.core.events import BUS, EventBus
 from hephaestus.core.store import atomic_write_text, load_model, new_run_id
-from hephaestus.core.types import ProgressEvent, RunState, SearchSpec
+from hephaestus.core.types import CustomTool, ProgressEvent, RunState, SearchSpec, ToolDecision, ToolProposal
 from hephaestus.harness import runner
 from hephaestus.harness.agent import Campaign
-from hephaestus.harness.goal import parse_goal, validate_spec
+from hephaestus.harness.capability import HUB, Decider, find_gap, load_state
+from hephaestus.harness.goal import parse_goal, validate_for_run
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot
 from hephaestus.llm.base import LLM, api_credentials_present, make_llm, resolve_backend
+from hephaestus.tools import custom
 from hephaestus.tools.registry import Workspace, load_default_handlers
 
 _BUSES: dict[Path, EventBus] = {}
@@ -53,6 +62,7 @@ class ParseResult:
     questions: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     parser: dict[str, str] = field(default_factory=dict)
+    gap: str | None = None  # a property no tool computes: the run opens a capability phase (AT-1)
 
     @property
     def ready(self) -> bool:
@@ -71,13 +81,14 @@ class ParseResult:
         Returns
         -------
         dict
-            ``{spec, questions, errors, parser}``.
+            ``{spec, questions, errors, parser, gap}``.
         """
         return {
             "spec": self.spec.model_dump(mode="json") if self.spec else None,
             "questions": self.questions,
             "errors": self.errors,
             "parser": self.parser,
+            "gap": self.gap,
         }
 
 
@@ -114,6 +125,7 @@ class Experiment:
         run_id: str | None = None,
         root: Path | None = None,
         deps: runner.Deps | None = None,
+        on_tool_proposal: Decider | None = None,
         **options: Any,
     ) -> None:
         """Describe a run; nothing is written until ``parse``, ``run``, ``start`` or ``tool``.
@@ -135,6 +147,10 @@ class Experiment:
         deps : runner.Deps, optional
             Injected models, handlers and final check (tests, offline demos). Its ``root`` and
             ``bus`` are set from ``root`` when left at their defaults.
+        on_tool_proposal : callable, optional
+            Decides on agent-built tools (AT-29): ``f(ToolProposal)`` returns ``"accept"``,
+            ``"cancel_tool"``, ``"cancel_run"``, ``{"action": "revise", "message": ...}`` or a
+            ``ToolDecision``. Without it, answer with ``decide``.
         **options
             ``RunConfig`` fields overriding ``config``, e.g. ``llm_backend="api"``.
         """
@@ -151,6 +167,8 @@ class Experiment:
             self.deps.root = self.root
         if self.deps.bus is BUS:
             self.deps.bus = bus_for(self.root)
+        if on_tool_proposal is not None:
+            self.deps.decide = on_tool_proposal
         self._thread: threading.Thread | None = None
         self._result: RunState | None = None
         self._error: BaseException | None = None
@@ -416,8 +434,10 @@ class Experiment:
         spec, questions, errors = parse_goal(llm, self.goal, self.config, self.answers)
         messages = [e.message for e in errors]
         if spec is not None:
-            messages += [m for m in validate_spec(spec) if m not in messages]
+            messages += [m for m in validate_for_run(spec, self.config) if m not in messages]
         result = ParseResult(spec, questions, messages, {"backend": llm.backend, "model": llm.model})
+        if spec is not None and self.config.custom_tools == "ask":
+            result.gap = find_gap(spec, self.config)
         if result.ready:
             self.spec = spec
         return result
@@ -741,6 +761,70 @@ class Experiment:
         self._play(start)
         return start
 
+    # ------------------------------------------------------------------ agent-built tools
+
+    def tool_proposals(self) -> list[dict[str, Any]]:
+        """Proposals of the capability phase, with the actions offered while one waits (AT-13, AT-24).
+
+        Returns
+        -------
+        list of dict
+            ``ToolProposal`` fields (or ``UserRequest`` fields, with ``kind``) plus ``waiting``
+            (bool) and ``allowed`` (actions).
+        """
+        cap = load_state(self.files.root / "capability") if self.exists else None
+        if cap is None:
+            return []
+        waits = {w["proposal_id"]: w for w in HUB.waiting(self.run_id)}
+        out = []
+        for p in cap.proposals.values():
+            w = waits.get(p.proposal_id)
+            out.append(
+                {
+                    **p.model_dump(mode="json"),
+                    "waiting": w is not None and w["stage"] == p.stage,
+                    "allowed": w["allowed"] if w else [],
+                }
+            )
+        for r in cap.requests.values():  # package requests and questions from the agent
+            w = waits.get(r.request_id)
+            out.append(
+                {**r.model_dump(mode="json"), "waiting": w is not None, "allowed": w["allowed"] if w else []}
+            )
+        return out
+
+    def decide(self, proposal_id: str, action: str, message: str | None = None) -> ToolDecision:
+        """Answer a proposal waiting for the user (AT-7, AT-13, AT-29).
+
+        Parameters
+        ----------
+        proposal_id : str
+            Proposal, e.g. ``"t1"``.
+        action : {"accept", "revise", "cancel_tool", "cancel_run", "allow", "deny", "answer"}
+            The decision; ``allow`` and ``deny`` answer a package request, ``answer`` a question.
+        message : str, optional
+            What to change, for ``revise``; the answer, for ``answer``.
+
+        Returns
+        -------
+        ToolDecision
+            The decision delivered.
+
+        Raises
+        ------
+        ExperimentError
+            If the proposal is not waiting, or the action is not offered.
+        """
+        stage = next((w["stage"] for w in HUB.waiting(self.run_id) if w["proposal_id"] == proposal_id), None)
+        if stage is None:
+            raise ExperimentError(f"Proposal {proposal_id} is not waiting for a decision.")
+        try:
+            decision = ToolDecision(proposal_id=proposal_id, stage=stage, action=action, message=message)  # type: ignore[arg-type]
+            HUB.submit(self.run_id, decision)
+        except ValueError as exc:
+            raise ExperimentError(str(exc)) from exc
+        return decision
+
     # ------------------------------------------------------------------ step by step
 
     def tool(self, name: str, **args: Any) -> dict[str, Any]:
@@ -802,6 +886,7 @@ class Experiment:
             state, files = runner.new_run(self.goal, self.config, self.spec, self.root, self.run_id)
             ws, critiques = Workspace(run_id=self.run_id, spec=self.spec, cfg=self.config), []
         handlers = dict(self.deps.handlers) if self.deps.handlers is not None else load_default_handlers()
+        handlers.update(custom.custom_handlers(ws, self.deps.toolkit_factory))
         if ws.spec.reference_material and ws.spec.reference_value is None:
             spec, errors = runner.resolve_reference(ws, handlers)
             ws.spec = state.spec = self.spec = spec
@@ -816,6 +901,7 @@ class Experiment:
             critiques=critiques,
             novelty_fn=self.deps.novelty_fn,
             snapshot=lambda c: save_snapshot(files, state, c.ws, c.critiques),
+            tools=custom.campaign_tools(ws),
         )
         save_snapshot(files, state, ws, critiques)
         self._campaign = campaign
@@ -1084,6 +1170,79 @@ def device_status() -> dict[str, Any]:
     return {"torch": True, "cuda": cuda, "device": "cuda" if cuda else "cpu"}
 
 
+def tool_library(library_dir: str | Path | None = None) -> dict[str, Any]:
+    """Return the tool library: approved tools, and files waiting for review (AT-20, AT-21).
+
+    Parameters
+    ----------
+    library_dir : str or pathlib.Path, optional
+        Library folder; ``RunConfig().tool_library_dir`` by default.
+
+    Returns
+    -------
+    dict
+        ``{dir, approved: [CustomTool + source, tests], unapproved: [{name, file, sha256, header,
+        error, source, tests, changed, check}]}``.
+    """
+    lib = Path(library_dir) if library_dir is not None else custom.library_dir(RunConfig())
+    approved, unapproved = custom.scan_library(lib)
+    rows = []
+    for t in approved:
+        source, tests = custom.load_sources(t)
+        rows.append({**t.model_dump(mode="json"), "source": source, "tests": tests})
+    for f in unapproved:
+        f["check"] = custom.static_check(f["source"], "tool", custom.header_packages(f["header"]))
+    return {"dir": str(lib.resolve()), "approved": rows, "unapproved": unapproved}
+
+
+def approve_tool(name: str, sha256: str, library_dir: str | Path | None = None) -> CustomTool:
+    """Approve a library file exactly as it was reviewed (AT-21).
+
+    Parameters
+    ----------
+    name : str
+        Tool name (file stem).
+    sha256 : str
+        Fingerprint shown with the file in ``tool_library``.
+    library_dir : str or pathlib.Path, optional
+        Library folder.
+
+    Returns
+    -------
+    CustomTool
+        The approved tool.
+
+    Raises
+    ------
+    ExperimentError
+        If the files changed since they were shown, or fail the static check.
+    """
+    lib = Path(library_dir) if library_dir is not None else custom.library_dir(RunConfig())
+    try:
+        return custom.approve_file(lib, name, sha256)
+    except ValueError as exc:
+        raise ExperimentError(str(exc)) from exc
+
+
+def remove_tool(name: str, library_dir: str | Path | None = None) -> bool:
+    """Delete a tool and its tests from the library.
+
+    Parameters
+    ----------
+    name : str
+        Tool name.
+    library_dir : str or pathlib.Path, optional
+        Library folder.
+
+    Returns
+    -------
+    bool
+        True if anything was removed.
+    """
+    lib = Path(library_dir) if library_dir is not None else custom.library_dir(RunConfig())
+    return custom.remove_tool(lib, name)
+
+
 def run(goal: str, config: RunConfig | None = None, **options: Any) -> RunState:
     """Run a goal end to end; shorthand for ``Experiment(goal, config, **options).run()``.
 
@@ -1144,6 +1303,8 @@ __all__ = [
     "Experiment",
     "ExperimentError",
     "ParseResult",
+    "ToolProposal",
+    "approve_tool",
     "backend_ready",
     "backend_status",
     "bus_for",
@@ -1151,8 +1312,10 @@ __all__ = [
     "list_runs",
     "load",
     "models",
+    "remove_tool",
     "resume",
     "run",
     "run_blockers",
     "simulation_status",
+    "tool_library",
 ]

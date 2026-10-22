@@ -1450,7 +1450,7 @@ def note_evidence(
         Source paper; must already be in ``ws.papers``.
     property : str
         Property the finding is about.
-    finding_type : {"positive", "negative", "mechanism", "synthesis"}
+    finding_type : {"positive", "negative", "mechanism", "synthesis", "method"}
         Kind of finding.
     summary : str
         One-line summary.
@@ -1476,7 +1476,7 @@ def note_evidence(
     paper = ws.papers.get(paper_id)
     if paper is None:
         raise ToolError(f"unknown paper_id {paper_id!r}; retrieve the paper before noting evidence")
-    if finding_type not in {"positive", "negative", "mechanism", "synthesis"}:
+    if finding_type not in {"positive", "negative", "mechanism", "synthesis", "method"}:
         raise ToolError(f"unknown finding_type {finding_type!r}")
     dropped = value is not None and not value_in_abstract(float(value), paper.abstract)
     quantity = None
