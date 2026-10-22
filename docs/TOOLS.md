@@ -572,14 +572,16 @@ Section `capability`. Each event's payload has `kind` plus:
 | `plan` | `{proposal, allowed}`: the `ToolProposal` at the plan stage and the actions offered |
 | `checks` | `{proposal_id, revision, checks}` after each `write_tool` |
 | `code` | `{proposal, allowed}`: the `ToolProposal` with `source`, `tests`, `checks`, `trial` and `toolkit_calls` |
-| `decision` | the `ToolDecision` |
-| `registered` | the `CustomTool` |
+| `decision` | `{decision, name}`: the `ToolDecision` and the tool's name |
+| `withdrawn` | `{proposal_id, revision, reason}`: the agent replaced code the user was reviewing; that card no longer waits |
+| `registered` | `{tool}`: the `CustomTool` |
 | `cancelled` | `{proposal_id, scope: "tool" or "run", supplies_target, reason}` |
 | `log` | `{message}` from `hp.log` |
-| `package`, `question` | `{request, allowed}`: a `UserRequest` waiting for the user |
+| `package`, `question`, `give_up` | `{request, allowed}`: a `UserRequest` waiting for the user |
 
 Tool calls of the phase are ordinary `tool` events with `phase: "capability"` and string call IDs
 (`cap1`, `cap2`, ...), so they never collide with the campaign's.
 
-A `plan` or `code` event with no later `decision` for the same `proposal_id` means the run is waiting for the
-user; the UI and CLI show the card with its actions (AT-24, AT-27, AT-28).
+A `plan` or `code` event with no later `decision` (or `withdrawn`) for the same `proposal_id` means the run may
+be waiting for the user; the UI and CLI show the card with its actions (AT-24, AT-27, AT-28). The engine's own
+answer is `Experiment.waiting()` (in process) or `GET /runs/{id}/tool-proposals` (`waiting: true`).

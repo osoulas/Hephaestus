@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hephaestus.core.config import BAND_GAP_MODELS, MODELS, RunConfig, runs_root
+from hephaestus.core.config import BAND_GAP_MODELS, MODELS, PROFILES, RunConfig, runs_root
 from hephaestus.core.events import BUS, EventBus
 from hephaestus.core.store import atomic_write_text, load_model, new_run_id
 from hephaestus.core.types import CustomTool, ProgressEvent, RunState, SearchSpec, ToolDecision, ToolProposal
@@ -764,34 +764,63 @@ class Experiment:
     # ------------------------------------------------------------------ agent-built tools
 
     def tool_proposals(self) -> list[dict[str, Any]]:
-        """Proposals of the capability phase, with the actions offered while one waits (AT-13, AT-24).
+        """Proposals of every capability phase, with the actions offered while one waits (AT-13, AT-24).
+
+        A run has one phase per target no tool computes: ``capability/`` for the first,
+        ``capability_<property>/`` for each extra target. Phases run one after another, so only the
+        latest can be waiting; IDs (``t1``, ``q1``) restart in each phase.
 
         Returns
         -------
         list of dict
-            ``ToolProposal`` fields (or ``UserRequest`` fields, with ``kind``) plus ``waiting``
-            (bool) and ``allowed`` (actions).
+            ``ToolProposal`` fields (or ``UserRequest`` fields, with ``kind``) plus ``phase`` (the
+            property the phase builds a tool for), ``waiting`` (bool) and ``allowed`` (actions).
         """
-        cap = load_state(self.files.root / "capability") if self.exists else None
-        if cap is None:
+        if not self.exists:
             return []
+        root = self.files.root
+        folders = [root / "capability", *sorted(root.glob("capability_*"), key=lambda f: f.stat().st_mtime)]
+        phases = [(f, cap) for f in folders if f.is_dir() and (cap := load_state(f)) is not None]
         waits = {w["proposal_id"]: w for w in HUB.waiting(self.run_id)}
         out = []
-        for p in cap.proposals.values():
-            w = waits.get(p.proposal_id)
-            out.append(
-                {
-                    **p.model_dump(mode="json"),
-                    "waiting": w is not None and w["stage"] == p.stage,
-                    "allowed": w["allowed"] if w else [],
-                }
-            )
-        for r in cap.requests.values():  # package requests and questions from the agent
-            w = waits.get(r.request_id)
-            out.append(
-                {**r.model_dump(mode="json"), "waiting": w is not None, "allowed": w["allowed"] if w else []}
-            )
+        for i, (_, cap) in enumerate(phases):
+            live = waits if i == len(phases) - 1 else {}
+            for p in cap.proposals.values():
+                w = live.get(p.proposal_id)
+                waiting = w is not None and w["stage"] == p.stage
+                out.append(
+                    {
+                        **p.model_dump(mode="json"),
+                        "phase": cap.gap,
+                        "waiting": waiting,
+                        "allowed": w["allowed"] if waiting and w else [],
+                    }
+                )
+            for r in cap.requests.values():  # package requests and questions from the agent
+                w = live.get(r.request_id)
+                out.append(
+                    {
+                        **r.model_dump(mode="json"),
+                        "phase": cap.gap,
+                        "waiting": w is not None,
+                        "allowed": w["allowed"] if w else [],
+                    }
+                )
         return out
+
+    def waiting(self) -> list[dict[str, Any]]:
+        """List what the run waits for the user to decide now, in any capability phase (AT-24, AT-29).
+
+        This is the record ``decide`` checks, so it answers quickly and needs no files: poll it
+        while a run is quiet to know when to ask.
+
+        Returns
+        -------
+        list of dict
+            ``{proposal_id, stage, allowed}`` per open wait; empty when nothing waits or the run
+            is not executing in this process.
+        """
+        return HUB.waiting(self.run_id)
 
     def decide(self, proposal_id: str, action: str, message: str | None = None) -> ToolDecision:
         """Answer a proposal waiting for the user (AT-7, AT-13, AT-29).
@@ -1300,6 +1329,7 @@ def resume(run_id: str, root: Path | None = None) -> RunState:
 
 
 __all__ = [
+    "PROFILES",
     "Experiment",
     "ExperimentError",
     "ParseResult",

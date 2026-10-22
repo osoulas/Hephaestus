@@ -177,3 +177,43 @@ class RunConfig(BaseModel):
             The MEGNet output fidelity.
         """
         return str(BAND_GAP_MODELS[self.band_gap_model]["fidelity"])
+
+
+PROFILES: list[dict[str, Any]] = [
+    {
+        "id": "quick",
+        "name": "Quick look",
+        "hint": "Two short rounds; useful to check a goal makes sense.",
+        "values": {
+            "max_iterations": 2,
+            "max_tool_calls": 50,
+            "time_budget_s": 480,
+            "final_time_budget_s": 300,
+            "phonon_mode": "fast",
+        },
+    },
+    {
+        "id": "standard",
+        "name": "Standard",
+        "hint": "The defaults: three rounds and a 10-minute re-check.",
+        "values": {},
+    },
+    {
+        "id": "thorough",
+        "name": "Thorough",
+        "hint": "Five rounds, full phonons and more time for the re-check.",
+        "values": {
+            "max_iterations": 5,
+            "max_tool_calls": 150,
+            "time_budget_s": 1800,
+            "final_time_budget_s": 1200,
+            "phonon_mode": "full",
+        },
+    },
+]
+"""Setting profiles: one choice sets the budgets and depth of checking (OR-4, UI-12).
+
+``values`` are ``RunConfig`` fields; ``standard`` keeps the defaults. The web composer keeps a copy
+in ``web/js/spec.js`` (it loads without a request); ``tests/unit/interfaces/test_profiles.py``
+keeps the two equal.
+"""
