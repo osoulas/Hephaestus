@@ -975,7 +975,7 @@ export function mountRun(root, id, tab, hooks) {
         h(
           "strong",
           null,
-          { plan: "The agent proposes a new tool.", code: "The tool's code is ready for review.", package: "The agent asks to use a package outside the sandbox.", question: "The agent has a question for you." }[w.stage],
+          { plan: "The agent proposes a new tool.", code: "The tool's code is ready for review.", package: "The agent asks to use a package outside the sandbox.", question: "The agent has a question for you.", give_up: "The agent proposes to stop without a tool." }[w.stage],
         ),
         " The run waits for your answer.",
       ),

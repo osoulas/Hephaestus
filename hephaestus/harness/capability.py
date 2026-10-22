@@ -46,7 +46,7 @@ CAP_LITERATURE = ("search_literature", "related_papers", "get_paper", "note_evid
 FIX_ATTEMPTS = 3
 MAX_NUDGES = 3
 MAX_IDLE_TURNS = 2  # turns ending with no tool call and nothing pending before the phase gives up
-REQUEST_STAGES = {"package", "question"}
+REQUEST_STAGES = {"package", "question", "give_up"}
 WAIT_POLL_S = 0.5
 TRIAL_ID = "trial"
 DEFAULT_TRIAL = "SrTiO3"
@@ -155,8 +155,9 @@ CAPABILITY_TOOLS: list[dict[str, Any]] = [
     ),
     _schema(
         "give_up",
-        "End the phase without a tool, when none can be built within the constraints. The run then screens "
-        "stability only. Say why in one or two sentences.",
+        "Propose to the user to stop without a tool, when not even a useful proxy can be built. The user decides: "
+        "they may let you stop (the run then cannot evaluate this property) or tell you what to build instead. "
+        "Say why in one or two sentences, and name the closest proxy you considered.",
         {"reason": STR},
     ),
 ]
@@ -1100,7 +1101,11 @@ class CapabilityPhase:
         if self.pending:
             raise ToolError("Something is already waiting for the user; end your turn.")
         self.state.requests[req.request_id] = req
-        allowed = {"allow", "deny", "cancel_run"} if req.kind == "package" else {"answer", "cancel_run"}
+        allowed = {
+            "package": {"allow", "deny", "cancel_run"},
+            "question": {"answer", "cancel_run"},
+            "give_up": {"allow", "answer", "cancel_run"},
+        }[req.kind]
         self.pending = (req.request_id, req.kind)
         HUB.open(self.ws.run_id, req.request_id, req.kind, allowed)
         self.emit(req.kind, {"request": req.model_dump(mode="json"), "allowed": sorted(allowed)})
@@ -1189,8 +1194,8 @@ class CapabilityPhase:
         dict
             Confirmation.
         """
-        self._end(f"the agent gave up: {reason}"[:500])
-        return {"ended": True, "instruction": "The phase is over; make no more calls."}
+        req = UserRequest(request_id=f"q{len(self.state.requests) + 1}", kind="give_up", question=reason)
+        return self._open_request(req)
 
     def _apply_request(self, req: UserRequest, decision: ToolDecision) -> str:
         """Apply the user's answer to a request.
@@ -1217,6 +1222,14 @@ class CapabilityPhase:
             self.state.outcome = "cancelled_run"
             self.emit("cancelled", {"proposal_id": req.request_id, "scope": "run", "supplies_target": True})
             msg = "The user cancelled the run. Make no more calls."
+        elif req.kind == "give_up" and action == "allow":
+            self._end(f"the agent gave up, with the user's agreement: {req.question}"[:500])
+            msg = "The user agreed to stop without a tool. The phase is over; make no more calls."
+        elif req.kind == "give_up":
+            msg = (
+                f"The user does not want to stop. They say: {decision.message or '(no message)'}\n"
+                "Follow that direction: propose a tool for it with propose_tool."
+            )
         elif req.kind == "question":
             msg = (
                 f"The user answered your question ({req.question[:200]}): {decision.message or '(no answer)'}"
@@ -1467,8 +1480,10 @@ def coerce_decision(raw: Any, prop: ToolProposal | UserRequest) -> ToolDecision:
         if isinstance(raw, dict):
             action, message = raw.get("action"), raw.get("message")
         elif raw is None:
-            action, message = ("deny" if prop.kind == "package" else "answer"), None
+            action, message = {"package": "deny", "question": "answer", "give_up": "allow"}[prop.kind], None
         elif prop.kind == "question" and raw != "cancel_run":
+            action, message = "answer", str(raw)
+        elif prop.kind == "give_up" and raw not in ("allow", "cancel_run"):
             action, message = "answer", str(raw)
         else:
             action, message = str(raw), None

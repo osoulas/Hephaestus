@@ -470,7 +470,10 @@ Ask the user a question (`question`, `options`). The answer is the next message.
 agent's plain text as a question.
 
 #### `give_up`
-End the phase without a tool (`reason`); the run screens stability only and the brief says why.
+Propose to stop without a tool (`reason`, naming the closest proxy considered). It is a request to the user
+(kind `give_up`): `allow` ends the phase and the run cannot evaluate the property; `answer` with a message
+points the agent at something to build instead. The agent is told to prefer a clearly labelled proxy over
+stopping when an exact method is out of reach.
 
 **The agent's second look.** Every tool declares `TOOL["trial_range"]`, the plausible value for the trial
 material from the literature; a trial value outside it fails the checks before the user sees the code. If

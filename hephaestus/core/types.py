@@ -442,7 +442,7 @@ class RunState(Record):
     versions: dict[str, str] = Field(default_factory=dict)
 
 
-ToolStage = Literal["plan", "code", "package", "question"]
+ToolStage = Literal["plan", "code", "package", "question", "give_up"]
 ToolAction = Literal["accept", "revise", "cancel_tool", "cancel_run", "allow", "deny", "answer"]
 
 
@@ -484,8 +484,8 @@ class UserRequest(Record):
     """Something the tool builder asks the user: a package outside the sandbox, or a question."""
 
     request_id: str
-    kind: Literal["package", "question"]
-    question: str  # the agent's reason (package) or question
+    kind: Literal["package", "question", "give_up"]
+    question: str  # the agent's reason (package, give_up) or question
     package: str | None = None  # import name, e.g. "phonopy"
     pip_name: str | None = None  # what to install when it is missing
     installed: bool | None = None  # whether the server's Python can import it now
