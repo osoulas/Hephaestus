@@ -16,43 +16,46 @@ Describe the material you need in plain English. Hephaestus designs it, checks i
 </div>
 
 ---
+## Example Overview
 
-> *a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable
-> (≤ 0.05 eV/atom above hull) and dynamically stable*
+#### You input:
 
-Hephaestus returns one recommended composition with its structure, its simulated properties and their
-uncertainties, and a brief that cites every claim.
+> *A lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable
+> (≤ 0.05 eV/atom above hull) and dynamically stable.*
 
-## Why it's different
+#### Hephaestus:
 
-Most LLM-driven discovery loops stop when the model says it is done. Hephaestus does not, and it can
-build the tools a goal needs.
+* Returns a recommended composition,
+* Determines a crystal structure,
+* Simulates relevant properties,
+* Performs a critical evaluation including uncertainties,
+* Produces a brief that cites each claim
 
-- **It builds the tools it lacks.** When no built-in tool computes a property, the agent researches the
+## Key Features
+
+- **Literature first.** The agent searches Valency Bond for the property and the chemistry. Every proposed composition cites the papers behind it.
+
+- **It can build the tools it lacks.** When no built-in tool computes a property, the agent researches the
   method in the literature, proposes a tool, and writes it once you accept the plan. You read the code and
-  approve it before it runs. Approved tools are saved and reused in later runs, so the library grows with
+  approve it before it runs. Approved tools are saved for reuse in later runs, so the library grows with
   every goal. Each tool runs in a sandbox, and its results are labelled as agent-built.
-- **Literature first.** The agent searches Valency Bond for the property, the chemistry and failed attempts,
-  and every proposed composition cites the papers behind it.
-- **Two independent scores must both pass.** Code scores each candidate on its checks, and an independent
+
+- **Two independent scores** Code scores each candidate on its checks, and an independent
   reviewer LLM scores it on its own confidence. The target is met only when the code's score and the
   reviewer's confidence both reach the threshold, the code checks pass, and the reviewer raises no critical
   finding. The model cannot override the code's checks, and the reviewer cannot override the code.
-- **Checked twice.** The winner is re-checked at higher fidelity (a larger potential, full phonons, a
-  recomputed reference) before the brief is written.
-- **Honest numbers.** Every predicted value carries an uncertainty or says it has none, and the brief's
+- **Checked twice.** The winner is re-checked at higher fidelity (e.g. a larger ML model, full phonons, a
+  recomputed reference etc.) before the brief is written.
+- **Numerical transparency.** Every predicted value carries an uncertainty or says it has none, and the brief's
   numbers come only from stored results.
 
 ## How a run works
-
-```
-goal ─▶ parse ─▶ [build missing tools] ─▶ campaign ─▶ re-check ─▶ brief
-         │              │                    │  ▲
-         │              │                    │  └─ independent reviewer each round
-         │              │                    └─ orchestrator calls tools; code gates every result
-         │              └─ you approve the plan and the code
-         └─ clarifying questions, if any
-```
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hephaestus_workflow.svg">
+  <img alt="Hephaestus" src="docs/assets/hephaestus_workflow.svg" width="">
+</picture>
+</div>
 
 The orchestrator is an LLM (Claude) that works only through tools:
 
@@ -74,12 +77,6 @@ the interface and the offline tests.
 git clone https://github.com/osoulas/Hephaestus.git && cd Hephaestus
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[sim,dev]"
-```
-
-On Windows with an NVIDIA driver at CUDA 12.2, install torch first:
-
-```bash
-pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 ```
 
 You need a Materials Project key (`MP_API_KEY`) and one way to reach Claude:
@@ -121,20 +118,49 @@ The UI has these parts:
 
 The API documentation is served at http://127.0.0.1:8000/docs.
 
-### Command line
+### Command Line Interface
+
+`python -m hephaestus` (or `hephaestus`) opens an interactive session.
+Type a goal, answer any clarifying questions, and watch the reasoning, the tool calls and each
+review stream past, ending with the brief. Commands start with `/` and Tab completes them:
+
+| Command | Does |
+| --- | --- |
+| `/model`, `/backend`, `/novel`, `/config`, `/profile` | Choose the model, the model access, novelty, every other run option (grouped), or a preset of budgets |
+| `/runs`, `/show <id>`, `/rename [id] <title>` | List runs; show a run's rounds and candidates; retitle it |
+| `/brief [id] [compute] [pdf]` | Print the lab brief, or the computational brief (methods, settings, every number) |
+| `/tools [list\|review\|show\|remove] [name]` | The library of agent-built tools: review waiting files, read or remove approved ones |
+| `/resume <id>`, `/replay <id> [speed]` | Continue an interrupted run; replay a stored one offline |
+| `/backends`, `/login`, `/signin` | Readiness; Claude Code and Valency sign-in |
+| `/help`, `/exit` | |
+
+**Ctrl+C** opens a menu while a campaign runs: stop the search (the best candidate still gets
+the re-check and the brief), stop everything (resume later), detach, or keep running. During a
+replay it changes the speed, pauses, resumes or ends it. Without a terminal the first Ctrl+C stops
+the search and the second detaches. Resume a run later with `hephaestus resume <id>`.
+
+The subcommands do the same without the session:
 
 ```bash
-python -m hephaestus login                 # sign in to Claude (Claude Code, or --api-key)
-python -m hephaestus backends              # show which LLM backends and simulation parts are ready
-python -m hephaestus serve --port 8000     # start the web UI and HTTP API
+hephaestus run "<goal>" [--backend claude-code] [--model claude-sonnet-5-5] [--novel] [--yes] [--json]
+          [--profile quick|standard|thorough] [--band-gap-model megnet-hse] [--custom-tools ask|off]
+          [--no-hull] [--no-phonons] [--e-hull-max 0.05] [--no-elastic] [--tool-library DIR]
+hephaestus parse "<goal>" [--json]
+hephaestus runs | show <id> | rename <id> <title> | brief <id> [--compute] [--pdf]
+hephaestus tools [list | review [name] | show <name> | remove <name>] [--dir DIR]
+hephaestus resume <id>
+hephaestus replay <id or run folder> [--speed 4]
+hephaestus backends | login | signin | serve
 ```
 
-The commands `run`, `parse`, `replay`, `resume` and `signin` are not implemented yet; the CLI reports this
-and exits with status 2.
+`run` leaves agent-built tools off unless `--custom-tools ask` is given, and refuses `ask` with
+`--yes`, `--json` or no terminal, since nobody could review the tool. The exit codes are 0 (done), 1 (failed or refused), 2 (usage), 3 (needs input) and 130
+(detached).
+
 
 ### Python API
 
-The same engine as a library. An `Experiment` is one run, stored in its own folder:
+This underlies both the web GUI and interactive CLI, and can be accessed directly:
 
 ```python
 from hephaestus.interfaces.python import Experiment
@@ -176,9 +202,9 @@ cfg = RunConfig(max_iterations=2, band_gap_model="megnet-pbe", run_phonons=False
 exp = Experiment(goal, cfg)
 ```
 
-## Settings that matter
+## Settings
 
-Every run is configured by `RunConfig` (`hephaestus/core/config.py`). The most used options:
+Every run is configured by `RunConfig` (`hephaestus/core/config.py`). The most useful options:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -187,9 +213,9 @@ Every run is configured by `RunConfig` (`hephaestus/core/config.py`). The most u
 | `max_iterations` | `3` | Review rounds; `0` for no limit |
 | `max_tool_calls` | `90` | Tool calls before the agent is told to submit |
 | `time_budget_s` | `900` | Wall time for the search |
-| `confidence_threshold` | `72` | Code rubric and reviewer must both reach this to stop on target |
-| `potential` / `final_potential` | `mace-mp-0-small` / `mace-mp-0-medium` | Screening and re-check potentials |
-| `band_gap_model` | `megnet-hse` | Band gap fidelity; all gaps in a run share one model |
+| `confidence_threshold` | `72` | Code rubric and reviewer must both reach this to stop on target (out of 100) |
+| `potential` / `final_potential` | `mace-mp-0-small` / `mace-mp-0-medium` | Screening and re-check models |
+| `band_gap_model` | `megnet-hse` | Band gap model/fidelity. All gaps in a run share one model |
 | `run_phonons` / `run_hull` | `true` | Dynamic and thermodynamic stability checks |
 | `require_novel` | `false` | Reject compositions already reported |
 | `custom_tools` | `off` (Python), `ask` (UI) | Let the agent build a tool for a missing property |
@@ -208,8 +234,8 @@ each waiting for you:
    reused by later runs.
 
 Tools run in a sandboxed worker process: a fixed import allowlist, no network, time and memory limits, and
-building blocks (relaxations, phonons, single points) served by the main process. The sandbox blocks
-accidents, not a determined attacker, so reviewing the code before you approve it is the real safeguard.
+building blocks (relaxations, phonons, single points) served by the main process. The sandbox only blocks
+accidents, so reviewing the code before you approve it is a necessary safeguard.
 
 ## Project layout
 
@@ -224,81 +250,24 @@ docs/            requirements, tool contract, stability method, Valency tools
 tests/           unit, integration, slow (real MACE and MEGNet) and live suites
 ```
 
-### Command line
 
-`python -m hephaestus` (or `hephaestus`) opens an interactive session: the logo, then a goal prompt.
-Type a goal, answer any clarifying questions, and watch the reasoning, the tool calls and each
-review stream past, ending with the brief. Commands start with `/` and Tab completes them:
-
-| Command | Does |
-| --- | --- |
-| `/model`, `/backend`, `/novel`, `/config`, `/profile` | Choose the model, the model access, novelty, every other run option (grouped), or a preset of budgets |
-| `/runs`, `/show <id>`, `/rename [id] <title>` | List runs; show a run's rounds and candidates; retitle it |
-| `/brief [id] [compute] [pdf]` | Print the lab brief, or the computational brief (methods, settings, every number) |
-| `/tools [list\|review\|show\|remove] [name]` | The library of agent-built tools: review waiting files, read or remove approved ones |
-| `/resume <id>`, `/replay <id> [speed]` | Continue an interrupted run; replay a stored one offline |
-| `/backends`, `/login`, `/signin` | Readiness; Claude Code and Valency sign-in |
-| `/help`, `/exit` | |
-
-**Agent-built tools.** When no tool computes a target property, the session (where
-`custom_tools` defaults to `ask`) lets the agent research and write one. Each step waits for you
-in the log: accept the plan, request changes or cancel; then review the code (paged and
-highlighted, with its static check, tests and trial run) and approve it; allow or deny a package;
-answer a question; or let the agent give up or point it at something else. The answers go
-through `Experiment.decide`, so the engine decides what each one does. A run resumed while a card
-waits asks again.
-
-**Ctrl+C** opens a menu while a campaign runs: stop the search (the best candidate still gets
-the re-check and the brief), stop everything (resume later), detach, or keep running. During a
-replay it changes the speed, pauses, resumes or ends it. Without a terminal the first Ctrl+C stops
-the search and the second detaches; resume the run later with `hephaestus resume <id>`.
-
-The subcommands do the same without the session:
-
-```bash
-hephaestus run "<goal>" [--backend claude-code] [--model claude-sonnet-5-5] [--novel] [--yes] [--json]
-          [--profile quick|standard|thorough] [--band-gap-model megnet-hse] [--custom-tools ask|off]
-          [--no-hull] [--no-phonons] [--e-hull-max 0.05] [--no-elastic] [--tool-library DIR]
-hephaestus parse "<goal>" [--json]
-hephaestus runs | show <id> | rename <id> <title> | brief <id> [--compute] [--pdf]
-hephaestus tools [list | review [name] | show <name> | remove <name>] [--dir DIR]
-hephaestus resume <id>
-hephaestus replay <id or run folder> [--speed 4]
-hephaestus backends | login | signin | serve
-```
-
-`run` leaves agent-built tools off unless `--custom-tools ask` is given, and refuses `ask` with
-`--yes`, `--json` or no terminal, since nobody could review the tool. `--yes` never asks: a goal that needs answers exits with code 3. `--json` prints events as JSON
-lines. The exit codes are 0 (done), 1 (failed or refused), 2 (usage), 3 (needs input) and 130
-(detached).
 
 ## Testing
 
 ```bash
-pytest -q                  # default suite: offline, no GPU, no API key
-pytest -m slow             # real MACE and MEGNet on cached tiny cases
-pytest -m live             # real LLM, Valency and Materials Project
+pytest -q                              # default suite: offline, no GPU, no API key
+pytest -m slow                         # real MACE and MEGNet on cached tiny cases
+pytest -m live                         # real LLM, Valency and Materials Project
 ruff check . && ruff format --check .
 ```
 
 The default suite blocks outbound network access. Mark a test `live` to let it use the network.
 
-## Documentation
-
-- [`CLAUDE.md`](CLAUDE.md): team guide, decisions, package layout and coding rules.
-- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md): the specification, with requirement IDs.
-- [`docs/TOOLS.md`](docs/TOOLS.md): the tool contract, including agent-built tools and their events.
-- [`docs/stability_check.md`](docs/stability_check.md): why dynamic stability uses mode mapping.
-- [`docs/valency_tools.md`](docs/valency_tools.md): Valency Bond's live tool schemas.
 
 ## Acknowledgements
 
-Built at the OSI Hackathon, 21–22 October 2026, by Oskar Soulas and the team. Builds on the prior work
-LLMatDesign and PoreVoyant, and on
-[MACE](https://github.com/ACEsuit/mace), [MEGNet and matgl](https://github.com/materialsvirtuallab/matgl),
-[pymatgen](https://pymatgen.org), [Materials Project](https://materialsproject.org) and
-[Valency Bond](https://valency.bond).
+Built for the OSI Hackathon, 21–22 October 2026, by Oskar Soulas, Peter Russell, and Peter Graham.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE)
