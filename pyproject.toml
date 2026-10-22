@@ -39,6 +39,7 @@ dependencies = [
   "phonopy>=2.26",
   "pydantic>=2.7",
   "pymatgen>=2024.6.10",
+  "reportlab>=4.0",
   "rich>=13.7",
   "uvicorn>=0.30",
 ]

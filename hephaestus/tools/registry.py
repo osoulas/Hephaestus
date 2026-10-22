@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from hephaestus.core.config import RunConfig
 from hephaestus.core.types import (
     Candidate,
+    CustomTool,
     ErrorRecord,
     Insight,
     Lattice,
@@ -77,6 +78,47 @@ def lock_key(name: str, args: dict[str, Any]) -> str | None:
     """
     cid = args.get("candidate_id")
     return str(cid) if cid else None
+
+
+def target_step(spec: SearchSpec, candidate_id: str) -> tuple[str, dict[str, Any]]:
+    """Return the tool call that computes the target property for a candidate (AT-16, AT-17).
+
+    Parameters
+    ----------
+    spec : SearchSpec
+        Target; ``target_tool`` names an agent-built tool when one supplies the property.
+    candidate_id : str
+        Candidate ID.
+
+    Returns
+    -------
+    tuple
+        ``(tool name, input)``: ``custom_<name>`` or ``predict_property``.
+    """
+    if spec.target_tool:
+        return spec.target_tool, {"candidate_id": candidate_id}
+    return "predict_property", {"candidate_id": candidate_id, "property": spec.target_property}
+
+
+def target_info(spec: SearchSpec, prop: str) -> dict[str, Any] | None:
+    """Return the target a property result is checked against, for tool results.
+
+    Parameters
+    ----------
+    spec : SearchSpec
+        Targets.
+    prop : str
+        Property key.
+
+    Returns
+    -------
+    dict or None
+        ``{direction, value, reference}``; ``None`` when the property is not a target.
+    """
+    t = next((t for t in spec.targets() if t.property == prop), None)
+    if t is None:
+        return None
+    return {"direction": t.direction, "value": t.value, "reference": t.reference_material}
 
 
 class ToolError(Exception):
@@ -176,6 +218,7 @@ class Workspace(BaseModel):
     tool_calls: int = 0
     compute_s: float = 0.0
     submitted: Submission | None = None
+    custom_tools: dict[str, CustomTool] = Field(default_factory=dict)  # approved agent-built tools (AT-16)
 
     def add_compute(self, seconds: float) -> None:
         """Add compute time to the budget counter; safe from parallel tool calls.
@@ -402,7 +445,7 @@ TOOLS: list[dict[str, Any]] = [
             "value": NUM_NULL,
             "units": STR_NULL,
             "conditions": STR,
-            "finding_type": _enum("positive", "negative", "mechanism", "synthesis"),
+            "finding_type": _enum("positive", "negative", "mechanism", "synthesis", "method"),
             "summary": STR,
         },
     ),

@@ -19,6 +19,7 @@ export function h(tag, attrs, ...children) {
     else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
     else if (k === "dataset") Object.assign(el.dataset, v);
     else if (k === "value") el.value = v; // a property: the attribute does not fill a textarea
+    else if (k === "title" && typeof v === "string") el.setAttribute("title", stripCodes(v));
     else if (k in el && typeof v !== "string") el[k] = v;
     else el.setAttribute(k, v === true ? "" : v);
   }
@@ -34,8 +35,35 @@ export function h(tag, attrs, ...children) {
 export function append(el, children) {
   for (const c of children.flat(Infinity)) {
     if (c == null || c === false || c === true) continue;
-    el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    el.append(c instanceof Node ? c : document.createTextNode(stripCodes(String(c))));
   }
+}
+
+// Requirement IDs from docs/REQUIREMENTS.md (e.g. "FC-1", "GP-11"): useful in code and logs, noise
+// to a user. Server text carries them ("… full phonons (FC-1, FC-2)."), so every string the UI shows
+// passes through stripCodes.
+const CODE = String.raw`\b(?:AT|CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b`;
+const CODE_LIST = String.raw`${CODE}(?:\s*(?:,|;|and|to|–|—|-|/)\s*${CODE})*`;
+const ONLY_CODES = new RegExp(String.raw`\s*\(\s*${CODE_LIST}\s*\)`, "g"); // " (FC-1, FC-2)"
+const TRAILING = new RegExp(String.raw`\s*[,;]\s*${CODE_LIST}(?=\s*\))`, "g"); // "(note; GP-11)"
+const LEADING = new RegExp(String.raw`(\(\s*)${CODE_LIST}\s*[,;:]\s*`, "g"); // "(GP-11: note)"
+const BARE = new RegExp(String.raw`\s*${CODE_LIST}`, "g");
+
+/**
+ * Remove requirement IDs from text shown to the user.
+ * @param {string} text Text.
+ * @returns {string}
+ */
+export function stripCodes(text) {
+  if (!text || !/-\d/.test(text)) return text;
+  return text
+    .replace(ONLY_CODES, "")
+    .replace(TRAILING, "")
+    .replace(LEADING, "$1")
+    .replace(BARE, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/[ \t]+([.,;:])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ");
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -108,6 +136,9 @@ const ICONS = {
   arrowRight: "M5 12h14M13 6l6 6-6 6",
   trend: "M3 17l6-6 4 4 8-8M15 7h6v6",
   gate: "M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16M3 21h18M9 11h.01",
+  edit: "M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3zM13.5 6.5l3 3",
+  wrench: "M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8-1.3-1.3a4 4 0 0 1-5-5L14 2zM4 20l3-3",
+  code: "M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16",
 };
 
 /**
@@ -125,17 +156,85 @@ export function icon(name, cls) {
   );
 }
 
-/** The brand mark: a flame over an anvil. */
-export function brandMark() {
+// The CLI's logo (interfaces/cli/theme.py): HEPHAESTUS in ANSI Shadow block letters graded from
+// molten red to gold, with an anvil in iron to the right. Drawn as SVG, one terminal cell per unit
+// (cells are twice as tall as wide): full blocks become filled cells, box-drawing shadows thin lines.
+const LETTERS = {
+  H: ["██╗  ██╗", "██║  ██║", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
+  E: ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "███████╗", "╚══════╝"],
+  P: ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔═══╝ ", "██║     ", "╚═╝     "],
+  A: [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
+  S: ["███████╗", "██╔════╝", "███████╗", "╚════██║", "███████║", "╚══════╝"],
+  T: ["████████╗", "╚══██╔══╝", "   ██║   ", "   ██║   ", "   ██║   ", "   ╚═╝   "],
+  U: ["██╗   ██╗", "██║   ██║", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝ "],
+};
+const ANVIL = [
+  "████████████████████╗",
+  "╚════█████████████╔═╝",
+  "     ╚══███████╔══╝  ",
+  "        ███████║     ",
+  "    ███████████████╗ ",
+  "    ╚══════════════╝ ",
+];
+const ANVIL_GAP = 3;
+
+// Half-cell strokes for each box-drawing character: [x1, y1, x2, y2] in cell units (cell 1 × 2).
+const STROKES = {
+  "═": [[0, 1, 1, 1]],
+  "║": [[0.5, 0, 0.5, 2]],
+  "╗": [[0, 1, 0.5, 1], [0.5, 1, 0.5, 2]],
+  "╔": [[1, 1, 0.5, 1], [0.5, 1, 0.5, 2]],
+  "╝": [[0, 1, 0.5, 1], [0.5, 1, 0.5, 0]],
+  "╚": [[1, 1, 0.5, 1], [0.5, 1, 0.5, 0]],
+};
+
+/**
+ * Draw rows of ANSI Shadow art into an SVG group.
+ * @param {string[]} rows Six rows of block and box-drawing characters.
+ * @param {number} x0 Left column.
+ * @param {string} fillVar CSS variable prefix for block rows, e.g. "--molten" (rows 1-6).
+ * @param {string} shadowVar CSS variable for the shadow strokes.
+ * @returns {SVGElement}
+ */
+function shadowArt(rows, x0, fillVar, shadowVar) {
+  const g = s("g");
+  const lines = [];
+  rows.forEach((row, r) => {
+    const y = r * 2;
+    let run = null; // merge each run of blocks into one rect, so no seams show between cells
+    [...row, " "].forEach((ch, c) => {
+      const x = x0 + c;
+      if (ch === "█") {
+        if (run === null) run = x;
+        return;
+      }
+      if (run !== null) {
+        g.append(s("rect", { x: run, y: y - 0.02, width: x - run, height: 2.06, fill: `var(${fillVar}-${r + 1})` }));
+        run = null;
+      }
+      if (STROKES[ch]) for (const [a, b, e, f] of STROKES[ch]) lines.push(`M${x + a} ${y + b}L${x + e} ${y + f}`);
+    });
+  });
+  g.prepend(s("path", { d: lines.join(""), stroke: `var(${shadowVar})`, "stroke-width": 0.42, "stroke-linecap": "square", fill: "none" }));
+  return g;
+}
+
+/**
+ * The HEPHAESTUS wordmark with its anvil, as in the CLI banner.
+ * @param {{anvil?: boolean}} [opts] Draw the anvil (default true).
+ * @returns {SVGElement}
+ */
+export function wordmark(opts = {}) {
+  const anvil = opts.anvil !== false;
+  const word = "HEPHAESTUS";
+  const letterRows = [0, 1, 2, 3, 4, 5].map((r) => [...word].map((ch) => LETTERS[ch][r]).join(""));
+  const textW = letterRows[0].length;
+  const width = textW + (anvil ? ANVIL_GAP + ANVIL[0].length : 0);
   return s(
     "svg",
-    { viewBox: "0 0 32 32", class: "brand-mark", "aria-hidden": "true" },
-    s("rect", { width: 32, height: 32, rx: 8, fill: "var(--primary)" }),
-    s("path", {
-      d: "M16 5c1.2 3.6 4.8 5.6 4.8 10.2A4.8 4.8 0 0 1 16 20a4.8 4.8 0 0 1-4.8-4.8c0-2 1-3.3 2.1-4.4.2 1.6 1 2.6 2 2.9-.6-3.4.2-6.4.7-8.7Z",
-      fill: "var(--ember)",
-    }),
-    s("path", { d: "M7 23h18l-2 3H9z", fill: "var(--primary-ink)" }),
+    { viewBox: `-0.3 -0.3 ${width + 0.6} 12.6`, class: "wordmark", role: "img", "aria-label": "Hephaestus" },
+    shadowArt(letterRows, 0, "--molten", "--scorch"),
+    anvil ? shadowArt(ANVIL, textW + ANVIL_GAP, "--iron", "--iron-shadow") : null,
   );
 }
 
@@ -154,6 +253,39 @@ export function formula(f) {
     else el.append(document.createTextNode(part));
   }
   return el;
+}
+
+/**
+ * Display form of a candidate ID: "c1-2" becomes "1-2" (round 1, candidate 2).
+ * The engine keeps "c1-2"; only what the UI shows changes.
+ * @param {string|null|undefined} id Candidate ID.
+ * @returns {string}
+ */
+export function cid(id) {
+  if (!id) return "–";
+  if (id === "ref") return "reference";
+  const m = String(id).match(/^c(\d+)-(\d+)(.*)$/);
+  return m ? `${m[1]}-${m[2]}${m[3]}` : String(id);
+}
+
+/**
+ * Long form of a candidate ID for tooltips: "Round 1 · Candidate 2".
+ * @param {string} id Candidate ID.
+ * @returns {string}
+ */
+export function cidLong(id) {
+  const m = String(id || "").match(/^c(\d+)-(\d+)/);
+  return m ? `Round ${m[1]} · Candidate ${m[2]}` : String(id || "");
+}
+
+/**
+ * A candidate ID as shown in the UI, with its long form on hover.
+ * @param {string} id Candidate ID.
+ * @param {string} [cls] Element and classes, e.g. "span.cand-id".
+ * @returns {HTMLElement}
+ */
+export function cidTag(id, cls = "span.cid") {
+  return h(cls, { title: cidLong(id) }, cid(id));
 }
 
 /**
@@ -222,6 +354,27 @@ export function label(k) {
   if (!k) return "";
   const t = String(k).replace(/_/g, " ");
   return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/**
+ * Text clamped to a few lines, with "Show more" when it is longer.
+ * @param {any} content Text or nodes.
+ * @param {number} [lines] Lines shown while collapsed.
+ * @returns {HTMLElement}
+ */
+export function clamp(content, lines = 3) {
+  const text = h("div.clamp-text.clamped", null, content);
+  text.style.setProperty("--lines", String(lines));
+  const btn = h("button.link.clamp-toggle", { type: "button", hidden: true }, "Show more");
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = !text.classList.toggle("clamped");
+    btn.textContent = open ? "Show less" : "Show more";
+  });
+  requestAnimationFrame(() => {
+    if (text.scrollHeight > text.clientHeight + 1) btn.hidden = false;
+  });
+  return h("div.clamp", null, text, btn);
 }
 
 /**

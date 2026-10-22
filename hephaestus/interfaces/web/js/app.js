@@ -2,10 +2,11 @@
 // Routes: #/new, #/run/<id>/<tab>.
 
 import { api, ApiError } from "./api.js";
-import { ago, append, brandMark, h, icon, label, pill, store, stored, toast } from "./dom.js";
+import { ago, append, cid, cidLong, h, icon, label, pill, store, stored, toast, wordmark } from "./dom.js";
 import { openConnectDialog } from "./auth.js";
 import { mountRun } from "./run.js";
-import { CONFIG_GROUPS, TOP_LEVEL_SETTINGS, modelName, specGrid } from "./spec.js";
+import { mountTools } from "./tools.js";
+import { CONFIG_GROUPS, DEPENDS_ON, LIMITS, POTENTIALS, PROFILES, TOP_LEVEL_SETTINGS, VALUE_NAMES, modelName, potentialName, specGrid } from "./spec.js";
 
 const main = document.getElementById("main");
 const sidebar = document.getElementById("sidebar");
@@ -49,6 +50,7 @@ function route() {
     main.replaceChildren();
     main.scrollTop = 0;
     if (next.view === "run" && next.id) app.current = mountRun(main, next.id, next.tab, { onChange: refreshRuns });
+    else if (next.view === "tools") app.current = mountTools(main);
     else app.current = mountComposer(main);
   }
   renderSidebar();
@@ -90,21 +92,31 @@ function renderSidebar() {
       h(
         `a.run-item${r.run_id === active ? ".active" : ""}`,
         { href: `#/run/${encodeURIComponent(r.run_id)}/overview`, title: r.raw_goal },
-        h("div.run-item-goal", null, r.raw_goal || r.run_id),
+        h("div.run-item-goal", null, r.title || r.raw_goal || r.run_id),
         h(
           "div.run-item-meta",
           null,
           h(`span.dot.${kind}`),
           r.running ? "Running" : label(r.status),
-          r.best ? h("span", null, "· ", r.best) : null,
+          r.best ? h("span", { title: cidLong(r.best) }, "· ", cid(r.best)) : null,
           h("span", { style: { marginLeft: "auto" } }, ago(r.created_at)),
         ),
       ),
     );
   }
   sidebar.replaceChildren(
-    h("a.brand", { href: "#/new" }, brandMark(), h("div", null, h("div.brand-name", null, "Hephaestus"), h("div.brand-tag", null, "Self-designing experiments"))),
-    h("div.sidebar-actions", null, h("a.btn.primary", { href: "#/new" }, icon("plus"), "New experiment")),
+    h(
+      "a.brand",
+      { href: "#/new", title: "Hephaestus: new run" },
+      wordmark(),
+      h("div.brand-tag", { title: "forged in simulation · checked by code · grounded in the literature" }, "self-designing experiments for materials discovery"),
+    ),
+    h(
+      "div.sidebar-actions",
+      null,
+      h("a.btn.primary", { href: "#/new" }, icon("plus"), "New run"),
+      h("a.btn.ghost", { href: "#/tools", "aria-current": app.route && app.route.view === "tools" ? "page" : null }, icon("wrench"), "Tool library"),
+    ),
     h("div.sidebar-section", null, "Runs", h("span.num", null, app.runs.length || "")),
     list,
     statusPanel(),
@@ -118,60 +130,56 @@ function renderSidebar() {
 function statusPanel() {
   const hl = app.health;
   const rows = [];
+  const row = (state, name, value, onclick, title) =>
+    h(
+      `div.status-row${onclick ? ".clickable" : ""}`,
+      { role: onclick ? "button" : null, tabindex: onclick ? 0 : null, title: title || null, onclick: onclick || null, onkeydown: onclick ? (e) => e.key === "Enter" && onclick() : null },
+      state === "pending" ? h("span.spinner") : h(`span.dot${state ? "." + state : ""}`),
+      h("span.label", null, name),
+      h(`span.value${state === "critical" ? ".action" : ""}`, null, value),
+    );
   if (!hl) {
-    rows.push(h("div.status-row", null, h("span.spinner"), h("span.label", null, "Checking services…")));
+    rows.push(row("pending", "Checking…", ""));
   } else if (!hl.ok) {
-    rows.push(h("div.status-row", null, h("span.dot.critical"), h("span.label", null, "Server unreachable")));
+    rows.push(row("critical", "Server unreachable", ""));
   } else {
     const b = hl.backends;
-    if (!b) rows.push(h("div.status-row", null, h("span.spinner"), h("span.label", null, "Checking Claude access…")));
+    const sim = hl.simulation || {};
+    const v = hl.valency || {};
+    const d = hl.device || {};
+    if (!b) rows.push(row("pending", "Claude", "Checking…"));
     else {
       const auto = b.auto || {};
-      const name = auto.resolves_to === "api" ? "API key" : "Claude Code";
-      rows.push(
-        h(
-          "div.status-row.clickable",
-          { role: "button", tabindex: 0, title: "Connect Claude", onclick: () => connect(), onkeydown: (e) => e.key === "Enter" && connect() },
-          h(`span.dot.${auto.ready ? "good" : "critical"}`),
-          h("span.label", null, `Claude · ${name}`),
-          h("span.value", auto.ready ? null : { style: { color: "var(--focus)", fontWeight: 550 } }, auto.ready ? "Ready" : "Sign in"),
-        ),
-      );
+      const via = auto.resolves_to === "api" ? "API key" : "Claude Code";
+      rows.push(row(auto.ready ? "good" : "critical", "Claude", auto.ready ? via : "Sign in", () => connect("claude")));
     }
-    const v = hl.valency || {};
     rows.push(
-      h(
-        "div.status-row",
-        { title: v.error || "" },
-        h(`span.dot.${v.signed_in ? "good" : v.pending ? "warning" : "critical"}`),
-        h("span.label", null, "Valency literature"),
-        v.signed_in
-          ? h("span.value", null, "Signed in")
-          : h("button.link", { onclick: signInValency }, v.needs_signin && v.access_token_expired ? "Sign in again" : v.pending ? "Waiting…" : "Sign in"),
+      row(
+        v.signed_in ? "good" : v.pending ? "warning" : "critical",
+        "Valency literature",
+        v.signed_in ? "Signed in" : v.pending ? "Waiting…" : v.needs_signin && v.access_token_expired ? "Sign in again" : "Sign in",
+        v.signed_in ? null : signInValency,
+        v.error || null,
       ),
     );
-    const sim = hl.simulation || {};
+    rows.push(row(sim.mp_key ? "good" : "critical", "Materials Project", sim.mp_key ? "Key set" : "Add key", () => connect("mp")));
     rows.push(
-      h(
-        "div.status-row.clickable",
-        { role: "button", tabindex: 0, title: "Materials Project API key", onclick: () => connect("mp"), onkeydown: (e) => e.key === "Enter" && connect("mp") },
-        h(`span.dot.${sim.mp_key ? "good" : "critical"}`),
-        h("span.label", null, "Materials Project"),
-        h("span.value", sim.mp_key ? null : { style: { color: "var(--focus)", fontWeight: 550 } }, sim.mp_key ? "Key set" : "Add key"),
-      ),
+      sim.mace === false
+        ? row("critical", "Simulation", "MACE missing", null, 'pip install -e ".[sim]"')
+        : row(d.cuda ? "good" : "", "Compute", d.cuda ? "GPU (CUDA)" : "CPU"),
     );
-    const d = hl.device;
-    if (sim.mace === false) {
-      rows.push(h("div.status-row", { title: 'pip install -e ".[sim]"' }, h("span.dot.critical"), h("span.label", null, "Simulation"), h("span.value", null, "MACE missing")));
-    } else if (d) {
-      rows.push(h("div.status-row", null, h(`span.dot.${d.cuda ? "good" : ""}`), h("span.label", null, "Compute"), h("span.value", null, d.cuda ? "GPU (CUDA)" : "CPU")));
-    }
   }
-  return h("div.sidebar-foot", null, ...rows, h("div.foot-tools", null, themeButton(), h("a.btn.ghost.sm", { href: "/docs", target: "_blank", rel: "noopener" }, icon("terminal"), "API")));
+  return h(
+    "div.sidebar-foot",
+    null,
+    h("div.sidebar-section.foot-title", null, "Connections"),
+    ...rows,
+    h("div.foot-tools", null, themeButton(), h("a.btn.ghost.sm", { href: "/docs", target: "_blank", rel: "noopener" }, icon("terminal"), "API")),
+  );
 }
 
 /**
- * Open the "Connect Claude" dialog.
+ * Open the "Connections" dialog.
  * @param {"claude"|"api"} [focus] Option to highlight.
  */
 export function connect(focus) {
@@ -291,7 +299,12 @@ function mountComposer(root) {
           llm_backend: cfg.llm_backend,
           llm_model: cfg.llm_model,
           require_novel: cfg.require_novel,
-          band_gap_fidelity: cfg.band_gap_fidelity,
+          band_gap_model: cfg.band_gap_model,
+          run_hull: cfg.run_hull,
+          e_hull_max_eV_per_atom: cfg.e_hull_max_eV_per_atom,
+          run_phonons: cfg.run_phonons,
+          custom_tools: cfg.custom_tools,
+          disabled_capabilities: cfg.disabled_capabilities,
         },
       });
     } catch (e) {
@@ -389,12 +402,12 @@ function mountComposer(root) {
       h(
         "div.composer-hero",
         null,
-        h("div.eyebrow", null, icon("flame"), "New experiment"),
+        h("div.eyebrow", null, icon("flame"), "New run"),
         h("h1", null, "What material should we design?"),
         h(
           "p",
           null,
-          "Describe the goal in plain English. The agent reads the literature, proposes compositions, simulates them, and hands back a candidate that passed code-enforced stability checks, with a cited lab brief.",
+          "Describe the goal in plain English. You get back a candidate that passed code-enforced stability checks, and a cited lab brief.",
         ),
       ),
       h(
@@ -498,11 +511,35 @@ function mountComposer(root) {
     const d = app.defaults || {};
     if (value === d[key] || (value === "" && d[key] == null)) delete st.overrides[key];
     else st.overrides[key] = value;
-    if (["band_gap_fidelity"].includes(key)) st.parsed = null; // changes the parsed target
+    // These change the parsed target's scale or its stability constraints
+    if (["band_gap_model", "run_hull", "run_phonons", "e_hull_max_eV_per_atom"].includes(key)) st.parsed = null;
     persist();
   }
 
-  function settingControl(key, prop, meta) {
+  const current = () => ({ ...(app.defaults || {}), ...st.overrides });
+
+  function activeProfile() {
+    const c = current();
+    const d = app.defaults || {};
+    const keys = new Set(PROFILES.flatMap((p) => Object.keys(p.values)));
+    for (const p of PROFILES) {
+      if ([...keys].every((k) => c[k] === (k in p.values ? p.values[k] : d[k]))) return p.id;
+    }
+    return "custom";
+  }
+
+  function applyProfile(p) {
+    const d = app.defaults || {};
+    for (const k of new Set(PROFILES.flatMap((x) => Object.keys(x.values)))) setOverride(k, k in p.values ? p.values[k] : d[k]);
+    draw();
+  }
+
+  function bandGapLabel(id) {
+    const m = ((app.models && app.models.band_gap_models) || []).find((x) => x.id === id);
+    return m ? m.label.replace("MEGNet multi-fidelity · ", "MEGNet ") : id;
+  }
+
+  function settingControl(key, prop, meta, inactive = false) {
     const d = app.defaults || {};
     const [name, hint, unit] = meta;
     const value = key in st.overrides ? st.overrides[key] : d[key];
@@ -510,112 +547,194 @@ function mountComposer(root) {
     const enumValues = prop.enum || (prop.anyOf || []).flatMap((x) => x.enum || []);
     const type = prop.type || (prop.anyOf || []).map((x) => x.type).find((t) => t && t !== "null");
     const nullable = (prop.anyOf || []).some((x) => x.type === "null");
+    const set = (v) => {
+      setOverride(key, v);
+      draw();
+    };
     let control;
-    if (type === "boolean") {
-      control = h(
-        "label.switch",
-        null,
-        h("input", { type: "checkbox", checked: Boolean(value), onchange: (e) => (setOverride(key, e.target.checked), draw()) }),
-        value ? "On" : "Off",
-      );
-    } else if (enumValues.length) {
+    let note = hint;
+    if (key === "disabled_capabilities") {
+      const on = (value || []).includes("elastic");
+      control = h("label.switch", null, h("input", { type: "checkbox", checked: on, onchange: (e) => set(e.target.checked ? ["elastic"] : []) }), on ? "Off for this run" : "Available");
+    } else if (key === "band_gap_model") {
+      const models = (app.models && app.models.band_gap_models) || enumValues.map((id) => ({ id, label: id, description: "" }));
+      const sel = models.find((m) => m.id === value);
+      note = sel ? sel.description : hint;
+      control = h("select.select", { onchange: (e) => set(e.target.value) }, models.map((m) => h("option", { value: m.id, selected: m.id === value }, m.label)));
+    } else if (key.endsWith("potential")) {
+      const options = [...new Set([...POTENTIALS, ...(value ? [value] : [])])];
       control = h(
         "select.select",
-        { onchange: (e) => (setOverride(key, e.target.value), draw()) },
-        enumValues.map((v) => h("option", { value: v, selected: v === value }, String(v))),
+        { onchange: (e) => set(e.target.value === "" ? null : e.target.value) },
+        nullable ? h("option", { value: "", selected: value == null }, "None") : null,
+        options.map((v) => h("option", { value: v, selected: v === value }, potentialName(v))),
       );
+    } else if (type === "boolean") {
+      control = h("label.switch", null, h("input", { type: "checkbox", checked: Boolean(value), onchange: (e) => set(e.target.checked) }), value ? "On" : "Off");
+    } else if (enumValues.length && enumValues.length <= 3) {
+      control = h(
+        "div.segmented.seg-fill",
+        { role: "group", "aria-label": name },
+        enumValues.map((v) => h("button", { type: "button", "aria-pressed": String(v === value), onclick: () => set(v) }, VALUE_NAMES[v] || String(v))),
+      );
+    } else if (enumValues.length) {
+      control = h("select.select", { onchange: (e) => set(e.target.value) }, enumValues.map((v) => h("option", { value: v, selected: v === value }, VALUE_NAMES[v] || String(v))));
     } else if (type === "integer" || type === "number") {
       const scale = unit === "min" ? 60 : 1;
-      control = h("input.input.num", {
-        type: "number",
-        min: 0,
-        step: type === "integer" ? 1 : "any",
-        value: value == null ? "" : +(value / scale).toFixed(2),
-        onchange: (e) => {
-          const raw = e.target.value;
-          if (raw === "") setOverride(key, d[key]);
-          else setOverride(key, type === "integer" ? Math.round(Number(raw)) : Number(raw) * scale);
-          draw();
-        },
-      });
+      const unlimited = LIMITS.has(key) && value === 0;
+      control = h(
+        `div.unit-input${unlimited ? ".unlimited" : ""}`,
+        null,
+        h("input.input.num", {
+          type: "number",
+          min: 0,
+          step: type === "integer" ? 1 : "any",
+          value: value == null ? "" : +(value / scale).toFixed(2),
+          placeholder: nullable ? "From the goal" : "",
+          onchange: (e) => {
+            const raw = e.target.value;
+            if (raw === "") set(d[key]);
+            else set(Math.max(0, type === "integer" ? Math.round(Number(raw)) : Number(raw) * scale));
+          },
+        }),
+        unit || unlimited ? h("span.unit", null, unlimited ? "no limit" : unit) : null,
+      );
     } else {
-      control = h("input.input.mono", {
-        value: value ?? "",
-        placeholder: nullable ? "none" : "",
-        list: key.includes("potential") ? "potential-options" : null,
-        onchange: (e) => (setOverride(key, e.target.value.trim() || (nullable ? null : d[key])), draw()),
-      });
+      control = h("input.input.mono", { value: value ?? "", placeholder: nullable ? "none" : "", onchange: (e) => set(e.target.value.trim() || (nullable ? null : d[key])) });
     }
     const def = d[key];
-    const defText = unit === "min" && typeof def === "number" ? `${+(def / 60).toFixed(2)} min` : def == null ? "none" : String(def);
+    const defText = unit === "min" && typeof def === "number" ? `${+(def / 60).toFixed(2)} min` : key.endsWith("potential") ? potentialName(def) : key === "band_gap_model" ? bandGapLabel(def) : def == null ? "none" : VALUE_NAMES[def] || String(def);
     return h(
-      "label.field.setting",
-      { class: changed ? "changed" : "" },
-      h("span.field-label", null, name, unit === "min" ? h("span.muted", null, " (min)") : null, changed ? h("span.changed-dot", { title: `Default: ${defText}` }) : null),
+      `div.field.setting${inactive ? ".inactive" : ""}`,
+      { class: changed ? "changed" : "", inert: inactive, title: inactive ? "Turned off above" : null },
+      h(
+        "span.field-label",
+        null,
+        name,
+        changed ? h("span.changed-dot", { title: `Changed from the default (${defText})` }) : null,
+        changed ? h("button.link.reset-one", { type: "button", onclick: () => set(def), title: `Back to ${defText}` }, "Reset") : null,
+      ),
       control,
-      h("span.field-hint", null, hint, changed ? h("span", null, ` Default: ${defText}.`) : null),
+      note ? h("span.field-hint", null, note) : null,
     );
   }
 
   function settingsPanel() {
     const schema = app.schema && app.schema.properties;
     if (!schema || !app.defaults) return null;
-    const used = new Set();
-    const groups = CONFIG_GROUPS.map((g) => {
-      const fields = Object.entries(g.fields).filter(([k]) => schema[k]);
-      fields.forEach(([k]) => used.add(k));
-      return { name: g.name, fields };
-    });
-    const other = Object.keys(schema).filter((k) => !used.has(k) && !TOP_LEVEL_SETTINGS.has(k));
-    if (other.length) groups.push({ name: "Other", fields: other.map((k) => [k, [label(k), schema[k].title || ""]]) });
-    const nChanged = Object.keys(st.overrides).filter((k) => k in app.defaults).length;
-    const open = Boolean(stored("heph-options", {}).advancedOpen);
-    return h(
-      "details.advanced",
-      {
-        open,
-        ontoggle: (e) => store("heph-options", { ...stored("heph-options", {}), advancedOpen: e.currentTarget.open }),
-      },
+    const expert = Boolean(stored("heph-expert", false));
+    const open = new Set(stored("heph-open-groups", []));
+    const c = current();
+    const profile = activeProfile();
+    const nChanged = Object.keys(st.overrides).filter((k) => k in app.defaults && !TOP_LEVEL_SETTINGS.has(k)).length;
+
+    const profileRow = h(
+      "div.profile-row",
+      null,
       h(
-        "summary",
-        null,
-        icon("chevron"),
-        "All settings",
-        nChanged ? h("span.pill.info", { style: { marginLeft: "8px" } }, `${nChanged} changed`) : h("span.muted", { style: { fontWeight: 500, marginLeft: "6px" } }, "· defaults"),
-      ),
-      h(
-        "datalist",
-        { id: "potential-options" },
-        ["mace-mp-0-small", "mace-mp-0-medium", "mace-mp-0-large", "chgnet"].map((v) => h("option", { value: v })),
-      ),
-      groups.map((g) =>
+        "div.profiles",
+        { role: "radiogroup", "aria-label": "Run profile" },
+        PROFILES.map((p) =>
+          h(
+            `button.profile${profile === p.id ? ".on" : ""}`,
+            { type: "button", role: "radio", "aria-checked": String(profile === p.id), onclick: () => applyProfile(p) },
+            h("span.profile-name", null, p.name),
+            h("span.profile-hint", null, p.hint),
+          ),
+        ),
         h(
-          "div.settings-group",
-          null,
-          h("div.settings-group-name", null, g.name),
-          h("div.advanced-grid", null, g.fields.map(([k, meta]) => settingControl(k, schema[k], meta))),
+          `div.profile.custom${profile === "custom" ? ".on" : ""}`,
+          { "aria-hidden": "true" },
+          h("span.profile-name", null, "Custom"),
+          h("span.profile-hint", null, "Your own budget; open a section below to adjust."),
         ),
       ),
-      nChanged
-        ? h(
-            "div",
-            { style: { marginTop: "14px" } },
-            h(
+    );
+
+    const groups = CONFIG_GROUPS.map((g) => {
+      const fields = Object.entries(g.fields).filter(([k, meta]) => schema[k] && (expert || !meta[3]));
+      const changedHere = Object.keys(g.fields).filter((k) => k in st.overrides);
+      const isOpen = open.has(g.id);
+      const toggle = () => {
+        if (isOpen) open.delete(g.id);
+        else open.add(g.id);
+        store("heph-open-groups", [...open]);
+        draw();
+      };
+      return h(
+        `section.setting-group${isOpen ? ".open" : ""}`,
+        null,
+        h(
+          "button.group-head",
+          { type: "button", "aria-expanded": String(isOpen), onclick: toggle },
+          h("span.group-icon", null, icon(g.icon)),
+          h("span.group-text", null, h("span.group-name", null, g.name), h("span.group-summary", null, g.summary(c, bandGapLabel))),
+          changedHere.length ? h("span.pill.info", null, `${changedHere.length} changed`) : null,
+          icon("chevron", "group-chevron"),
+        ),
+        isOpen
+          ? h(
+              "div.group-body",
+              null,
+              h("div.group-grid", null, fields.map(([k, meta]) => settingControl(k, schema[k], meta, Boolean(DEPENDS_ON[k]) && (!c[DEPENDS_ON[k]] || c[DEPENDS_ON[k]] === "off")))),
+              changedHere.length
+                ? h(
+                    "button.link.reset-group",
+                    {
+                      type: "button",
+                      onclick: () => {
+                        for (const k of changedHere) delete st.overrides[k];
+                        persist();
+                        draw();
+                      },
+                    },
+                    `Reset ${g.name.toLowerCase()}`,
+                  )
+                : null,
+            )
+          : null,
+      );
+    });
+
+    return h(
+      "div.setup.span-2",
+      null,
+      h("div.setup-head", null, h("span.field-label", null, "How hard should it search?")),
+      profileRow,
+      h("div.setting-groups", null, groups),
+      h(
+        "div.setup-foot",
+        null,
+        h(
+          "label.switch",
+          null,
+          h("input", {
+            type: "checkbox",
+            checked: expert,
+            onchange: (e) => {
+              store("heph-expert", e.target.checked);
+              draw();
+            },
+          }),
+          "Show expert settings",
+        ),
+        nChanged
+          ? h(
               "button.btn.sm",
               {
-                onclick: (e) => {
-                  e.preventDefault();
-                  st.overrides = {};
+                type: "button",
+                onclick: () => {
+                  for (const k of Object.keys(st.overrides)) if (!TOP_LEVEL_SETTINGS.has(k)) delete st.overrides[k];
                   st.parsed = null;
                   persist();
                   draw();
                 },
               },
               icon("reset"),
-              "Reset to defaults",
-            ),
-          )
-        : null,
+              "Reset all to defaults",
+            )
+          : null,
+      ),
     );
   }
 
@@ -657,11 +776,27 @@ function mountComposer(root) {
       h(
         "div.card-head",
         { style: { paddingBottom: "14px" } },
-        h("div", null, h("div.card-title", null, "Parsed specification"), h("div.card-sub", null, `Checked by ${p.parser.model || "the parser"} · edit the goal and review again to change it`)),
+        h(
+          "div",
+          null,
+          spec && spec.title ? h("div.spec-title", null, spec.title) : null,
+          h("div.card-title", null, "Parsed specification"),
+          h("div.card-sub", null, `Checked by ${modelName(p.parser.model) || "the parser"} · edit the goal and review again to change it`),
+        ),
         open ? pill("Needs answers", "warning", "alert") : errs.length ? pill("Check the goal", "critical", "alert") : pill("Ready to run", "good", "check"),
       ),
     );
     if (spec) card.append(specGrid(spec, config()));
+    if (p.gap) {
+      card.append(
+        h(
+          "div.callout.info",
+          { style: { margin: "0 18px 16px" } },
+          icon("wrench"),
+          h("div", null, h("strong", null, `No tool computes ${label(p.gap).toLowerCase()} yet.`), " The agent will read how papers compute it and propose a tool. You review the plan and then the code before the search starts."),
+        ),
+      );
+    }
     if (open) {
       card.append(
         h(
@@ -699,11 +834,40 @@ function mountComposer(root) {
     return card;
   }
 
+  // The status refresh redraws the composer, which would rebuild a field the user is typing in and
+  // drop the cursor, or replace a button between press and release so the click is lost. Hold the
+  // redraw while a field has focus or a pointer is down, and run it once both are over.
+  let heldDraw = false;
+  let pointerDown = false;
+  const typing = () => {
+    const el = document.activeElement;
+    return Boolean(el && view.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  };
+  const flush = () => {
+    if (heldDraw && !typing() && !pointerDown && !st.busy) {
+      heldDraw = false;
+      draw();
+    }
+  };
+  view.addEventListener("pointerdown", () => (pointerDown = true), true);
+  const onPointerUp = () => {
+    pointerDown = false;
+    setTimeout(flush, 0); // after the click that follows this pointerup
+  };
+  window.addEventListener("pointerup", onPointerUp, true);
+  window.addEventListener("pointercancel", onPointerUp, true);
+  view.addEventListener("focusout", () => setTimeout(flush, 0));
+
   draw();
   return {
-    unmount() {},
+    unmount() {
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+    },
     onHealth() {
-      if (!st.busy) draw();
+      if (st.busy) return;
+      if (typing() || pointerDown) heldDraw = true;
+      else draw();
     },
   };
 }
@@ -717,7 +881,8 @@ async function boot() {
     api("/models").catch(() => null),
     api("/config/schema").catch(() => null),
   ]);
-  app.defaults = defaults;
+  // The UI asks about agent-built tools by default; scripts and the Python API default to off (AT-3)
+  app.defaults = defaults ? { ...defaults, custom_tools: "ask" } : defaults;
   app.models = models;
   app.schema = schema;
   window.addEventListener("hashchange", route);

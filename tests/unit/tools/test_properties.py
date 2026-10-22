@@ -241,6 +241,6 @@ def test_pp4_band_gap_tool_reports_error_bar_and_target(
     assert not err and r["value"] == 3.5 and r["uncertainty"] == 0.65 and r["units"] == "eV"
     assert r["model"].startswith("MEGNet-BandGap-mfi") and r["target"]["direction"] == "minimise"
     assert ws.candidates["c1-1"].predictions["band_gap"].value.uncertainty == 0.65
-    ws.cfg.band_gap_fidelity = "pbe"
+    ws.cfg.band_gap_model = "megnet-pbe"
     r, _ = execute(ws, "predict_property", {"candidate_id": "c1-1", "property": "band_gap"})
     assert r["value"] == 1.8 and r["uncertainty"] == 0.57

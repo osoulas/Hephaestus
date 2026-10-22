@@ -283,7 +283,13 @@ class EventBus:
         return remove
 
     def replay(
-        self, run_id: str, replay_id: str, speed: float = 1.0, max_gap_s: float = 2.0
+        self,
+        run_id: str,
+        replay_id: str,
+        speed: float | Callable[[], float] = 1.0,
+        max_gap_s: float = 2.0,
+        stop: threading.Event | None = None,
+        start: int = 0,
     ) -> list[ProgressEvent]:
         """Re-emit a stored run's events under ``replay_id`` with their original pacing (UI-9).
 
@@ -293,27 +299,63 @@ class EventBus:
             Stored run to replay.
         replay_id : str
             Run ID the replayed events are published under (not written to disk).
-        speed : float
-            Playback speed; 2 plays twice as fast. Zero or less plays with no pauses.
+        speed : float or callable
+            Playback speed; 2 plays twice as fast, zero or less plays with no pauses. A callable is
+            read during each pause, so the speed can change while the replay runs.
         max_gap_s : float
             Longest pause between two events, in seconds, after scaling.
+        stop : threading.Event, optional
+            Set it to end the replay early.
+        start : int
+            Index of the first event to publish; a stopped replay resumes from where it ended.
 
         Returns
         -------
         list of ProgressEvent
             The replayed events.
         """
+        speed_now = speed if callable(speed) else (lambda: speed)
         source = self.history(run_id)
         out = []
         for i, event in enumerate(source):
-            if i and speed > 0:
-                gap = (event.time - source[i - 1].time).total_seconds() / speed
-                time.sleep(max(0.0, min(gap, max_gap_s)))
+            if i < start:
+                continue
+            if i > start:
+                self._pause((event.time - source[i - 1].time).total_seconds(), speed_now, max_gap_s, stop)
+            if stop is not None and stop.is_set():
+                break
             copy = event.model_copy(update={"run_id": replay_id})
             self._publish(copy, persist=False)
             out.append(copy)
         self.close_run(replay_id)
         return out
+
+    @staticmethod
+    def _pause(
+        gap_s: float, speed: Callable[[], float], max_gap_s: float, stop: threading.Event | None
+    ) -> None:
+        """Wait out one gap between replayed events, re-reading the speed as it goes.
+
+        Parameters
+        ----------
+        gap_s : float
+            Original gap, in s.
+        speed : callable
+            Current playback speed.
+        max_gap_s : float
+            Longest pause after scaling, in s.
+        stop : threading.Event or None
+            Ends the wait early when set.
+        """
+        waited = 0.0
+        while True:
+            s = speed()
+            need = 0.0 if s <= 0 else min(max(gap_s, 0.0) / s, max_gap_s)
+            if waited >= need or (stop is not None and stop.is_set()):
+                return
+            step = min(0.1, need - waited)
+            time.sleep(step)
+            waited += step
 
 
 BUS = EventBus()

@@ -13,6 +13,13 @@ Examples
 >>> for event in exp.events():          # history, then live, until the run ends
 ...     print(event.section, event.status)
 >>> exp.state.best, exp.brief
+
+When the goal needs a property no tool computes, and ``custom_tools="ask"``, the agent proposes a
+tool before the campaign (Section 14). Answer in code with a callback, or one decision at a time:
+
+>>> exp = Experiment(goal, custom_tools="ask", on_tool_proposal=lambda p: "accept")
+>>> exp.tool_proposals()                 # plans and code waiting for a decision
+>>> exp.decide("t1", "revise", "use an equation-of-state fit")
 """
 
 from __future__ import annotations
@@ -25,15 +32,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hephaestus.core.config import MODELS, RunConfig, runs_root
+from hephaestus.core.config import BAND_GAP_MODELS, MODELS, RunConfig, runs_root
 from hephaestus.core.events import BUS, EventBus
-from hephaestus.core.store import load_model, new_run_id
-from hephaestus.core.types import ProgressEvent, RunState, SearchSpec
+from hephaestus.core.store import atomic_write_text, load_model, new_run_id
+from hephaestus.core.types import CustomTool, ProgressEvent, RunState, SearchSpec, ToolDecision, ToolProposal
 from hephaestus.harness import runner
 from hephaestus.harness.agent import Campaign
-from hephaestus.harness.goal import parse_goal, validate_spec
+from hephaestus.harness.capability import HUB, Decider, find_gap, load_state
+from hephaestus.harness.goal import parse_goal, validate_for_run
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot
 from hephaestus.llm.base import LLM, api_credentials_present, make_llm, resolve_backend
+from hephaestus.tools import custom
 from hephaestus.tools.registry import Workspace, load_default_handlers
 
 _BUSES: dict[Path, EventBus] = {}
@@ -53,6 +62,7 @@ class ParseResult:
     questions: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     parser: dict[str, str] = field(default_factory=dict)
+    gap: str | None = None  # a property no tool computes: the run opens a capability phase (AT-1)
 
     @property
     def ready(self) -> bool:
@@ -71,13 +81,14 @@ class ParseResult:
         Returns
         -------
         dict
-            ``{spec, questions, errors, parser}``.
+            ``{spec, questions, errors, parser, gap}``.
         """
         return {
             "spec": self.spec.model_dump(mode="json") if self.spec else None,
             "questions": self.questions,
             "errors": self.errors,
             "parser": self.parser,
+            "gap": self.gap,
         }
 
 
@@ -114,6 +125,7 @@ class Experiment:
         run_id: str | None = None,
         root: Path | None = None,
         deps: runner.Deps | None = None,
+        on_tool_proposal: Decider | None = None,
         **options: Any,
     ) -> None:
         """Describe a run; nothing is written until ``parse``, ``run``, ``start`` or ``tool``.
@@ -135,6 +147,10 @@ class Experiment:
         deps : runner.Deps, optional
             Injected models, handlers and final check (tests, offline demos). Its ``root`` and
             ``bus`` are set from ``root`` when left at their defaults.
+        on_tool_proposal : callable, optional
+            Decides on agent-built tools (AT-29): ``f(ToolProposal)`` returns ``"accept"``,
+            ``"cancel_tool"``, ``"cancel_run"``, ``{"action": "revise", "message": ...}`` or a
+            ``ToolDecision``. Without it, answer with ``decide``.
         **options
             ``RunConfig`` fields overriding ``config``, e.g. ``llm_backend="api"``.
         """
@@ -151,11 +167,14 @@ class Experiment:
             self.deps.root = self.root
         if self.deps.bus is BUS:
             self.deps.bus = bus_for(self.root)
+        if on_tool_proposal is not None:
+            self.deps.decide = on_tool_proposal
         self._thread: threading.Thread | None = None
         self._result: RunState | None = None
         self._error: BaseException | None = None
         self._campaign: Campaign | None = None
         self._source: str | None = None  # stored run behind a replay
+        self.replay_control: dict[str, Any] | None = None  # speed and stop of a replay handle
 
     # ------------------------------------------------------------------ loading
 
@@ -248,15 +267,107 @@ class Experiment:
 
     @property
     def brief_pdf(self) -> Path | None:
-        """The brief's PDF, when one was rendered.
+        """The brief's PDF, rendered now if the run has a brief but no PDF yet (EB-10).
 
         Returns
         -------
         pathlib.Path or None
-            ``brief.pdf``, or ``None``.
+            ``brief.pdf``, or ``None`` before the brief exists.
         """
-        path = self.files.brief_pdf
+        return self._pdf(self.files.brief_md, self.files.brief_pdf)
+
+    @property
+    def compute_brief(self) -> str | None:
+        """The computational brief's Markdown: DFT settings and workflow for the winner.
+
+        Runs finished before it existed get one built now from their stored results.
+
+        Returns
+        -------
+        str or None
+            ``compute_brief.md``, or ``None`` before the lab brief exists.
+        """
+        path = self.files.compute_brief_md
+        if not path.exists() and self.files.brief_md.exists() and not self.running:
+            state, ws, _ = load_for_resume(self.files)
+            runner.write_compute_brief(state, ws, self.files)
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
+    @property
+    def compute_brief_pdf(self) -> Path | None:
+        """The computational brief's PDF, rendered now if missing or stale.
+
+        Returns
+        -------
+        pathlib.Path or None
+            ``compute_brief.pdf``, or ``None`` before the brief exists.
+        """
+        if self.compute_brief is None:
+            return None
+        return self._pdf(self.files.compute_brief_md, self.files.compute_brief_pdf)
+
+    def _pdf(self, md: Path, path: Path) -> Path | None:
+        """Render a brief's PDF if it is missing or older than its Markdown.
+
+        Parameters
+        ----------
+        md : pathlib.Path
+            The brief's Markdown.
+        path : pathlib.Path
+            Its PDF.
+
+        Returns
+        -------
+        pathlib.Path or None
+            The PDF, or ``None`` when there is no Markdown.
+        """
+        if md.exists() and (not path.exists() or path.stat().st_mtime < md.stat().st_mtime):
+            from hephaestus.harness.brief_pdf import export_pdf
+
+            state = self.state
+            export_pdf(md.read_text(encoding="utf-8"), path, state.run_id, state.raw_goal)
         return path if path.exists() else None
+
+    @property
+    def title(self) -> str:
+        """The run's title: the user's edit if any, else the parser's, else the start of the goal.
+
+        Returns
+        -------
+        str
+            Title.
+        """
+        return run_title_of(self.root or runs_root(), self._source or self.run_id, self.state)
+
+    def set_title(self, title: str) -> str:
+        """Rename the run; safe while it runs, as the title lives in its own file.
+
+        Parameters
+        ----------
+        title : str
+            New title.
+
+        Returns
+        -------
+        str
+            The stored title.
+
+        Raises
+        ------
+        ExperimentError
+            If the run does not exist, is a replay, or the title is empty or too long.
+        """
+        if self._source is not None:
+            raise ExperimentError("A replay takes its title from the recorded run.")
+        if not self.exists:
+            raise ExperimentError(f"No run {self.run_id}.")
+        clean = " ".join(title.split())
+        if not clean:
+            raise ExperimentError("The title cannot be empty.")
+        if len(clean) > TITLE_MAX_EDIT:
+            raise ExperimentError(f"Keep the title under {TITLE_MAX_EDIT} characters.")
+        atomic_write_text(self.files.root / TITLE_FILE, clean)
+        return clean
 
     def structure(self, candidate_id: str) -> str | None:
         """CIF of a candidate's current structure, relaxed when available (UI-7).
@@ -323,8 +434,10 @@ class Experiment:
         spec, questions, errors = parse_goal(llm, self.goal, self.config, self.answers)
         messages = [e.message for e in errors]
         if spec is not None:
-            messages += [m for m in validate_spec(spec) if m not in messages]
+            messages += [m for m in validate_for_run(spec, self.config) if m not in messages]
         result = ParseResult(spec, questions, messages, {"backend": llm.backend, "model": llm.model})
+        if spec is not None and self.config.custom_tools == "ask":
+            result.gap = find_gap(spec, self.config)
         if result.ready:
             self.spec = spec
         return result
@@ -494,17 +607,48 @@ class Experiment:
             raise self._error
         return self._result if self._result is not None else (self.state if self.exists else None)
 
-    def stop(self) -> bool:
-        """Ask the campaign to stop and submit; the run still ends with a brief (OR-8, UI-10).
+    def set_replay_speed(self, speed: float) -> None:
+        """Change a running replay's speed (UI-9).
+
+        Parameters
+        ----------
+        speed : float
+            New speed; 0 plays the rest with no pauses.
+
+        Raises
+        ------
+        ExperimentError
+            If this is not a replay.
+        """
+        if self.replay_control is None:
+            raise ExperimentError(f"{self.run_id} is not a replay.")
+        self.replay_control["speed"] = float(speed)
+
+    def stop(self, mode: str = "campaign") -> bool:
+        """Stop the run (OR-8, UI-10).
+
+        For a replay handle, ends the replay instead.
+
+        Parameters
+        ----------
+        mode : {"campaign", "all"}
+            ``"campaign"``: end the search; the best candidate still gets the final re-check and
+            the brief. ``"all"``: end the run after the current calculation, with no re-check and
+            no brief; ``resume()`` continues it later.
 
         Returns
         -------
         bool
             True if the run is active in this process.
         """
+        if mode not in ("campaign", "all"):
+            raise ValueError(f"mode must be 'campaign' or 'all', not {mode!r}")
+        if self.replay_control is not None:
+            self.replay_control["stop"].set()
+            return self.running
         if self._campaign is not None:
-            self._campaign.request_stop()
-        return runner.request_stop(self.run_id)
+            self._campaign.request_stop(abort=mode == "all")
+        return runner.request_stop(self.run_id, mode)
 
     # ------------------------------------------------------------------ events
 
@@ -563,14 +707,123 @@ class Experiment:
         handle = Experiment(self.goal, self.config, spec=self.spec, run_id=rid, root=self.root)
         handle.deps.bus = self.deps.bus
         handle._source = self.run_id
+        handle.replay_control = {
+            "source": self.run_id,
+            "total_events": len(self.deps.bus.history(self.run_id)),
+            "speed": float(speed),
+            "stop": threading.Event(),
+        }
+        handle._play()
+        return handle
+
+    def _play(self, start: int = 0) -> None:
+        """Publish the stored run's events under this replay's ID in a thread.
+
+        Parameters
+        ----------
+        start : int
+            Index of the first event.
+        """
+        ctl = self.replay_control
+        assert ctl is not None
+        ctl["stop"] = threading.Event()
 
         def play() -> None:
             """Publish the stored events under the replay ID."""
-            self.deps.bus.replay(self.run_id, rid, speed)
+            self.deps.bus.replay(
+                ctl["source"], self.run_id, lambda: ctl["speed"], stop=ctl["stop"], start=start
+            )
 
-        handle._thread = threading.Thread(target=play, daemon=True, name=f"replay-{rid}")
-        handle._thread.start()
-        return handle
+        self._thread = threading.Thread(target=play, daemon=True, name=f"replay-{self.run_id}")
+        self._thread.start()
+
+    def resume_replay(self) -> int:
+        """Continue a stopped replay from the first event it has not shown (UI-9).
+
+        Returns
+        -------
+        int
+            Index of the event it resumes from.
+
+        Raises
+        ------
+        ExperimentError
+            If this is not a replay, it is still playing, or it already showed every event.
+        """
+        ctl = self.replay_control
+        if ctl is None:
+            raise ExperimentError(f"{self.run_id} is not a replay.")
+        if self.running:
+            raise ExperimentError(f"Replay {self.run_id} is still playing.")
+        start = len(self.deps.bus.history(self.run_id))
+        if start >= ctl["total_events"]:
+            raise ExperimentError(f"Replay {self.run_id} already finished.")
+        self._play(start)
+        return start
+
+    # ------------------------------------------------------------------ agent-built tools
+
+    def tool_proposals(self) -> list[dict[str, Any]]:
+        """Proposals of the capability phase, with the actions offered while one waits (AT-13, AT-24).
+
+        Returns
+        -------
+        list of dict
+            ``ToolProposal`` fields (or ``UserRequest`` fields, with ``kind``) plus ``waiting``
+            (bool) and ``allowed`` (actions).
+        """
+        cap = load_state(self.files.root / "capability") if self.exists else None
+        if cap is None:
+            return []
+        waits = {w["proposal_id"]: w for w in HUB.waiting(self.run_id)}
+        out = []
+        for p in cap.proposals.values():
+            w = waits.get(p.proposal_id)
+            out.append(
+                {
+                    **p.model_dump(mode="json"),
+                    "waiting": w is not None and w["stage"] == p.stage,
+                    "allowed": w["allowed"] if w else [],
+                }
+            )
+        for r in cap.requests.values():  # package requests and questions from the agent
+            w = waits.get(r.request_id)
+            out.append(
+                {**r.model_dump(mode="json"), "waiting": w is not None, "allowed": w["allowed"] if w else []}
+            )
+        return out
+
+    def decide(self, proposal_id: str, action: str, message: str | None = None) -> ToolDecision:
+        """Answer a proposal waiting for the user (AT-7, AT-13, AT-29).
+
+        Parameters
+        ----------
+        proposal_id : str
+            Proposal, e.g. ``"t1"``.
+        action : {"accept", "revise", "cancel_tool", "cancel_run", "allow", "deny", "answer"}
+            The decision; ``allow`` and ``deny`` answer a package request, ``answer`` a question.
+        message : str, optional
+            What to change, for ``revise``; the answer, for ``answer``.
+
+        Returns
+        -------
+        ToolDecision
+            The decision delivered.
+
+        Raises
+        ------
+        ExperimentError
+            If the proposal is not waiting, or the action is not offered.
+        """
+        stage = next((w["stage"] for w in HUB.waiting(self.run_id) if w["proposal_id"] == proposal_id), None)
+        if stage is None:
+            raise ExperimentError(f"Proposal {proposal_id} is not waiting for a decision.")
+        try:
+            decision = ToolDecision(proposal_id=proposal_id, stage=stage, action=action, message=message)  # type: ignore[arg-type]
+            HUB.submit(self.run_id, decision)
+        except ValueError as exc:
+            raise ExperimentError(str(exc)) from exc
+        return decision
 
     # ------------------------------------------------------------------ step by step
 
@@ -633,6 +886,7 @@ class Experiment:
             state, files = runner.new_run(self.goal, self.config, self.spec, self.root, self.run_id)
             ws, critiques = Workspace(run_id=self.run_id, spec=self.spec, cfg=self.config), []
         handlers = dict(self.deps.handlers) if self.deps.handlers is not None else load_default_handlers()
+        handlers.update(custom.custom_handlers(ws, self.deps.toolkit_factory))
         if ws.spec.reference_material and ws.spec.reference_value is None:
             spec, errors = runner.resolve_reference(ws, handlers)
             ws.spec = state.spec = self.spec = spec
@@ -647,6 +901,7 @@ class Experiment:
             critiques=critiques,
             novelty_fn=self.deps.novelty_fn,
             snapshot=lambda c: save_snapshot(files, state, c.ws, c.critiques),
+            tools=custom.campaign_tools(ws),
         )
         save_snapshot(files, state, ws, critiques)
         self._campaign = campaign
@@ -671,6 +926,39 @@ class Experiment:
 
 
 # ---------------------------------------------------------------------- module helpers
+
+TITLE_FILE = "title.txt"
+TITLE_MAX_EDIT = 120
+
+
+def run_title_of(root: Path, run_id: str, state: RunState | None = None) -> str:
+    """Return a run's title: ``title.txt`` (the user's edit), else the parser's, else the goal's start.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Runs folder.
+    run_id : str
+        Run ID.
+    state : RunState, optional
+        The run's state, when already loaded.
+
+    Returns
+    -------
+    str
+        Title.
+    """
+    try:
+        edited = (Path(root) / run_id / TITLE_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        edited = ""
+    if edited:
+        return edited
+    if state is not None and state.spec is not None and state.spec.title:
+        return state.spec.title
+    from hephaestus.harness.goal import run_title
+
+    return run_title(None, state.raw_goal if state is not None else run_id)
 
 
 def _to_cif(pmg_dict: dict[str, Any] | None) -> str | None:
@@ -723,7 +1011,7 @@ def list_runs(root: Path | None = None) -> list[dict[str, Any]]:
     Returns
     -------
     list of dict
-        ``{run_id, raw_goal, status, best, stop_reason, created_at, running}`` per run.
+        ``{run_id, raw_goal, title, status, best, stop_reason, created_at, running}`` per run.
     """
     base = Path(root) if root else runs_root()
     out = []
@@ -736,6 +1024,7 @@ def list_runs(root: Path | None = None) -> list[dict[str, Any]]:
             {
                 "run_id": s.run_id,
                 "raw_goal": s.raw_goal,
+                "title": run_title_of(base, s.run_id, s),
                 "status": s.status,
                 "best": s.best,
                 "stop_reason": s.stop_reason,
@@ -843,14 +1132,23 @@ def backend_ready(backend: str, status: dict[str, Any] | None = None) -> tuple[b
 
 
 def models() -> dict[str, Any]:
-    """List the selectable Claude models and the default (OR-11, UI-12).
+    """List the selectable Claude models and band gap models, with defaults (OR-11, UI-12).
 
     Returns
     -------
     dict
-        ``{models, default}``.
+        ``{models, default, band_gap_models, band_gap_default}``; each band gap model has
+        ``id``, ``label`` and ``description``.
     """
-    return {"models": list(MODELS), "default": RunConfig().llm_model}
+    return {
+        "models": list(MODELS),
+        "default": RunConfig().llm_model,
+        "band_gap_models": [
+            {"id": k, "label": v["label"], "description": v["description"]}
+            for k, v in BAND_GAP_MODELS.items()
+        ],
+        "band_gap_default": RunConfig().band_gap_model,
+    }
 
 
 def device_status() -> dict[str, Any]:
@@ -870,6 +1168,79 @@ def device_status() -> dict[str, Any]:
     except Exception:
         cuda = False
     return {"torch": True, "cuda": cuda, "device": "cuda" if cuda else "cpu"}
+
+
+def tool_library(library_dir: str | Path | None = None) -> dict[str, Any]:
+    """Return the tool library: approved tools, and files waiting for review (AT-20, AT-21).
+
+    Parameters
+    ----------
+    library_dir : str or pathlib.Path, optional
+        Library folder; ``RunConfig().tool_library_dir`` by default.
+
+    Returns
+    -------
+    dict
+        ``{dir, approved: [CustomTool + source, tests], unapproved: [{name, file, sha256, header,
+        error, source, tests, changed, check}]}``.
+    """
+    lib = Path(library_dir) if library_dir is not None else custom.library_dir(RunConfig())
+    approved, unapproved = custom.scan_library(lib)
+    rows = []
+    for t in approved:
+        source, tests = custom.load_sources(t)
+        rows.append({**t.model_dump(mode="json"), "source": source, "tests": tests})
+    for f in unapproved:
+        f["check"] = custom.static_check(f["source"], "tool", custom.header_packages(f["header"]))
+    return {"dir": str(lib.resolve()), "approved": rows, "unapproved": unapproved}
+
+
+def approve_tool(name: str, sha256: str, library_dir: str | Path | None = None) -> CustomTool:
+    """Approve a library file exactly as it was reviewed (AT-21).
+
+    Parameters
+    ----------
+    name : str
+        Tool name (file stem).
+    sha256 : str
+        Fingerprint shown with the file in ``tool_library``.
+    library_dir : str or pathlib.Path, optional
+        Library folder.
+
+    Returns
+    -------
+    CustomTool
+        The approved tool.
+
+    Raises
+    ------
+    ExperimentError
+        If the files changed since they were shown, or fail the static check.
+    """
+    lib = Path(library_dir) if library_dir is not None else custom.library_dir(RunConfig())
+    try:
+        return custom.approve_file(lib, name, sha256)
+    except ValueError as exc:
+        raise ExperimentError(str(exc)) from exc
+
+
+def remove_tool(name: str, library_dir: str | Path | None = None) -> bool:
+    """Delete a tool and its tests from the library.
+
+    Parameters
+    ----------
+    name : str
+        Tool name.
+    library_dir : str or pathlib.Path, optional
+        Library folder.
+
+    Returns
+    -------
+    bool
+        True if anything was removed.
+    """
+    lib = Path(library_dir) if library_dir is not None else custom.library_dir(RunConfig())
+    return custom.remove_tool(lib, name)
 
 
 def run(goal: str, config: RunConfig | None = None, **options: Any) -> RunState:
@@ -932,6 +1303,8 @@ __all__ = [
     "Experiment",
     "ExperimentError",
     "ParseResult",
+    "ToolProposal",
+    "approve_tool",
     "backend_ready",
     "backend_status",
     "bus_for",
@@ -939,8 +1312,10 @@ __all__ = [
     "list_runs",
     "load",
     "models",
+    "remove_tool",
     "resume",
     "run",
     "run_blockers",
     "simulation_status",
+    "tool_library",
 ]

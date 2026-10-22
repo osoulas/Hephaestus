@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from hephaestus.core.concurrency import KeyedLocks, RWLock
+from hephaestus.core.config import budget_limit
 from hephaestus.core.events import BUS, EventBus
 from hephaestus.core.types import Critique, ErrorRecord, Submission
 from hephaestus.harness import gates as G
@@ -38,6 +39,11 @@ from hephaestus.tools.registry import (
 NoveltyFn = Callable[[Workspace, str], dict[str, Any]]
 HARD_EXTRA_CALLS = 8
 HARD_TIME_FACTOR = 1.25
+# After the user stops the campaign, the orchestrator may only submit; if it has not done so
+# within this time, or keeps asking for calculations, code picks the answer (OR-3, OR-8).
+STOP_GRACE_S = 90.0
+STOP_REFUSALS = 3
+STOP_ALLOWED = {"submit_final", "candidate_status"}
 MAX_NUDGES = 3
 LITERATURE_TOOLS = {"search_literature", "related_papers", "get_paper", "publication_trend", "note_evidence"}
 
@@ -105,6 +111,7 @@ class Campaign:
         snapshot: Callable[[Campaign], None] | None = None,
         elapsed_offset_s: float = 0.0,
         clock: Callable[[], float] = time.monotonic,
+        tools: list[dict[str, Any]] | None = None,
     ) -> None:
         """Set up a campaign.
 
@@ -130,14 +137,18 @@ class Campaign:
             Wall time already spent before a resume, in seconds.
         clock : callable
             Monotonic clock, injectable for tests.
+        tools : list of dict, optional
+            Tool definitions the model sees; ``TOOLS`` by default. Runs with agent-built tools or
+            disabled capabilities pass their own list (AT-16, AT-26).
         """
         self.ws = ws
+        self.tools = list(TOOLS if tools is None else tools)
         self.llm = llm
         self.reviewer_llm = reviewer_llm or llm
         self.handlers = dict(HANDLERS if handlers is None else handlers)
         self.bus = bus
         self.critiques: list[Critique] = list(critiques or [])
-        self.best_checks: list[dict[str, bool]] = []
+        self.best_checks: list[dict[str, bool | None]] = []
         for c in self.critiques:
             self.best_checks.append(
                 {
@@ -145,7 +156,9 @@ class Campaign:
                     "target_met_conservative": c.target_met_conservative,
                     "thermo_stable": c.thermo_stable,
                     "dyn_stable": c.dyn_stable,
-                    "all_passed": c.target_met_central and c.thermo_stable and c.dyn_stable,
+                    "all_passed": c.target_met_central
+                    and c.thermo_stable is not False
+                    and c.dyn_stable is not False,
                 }
             )
         self.novelty_fn = novelty_fn if novelty_fn is not None else default_novelty_fn()
@@ -154,6 +167,9 @@ class Campaign:
         self.clock = clock
         self._t0 = clock() - elapsed_offset_s
         self.stop_event = threading.Event()
+        self.abort_event = threading.Event()
+        self._stop_at: float | None = None
+        self._refused = 0
         self._rw = RWLock()  # shared: per-candidate calls; exclusive: run control, snapshots
         self._cand_locks = KeyedLocks()
         self._book = threading.Lock()  # budget counter, call IDs, submit reason
@@ -177,12 +193,31 @@ class Campaign:
         """
         return self.clock() - self._t0
 
-    def request_stop(self) -> None:
-        """Ask the campaign to stop: the orchestrator is told to submit (OR-8)."""
-        self.stop_event.set()
+    def request_stop(self, abort: bool = False) -> None:
+        """Stop the campaign (OR-8).
+
+        No new calculation starts: the orchestrator may only submit. If it does not within
+        ``STOP_GRACE_S``, or keeps asking for calculations, the hard limit ends the campaign and
+        code picks the answer.
+
+        Parameters
+        ----------
+        abort : bool
+            End the campaign at once, without waiting for the orchestrator to submit.
+        """
+        with self._book:
+            if self._stop_at is None:
+                self._stop_at = self.elapsed_s
+            self.stop_event.set()
+            if abort:
+                self.abort_event.set()
+            self._update_submit_reason()  # so the next submission is accepted even if it fails the gate
 
     def hard_limit_hit(self) -> bool:
-        """Whether the hard limit is reached: budget + 8 calls, or 125 % of the wall time.
+        """Whether the hard limit is reached: budget + 8 calls, 125 % of the wall time, or a stop.
+
+        A stop ends the campaign at once when aborting, else after ``STOP_GRACE_S`` or
+        ``STOP_REFUSALS`` refused calls.
 
         Returns
         -------
@@ -190,10 +225,14 @@ class Campaign:
             True when the campaign must end now.
         """
         cfg = self.ws.cfg
-        return (
-            self.ws.tool_calls >= cfg.max_tool_calls + HARD_EXTRA_CALLS
-            or self.elapsed_s >= HARD_TIME_FACTOR * cfg.time_budget_s
+        stopped = self._stop_at is not None and (
+            self.abort_event.is_set()
+            or self._refused >= STOP_REFUSALS
+            or self.elapsed_s - self._stop_at >= STOP_GRACE_S
         )
+        over_calls = self.ws.tool_calls >= budget_limit(cfg.max_tool_calls) + HARD_EXTRA_CALLS
+        over_time = self.elapsed_s >= HARD_TIME_FACTOR * budget_limit(cfg.time_budget_s)
+        return stopped or over_calls or over_time
 
     def _update_submit_reason(self) -> None:
         """Set ``submit_reason`` when the user stopped, or a budget ran out (OR-8 to OR-10)."""
@@ -201,9 +240,9 @@ class Campaign:
             return
         if self.stop_event.is_set():
             self.submit_reason = "user_stop"
-        elif self.ws.tool_calls >= self.ws.cfg.max_tool_calls:
+        elif self.ws.tool_calls >= budget_limit(self.ws.cfg.max_tool_calls):
             self.submit_reason = "tool_budget"
-        elif self.elapsed_s >= self.ws.cfg.time_budget_s:
+        elif self.elapsed_s >= budget_limit(self.ws.cfg.time_budget_s):
             self.submit_reason = "wall_time"
         if self.submit_reason and not self.stop_rule:
             self.stop_rule = self.submit_reason
@@ -269,6 +308,7 @@ class Campaign:
             "novelty": cs.candidate.novelty,
             "rationale": cs.candidate.rationale,
             "evidence_ids": cs.candidate.evidence_ids,
+            "targets": f.get("targets"),  # per-target results when there is more than one target
         }
 
     # ------------------------------------------------------------------ tools
@@ -344,6 +384,12 @@ class Campaign:
                 }, True
             if self.hard_limit_hit():
                 return {"error": "Hard limit reached; the campaign is ending."}, True
+            if self.stop_event.is_set() and name not in STOP_ALLOWED:
+                self._refused += 1
+                return {
+                    "error": "The user stopped the campaign: no more calculations. "
+                    "Call submit_final now with your best candidate and a runner-up."
+                }, True
             self.ws.tool_calls += 1
             self._call_seq += 1
             call_id = self._call_seq
@@ -538,7 +584,7 @@ class Campaign:
             "candidates": [G.facts(self.ws, cid) for cid in self.ws.candidates],
             "budget": {
                 "tool_calls_used": self.ws.tool_calls,
-                "max_tool_calls": self.ws.cfg.max_tool_calls,
+                "max_tool_calls": self.ws.cfg.max_tool_calls or "no limit",
                 "compute_s": round(self.ws.compute_s, 1),
                 "elapsed_s": round(self.elapsed_s, 1),
             },
@@ -610,6 +656,7 @@ class Campaign:
                 "gate_note": decision.gate_note,
                 "scores": [c.score for c in self.critiques],
                 "llm_scores": [c.llm_confidence for c in self.critiques],
+                "usage": dict(self.usage),
             },
         )
         if decision.stop:
@@ -753,7 +800,7 @@ class Campaign:
             driver = getattr(self.llm, "run_campaign", None)
             if callable(driver):
                 try:
-                    driver(ORCHESTRATOR_SYSTEM, self.kickoff(resume), TOOLS, self)
+                    driver(ORCHESTRATOR_SYSTEM, self.kickoff(resume), self.tools, self)
                 except LLMError as exc:
                     self.errors.append(
                         ErrorRecord(step="orchestrator", code="llm_failed", message=str(exc)[:500])
@@ -783,7 +830,7 @@ class Campaign:
         failures = 0
         while not self.ws.submitted and not self.hard_limit_hit():
             try:
-                turn = self.llm.step(ORCHESTRATOR_SYSTEM, self.messages, TOOLS)
+                turn = self.llm.step(ORCHESTRATOR_SYSTEM, self.messages, self.tools)
             except LLMError as exc:
                 failures += 1
                 self.errors.append(
