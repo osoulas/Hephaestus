@@ -834,11 +834,30 @@ function mountComposer(root) {
     return card;
   }
 
+  // The status refresh redraws the composer, which would rebuild a field the user is typing in and
+  // drop the cursor. While a field has focus, hold the redraw until focus leaves the composer's fields.
+  let heldDraw = false;
+  const typing = () => {
+    const el = document.activeElement;
+    return Boolean(el && view.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  };
+  view.addEventListener("focusout", () => {
+    if (!heldDraw) return;
+    setTimeout(() => {
+      if (heldDraw && !typing() && !st.busy) {
+        heldDraw = false;
+        draw();
+      }
+    }, 0);
+  });
+
   draw();
   return {
     unmount() {},
     onHealth() {
-      if (!st.busy) draw();
+      if (st.busy) return;
+      if (typing()) heldDraw = true;
+      else draw();
     },
   };
 }
