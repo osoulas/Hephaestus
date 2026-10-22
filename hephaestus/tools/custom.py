@@ -134,20 +134,38 @@ SOURCE_MODULES = ("simulation", "structures")
 # ---------------------------------------------------------------------------
 
 
-def import_allowed(name: str) -> bool:
+def allowlist(extra: tuple[str, ...] | list[str] = ()) -> list[str]:
+    """Return the import allowlist, plus packages the user approved for this tool.
+
+    Parameters
+    ----------
+    extra : sequence of str
+        Approved top-level packages, e.g. ``["phonopy"]``; each allows its submodules too.
+
+    Returns
+    -------
+    list of str
+        Entries in ``ALLOWED_IMPORTS`` form.
+    """
+    return [*ALLOWED_IMPORTS, *(f"{p}.*" for p in extra)]
+
+
+def import_allowed(name: str, extra: tuple[str, ...] | list[str] = ()) -> bool:
     """Whether a tool may import a module.
 
     Parameters
     ----------
     name : str
         Dotted module name.
+    extra : sequence of str
+        Packages the user approved for this tool.
 
     Returns
     -------
     bool
-        True when ``name`` matches ``ALLOWED_IMPORTS``.
+        True when ``name`` matches the allowlist.
     """
-    for entry in ALLOWED_IMPORTS:
+    for entry in allowlist(extra):
         if entry.endswith(".*"):
             root = entry[:-2]
             if name == root or name.startswith(root + "."):
@@ -193,7 +211,7 @@ def read_header(source: str) -> dict[str, Any]:
     raise ValueError("no TOOL header")
 
 
-def static_check(source: str, kind: str = "tool") -> dict[str, Any]:
+def static_check(source: str, kind: str = "tool", extra: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
     """Check a tool or test file without importing it (AT-11).
 
     Parameters
@@ -203,6 +221,8 @@ def static_check(source: str, kind: str = "tool") -> dict[str, Any]:
     kind : {"tool", "test"}
         A tool needs a valid ``TOOL`` header and ``run(structure, inputs, hp)``; a test file
         needs at least one ``test_*`` function.
+    extra : sequence of str
+        Packages beyond the allowlist that the user approved (``TOOL["packages"]``).
 
     Returns
     -------
@@ -221,12 +241,12 @@ def static_check(source: str, kind: str = "tool") -> dict[str, Any]:
         line = getattr(node, "lineno", "?")
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if not import_allowed(alias.name):
+                if not import_allowed(alias.name, extra):
                     problems.append(f"line {line}: import of {alias.name!r} is not allowed")
         elif isinstance(node, ast.ImportFrom):
             if node.level:
                 problems.append(f"line {line}: relative imports are not allowed")
-            elif not import_allowed(node.module or ""):
+            elif not import_allowed(node.module or "", extra):
                 problems.append(f"line {line}: import from {node.module!r} is not allowed")
         elif isinstance(node, ast.Name):
             if node.id in BANNED_NAMES or node.id.startswith("__"):
@@ -253,6 +273,79 @@ def static_check(source: str, kind: str = "tool") -> dict[str, Any]:
     elif not any(isinstance(n, ast.FunctionDef) and n.name.startswith("test_") for n in tree.body):
         problems.append("no test_* function")
     return {"passed": not problems, "report": "\n".join(problems) or "passed"}
+
+
+PIP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}(==[0-9][A-Za-z0-9.]{0,30})?$")
+MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,60}$")
+
+
+def header_packages(header: dict[str, Any]) -> list[str]:
+    """Return the top-level packages a tool declares beyond the allowlist (``TOOL["packages"]``).
+
+    Parameters
+    ----------
+    header : dict
+        The ``TOOL`` header.
+
+    Returns
+    -------
+    list of str
+        Valid package names; anything else is dropped.
+    """
+    raw = header.get("packages") or []
+    return [str(p) for p in raw if isinstance(p, str) and MODULE_RE.match(p)] if isinstance(raw, list) else []
+
+
+def importable(module: str) -> bool:
+    """Whether the server's Python (which the sandbox uses) can import a package.
+
+    Parameters
+    ----------
+    module : str
+        Top-level import name.
+
+    Returns
+    -------
+    bool
+        True when it is installed.
+    """
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def install_package(pip_name: str, timeout_s: float = 600.0) -> tuple[bool, str]:
+    """Install a package into the server's Python with pip, after the user allowed it.
+
+    Parameters
+    ----------
+    pip_name : str
+        Distribution name, optionally pinned (``name==1.2``); no URLs, paths or flags.
+    timeout_s : float
+        Limit on the install, s.
+
+    Returns
+    -------
+    ok : bool
+        Whether pip succeeded.
+    log : str
+        The end of pip's output.
+    """
+    if not PIP_RE.match(pip_name):
+        return False, f"{pip_name!r} is not a plain package name."
+    try:
+        out = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", pip_name],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)[:500]
+    return out.returncode == 0, (out.stdout + out.stderr)[-1500:]
 
 
 def header_problems(header: dict[str, Any]) -> list[str]:
@@ -480,6 +573,7 @@ def save_tool(
         approved_at=utcnow(),
         run_id=run_id,
         description=header.get("description", ""),
+        packages=header_packages(header),
     )
     tools = read_manifest(lib)
     tools[name] = entry
@@ -515,7 +609,7 @@ def approve_file(lib: Path, name: str, sha_shown: str) -> CustomTool:
     source, tests = _read(tool_file), _read(test_file)
     if fingerprint(source, tests) != sha_shown:
         raise ValueError("The files changed since they were shown; review them again.")
-    check = static_check(source, "tool")
+    check = static_check(source, "tool", header_packages(read_header(source)))
     if not check["passed"]:
         raise ValueError("Static check failed: " + check["report"])
     header = read_header(source)
@@ -1145,6 +1239,7 @@ def run_sandboxed(
     inputs: dict[str, Any] | None = None,
     test_file: Path | None = None,
     timeout_s: float = 300.0,
+    extra: tuple[str, ...] | list[str] = (),
 ) -> dict[str, Any]:
     """Run a tool, or its tests, in a worker process (AT-14, AT-15).
 
@@ -1167,6 +1262,8 @@ def run_sandboxed(
         Test file, for ``op="test"``.
     timeout_s : float
         Limit on the worker's own time, s.
+    extra : sequence of str
+        Packages beyond the allowlist that the user approved for this tool.
 
     Returns
     -------
@@ -1180,7 +1277,7 @@ def run_sandboxed(
         "tests": str(Path(test_file).resolve()) if test_file else None,
         "structure": structure or {},
         "inputs": inputs or {},
-        "allowed": ALLOWED_IMPORTS,
+        "allowed": allowlist(extra),
         "cpu_s": timeout_s,
         "mem_mb": MEMORY_MB,
     }
@@ -1396,6 +1493,7 @@ def make_handler(tool: CustomTool, toolkit_factory: ToolkitFactory | None = None
                 structure=structure,
                 inputs=inputs,
                 timeout_s=ws.cfg.custom_tool_timeout_s,
+                extra=tool.packages,
             )
             if not out["ok"]:
                 raise ToolError(f"{tool.name} failed: {out['error']}")

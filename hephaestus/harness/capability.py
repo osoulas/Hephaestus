@@ -34,6 +34,7 @@ from hephaestus.core.types import (
     ToolDecision,
     ToolProposal,
     ToolStage,
+    UserRequest,
 )
 from hephaestus.harness.agent import LITERATURE_TOOLS, shorten
 from hephaestus.harness.prompts import CAPABILITY_SYSTEM, capability_kickoff
@@ -44,11 +45,13 @@ from hephaestus.tools.registry import TOOLS, CandidateState, Handler, ToolError,
 CAP_LITERATURE = ("search_literature", "related_papers", "get_paper", "note_evidence")
 FIX_ATTEMPTS = 3
 MAX_NUDGES = 3
+MAX_IDLE_TURNS = 2  # turns ending with no tool call and nothing pending before the phase gives up
+REQUEST_STAGES = {"package", "question"}
 WAIT_POLL_S = 0.5
 TRIAL_ID = "trial"
 DEFAULT_TRIAL = "SrTiO3"
 Outcome = Literal["filled", "cancelled_tool", "cancelled_run", "budget", "failed"]
-Decider = Callable[[ToolProposal], "ToolDecision | dict[str, Any] | None"]
+Decider = Callable[["ToolProposal | UserRequest"], "ToolDecision | dict[str, Any] | str | None"]
 
 
 def _schema(name: str, description: str, props: dict[str, Any]) -> dict[str, Any]:
@@ -94,7 +97,7 @@ CAPABILITY_TOOLS: list[dict[str, Any]] = [
         "propose_tool",
         "Propose a tool for the missing property, for the user to accept, change or cancel. Returns at once; "
         "end your turn and the user's decision arrives as the next message. To revise after the user asks "
-        "for changes, call again with the same name.",
+        "for changes (to the plan or to the code), call again with the same name.",
         {
             "name": {"type": "string", "description": "snake_case tool name"},
             "property": {"type": "string", "description": "the missing property's key, exactly"},
@@ -119,6 +122,32 @@ CAPABILITY_TOOLS: list[dict[str, Any]] = [
         "a trial run in a sandbox. If a check fails, fix it and call again. When all pass, end your turn: the "
         "user reviews the code.",
         {"proposal_id": STR, "source": STR, "tests": STR},
+    ),
+    _schema(
+        "request_package",
+        "Ask the user to allow a Python package outside the sandbox's allowlist (for example phonopy), and to "
+        "install it if the server does not have it. Returns at once; end your turn and the user's answer "
+        "arrives as the next message. Once allowed, list it in TOOL['packages'] and import it.",
+        {
+            "module": {"type": "string", "description": "top-level import name, e.g. phonopy"},
+            "pip_name": {"type": ["string", "null"], "description": "pip name if it differs, may be pinned"},
+            "reason": {"type": "string", "description": "why the tool needs it, in one or two sentences"},
+        },
+    ),
+    _schema(
+        "ask_user",
+        "Ask the user a question when you need their choice to continue (the user never reads your plain text "
+        "as a question). Returns at once; end your turn and the answer arrives as the next message.",
+        {
+            "question": STR,
+            "options": {"type": "array", "items": STR, "description": "suggested answers; may be empty"},
+        },
+    ),
+    _schema(
+        "give_up",
+        "End the phase without a tool, when none can be built within the constraints. The run then screens "
+        "stability only. Say why in one or two sentences.",
+        {"reason": STR},
     ),
 ]
 
@@ -287,6 +316,9 @@ class CapabilityState(BaseModel):
     trial_structure: dict[str, Any] | None = None
     trial_note: str = ""
     reviewed_files: list[str] = Field(default_factory=list)  # library files already shown (sha256)
+    requests: dict[str, UserRequest] = Field(default_factory=dict)  # package requests and questions
+    approved_packages: list[str] = Field(default_factory=list)  # imports the user allowed in this phase
+    end_reason: str = ""  # why the phase ended without a tool (give_up, stuck)
 
 
 def find_gap(spec: SearchSpec, cfg: RunConfig, library: list[CustomTool] | None = None) -> str | None:
@@ -375,6 +407,7 @@ class CapabilityPhase:
         self._wait_s = 0.0
         self._offset = self.state.agent_s
         self._seq = 0
+        self._idle = 0  # agent turns in a row with no tool call
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ host protocol
@@ -442,7 +475,31 @@ class CapabilityPhase:
         """
         if self.pending:
             return self.await_decision()
-        return "Continue: research the method, then call propose_tool; after the user accepts a plan, call write_tool."
+        self._idle += 1
+        if self._idle > MAX_IDLE_TURNS:  # the agent is stuck: stop instead of nudging forever
+            self._end(f"the agent made no progress for {self._idle} turns")
+            return "The phase is over. Make no more calls."
+        return (
+            "You ended your turn without a tool call. The user does not read your text as a question and "
+            "nothing is waiting for them. Continue with a tool call: ask_user to ask the user something, "
+            "request_package for a package outside the allowlist, propose_tool or write_tool to make progress, "
+            "or give_up if no tool can be built."
+        )
+
+    def _end(self, reason: str) -> None:
+        """End the phase without a tool (give_up, or stuck).
+
+        Parameters
+        ----------
+        reason : str
+            Why, shown to the user.
+        """
+        self.state.outcome = "failed"
+        self.state.end_reason = reason
+        self.emit(
+            "cancelled", {"proposal_id": None, "scope": "tool", "supplies_target": True, "reason": reason}
+        )
+        self.save()
 
     def save(self) -> None:
         """Write ``capability/state.json``."""
@@ -474,6 +531,7 @@ class CapabilityPhase:
         """
         with self._lock:
             self._seq += 1
+            self._idle = 0
             call_id = f"cap{self._seq}"
             shown = shorten(args, max_str=300)
             self.bus.emit(
@@ -492,6 +550,9 @@ class CapabilityPhase:
                         "read_tool_source": self._read_source,
                         "propose_tool": self._propose,
                         "write_tool": self._write,
+                        "request_package": self._request_package,
+                        "ask_user": self._ask_user,
+                        "give_up": self._give_up,
                     }.get(name)
                     if fn is None:
                         raise ToolError(f"{name} is not available in the capability phase.")
@@ -595,7 +656,7 @@ class CapabilityPhase:
             raise ToolError(f"The library already has a tool named {name}; choose another name.")
         existing = next((p for p in self.state.proposals.values() if p.name == name), None)
         if existing is not None:
-            if not (existing.stage == "plan" and existing.status == "revise"):
+            if existing.status != "revise":  # a change request at either stage may need a new plan
                 raise ToolError(
                     f"{name} was already proposed; revise it only after the user asks for changes."
                 )
@@ -714,11 +775,25 @@ class CapabilityPhase:
         if not ready:
             raise ToolError("Write the tool only after the user accepts the plan (or asks for code changes).")
         checks: dict[str, ToolCheck] = {}
-        static = custom.static_check(source, "tool")
-        tstatic = custom.static_check(tests, "test")
+        try:
+            declared = custom.header_packages(custom.read_header(source))
+        except ValueError:
+            declared = []
+        extra = [p for p in declared if p in self.state.approved_packages]
+        static = custom.static_check(source, "tool", extra)
+        tstatic = custom.static_check(tests, "test", extra)
         problems = [] if static["passed"] else [static["report"]]
+        for p in declared:
+            if p not in self.state.approved_packages:
+                problems.append(
+                    f"TOOL['packages'] lists {p!r}, which the user has not allowed: call request_package"
+                )
         if not tstatic["passed"]:
             problems.append("tests: " + tstatic["report"])
+        if any("import" in x and "not allowed" in x for x in problems):
+            problems.append(
+                "To use a package outside the allowlist, call request_package and wait for the user."
+            )
         if static["passed"]:
             header = custom.read_header(source)
             for key in ("name", "property", "units"):
@@ -744,6 +819,7 @@ class CapabilityPhase:
                 structure=structure or {},
                 test_file=test_file,
                 timeout_s=self.ws.cfg.custom_tool_timeout_s,
+                extra=extra,
             )
             if out["ok"]:
                 results = list((out["result"] or {}).get("tests", []))
@@ -763,6 +839,7 @@ class CapabilityPhase:
                     structure=structure,
                     inputs={},
                     timeout_s=self.ws.cfg.custom_tool_timeout_s,
+                    extra=extra,
                 )
                 if out["ok"]:
                     try:
@@ -834,20 +911,24 @@ class CapabilityPhase:
         """
         assert self.pending is not None
         pid, stage = self.pending
-        prop = self.state.proposals[pid]
+        item: ToolProposal | UserRequest = (
+            self.state.requests[pid] if stage in REQUEST_STAGES else self.state.proposals[pid]
+        )
         t0 = self.clock()
         try:
             if self.decide is not None:
-                decision = coerce_decision(self.decide(prop.model_copy(deep=True)), prop)
+                decision = coerce_decision(self.decide(item.model_copy(deep=True)), item)
                 HUB.clear(self.ws.run_id)
             else:
                 decision = HUB.wait(self.ws.run_id, pid, stage, self.stop)
         finally:
             self._wait_s += self.clock() - t0
-        if decision.action not in self._allowed(prop):  # a revision past the cap (AT-7)
-            decision = decision.model_copy(update={"action": "cancel_tool"})
         self.pending = None
-        return self._apply(prop, decision)
+        if isinstance(item, UserRequest):
+            return self._apply_request(item, decision)
+        if decision.action not in self._allowed(item):  # a revision past the cap (AT-7)
+            decision = decision.model_copy(update={"action": "cancel_tool"})
+        return self._apply(item, decision)
 
     def _apply(self, prop: ToolProposal, decision: ToolDecision) -> str:
         """Apply a decision to a proposal.
@@ -891,7 +972,12 @@ class CapabilityPhase:
             msg = (
                 f"The user asks for changes to the plan: {what}\nRevise it and call propose_tool again with name {prop.name}."
                 if stage == "plan"
-                else f"The user asks for changes to the code: {what}\nFix it and call write_tool again with proposal_id {prop.proposal_id}."
+                else f"The user asks for changes to the code: {what}\nFix it and call write_tool again with proposal_id "
+                f"{prop.proposal_id}. If the change needs a different method, call propose_tool again with name {prop.name}."
+            )
+            msg += (
+                " If it needs a package outside the allowlist, call request_package first. If you cannot do what is "
+                "asked, call ask_user to say why and offer alternatives."
             )
         elif action == "cancel_tool":
             self._cancel(prop, "cancelled by the user")
@@ -903,6 +989,180 @@ class CapabilityPhase:
                 {"proposal_id": prop.proposal_id, "scope": "run", "supplies_target": prop.supplies_target},
             )
             msg = "The user cancelled the run. Make no more calls."
+        self.save()
+        return msg
+
+    # ------------------------------------------------------------------ requests to the user
+
+    def _open_request(self, req: UserRequest) -> dict[str, Any]:
+        """Publish a request and wait for the user's answer.
+
+        Parameters
+        ----------
+        req : UserRequest
+            The request.
+
+        Returns
+        -------
+        dict
+            The wait instruction for the agent.
+
+        Raises
+        ------
+        ToolError
+            If something else is already waiting for the user.
+        """
+        if self.pending:
+            raise ToolError("Something is already waiting for the user; end your turn.")
+        self.state.requests[req.request_id] = req
+        allowed = {"allow", "deny", "cancel_run"} if req.kind == "package" else {"answer", "cancel_run"}
+        self.pending = (req.request_id, req.kind)
+        HUB.open(self.ws.run_id, req.request_id, req.kind, allowed)
+        self.emit(req.kind, {"request": req.model_dump(mode="json"), "allowed": sorted(allowed)})
+        return {
+            "request_id": req.request_id,
+            "status": "waiting_for_user",
+            "instruction": "End your turn now; the user's answer arrives as the next message.",
+        }
+
+    def _request_package(self, module: str, reason: str, pip_name: str | None = None) -> dict[str, Any]:
+        """``request_package``: ask to allow (and install) a package outside the allowlist.
+
+        Parameters
+        ----------
+        module : str
+            Top-level import name.
+        reason : str
+            Why the tool needs it.
+        pip_name : str, optional
+            pip name, when it differs from the import name.
+
+        Returns
+        -------
+        dict
+            The wait instruction, or a note when it is already allowed.
+
+        Raises
+        ------
+        ToolError
+            For a bad name.
+        """
+        module = module.strip().split(".")[0]
+        if not custom.MODULE_RE.match(module):
+            raise ToolError(f"{module!r} is not a package name.")
+        if custom.import_allowed(module) or module in self.state.approved_packages:
+            return {
+                "allowed": True,
+                "note": f"{module} is already allowed; list it in TOOL['packages'] if needed.",
+            }
+        pip = (pip_name or module).strip()
+        if not custom.PIP_RE.match(pip):
+            raise ToolError(f"{pip!r} is not a plain pip package name.")
+        req = UserRequest(
+            request_id=f"q{len(self.state.requests) + 1}",
+            kind="package",
+            question=reason,
+            package=module,
+            pip_name=pip,
+            installed=custom.importable(module),
+        )
+        return self._open_request(req)
+
+    def _ask_user(self, question: str, options: list[str] | None = None) -> dict[str, Any]:
+        """``ask_user``: put a question to the user.
+
+        Parameters
+        ----------
+        question : str
+            The question.
+        options : list of str, optional
+            Suggested answers.
+
+        Returns
+        -------
+        dict
+            The wait instruction.
+        """
+        req = UserRequest(
+            request_id=f"q{len(self.state.requests) + 1}",
+            kind="question",
+            question=question,
+            options=[str(o) for o in options or []][:6],
+        )
+        return self._open_request(req)
+
+    def _give_up(self, reason: str) -> dict[str, Any]:
+        """``give_up``: end the phase without a tool.
+
+        Parameters
+        ----------
+        reason : str
+            Why no tool can be built.
+
+        Returns
+        -------
+        dict
+            Confirmation.
+        """
+        self._end(f"the agent gave up: {reason}"[:500])
+        return {"ended": True, "instruction": "The phase is over; make no more calls."}
+
+    def _apply_request(self, req: UserRequest, decision: ToolDecision) -> str:
+        """Apply the user's answer to a request.
+
+        Parameters
+        ----------
+        req : UserRequest
+            The request.
+        decision : ToolDecision
+            ``allow``, ``deny``, ``answer`` or ``cancel_run``.
+
+        Returns
+        -------
+        str
+            Message for the agent.
+        """
+        self.state.decisions.append(decision)
+        self.emit(
+            "decision", {"decision": decision.model_dump(mode="json"), "name": req.package or "question"}
+        )
+        req.status, req.answer = "answered", decision.message
+        action = decision.action
+        if action == "cancel_run":
+            self.state.outcome = "cancelled_run"
+            self.emit("cancelled", {"proposal_id": req.request_id, "scope": "run", "supplies_target": True})
+            msg = "The user cancelled the run. Make no more calls."
+        elif req.kind == "question":
+            msg = (
+                f"The user answered your question ({req.question[:200]}): {decision.message or '(no answer)'}"
+            )
+        elif action == "allow":
+            assert req.package and req.pip_name
+            note = ""
+            if not custom.importable(req.package):
+                self.emit("log", {"message": f"Installing {req.pip_name} into the server's Python…"})
+                ok, log = custom.install_package(req.pip_name)
+                req.installed = ok and custom.importable(req.package)
+                self.emit(
+                    "log", {"message": f"pip install {req.pip_name}: {'done' if req.installed else 'failed'}"}
+                )
+                if not req.installed:
+                    self.save()
+                    return (
+                        f"The user allowed {req.package}, but installing {req.pip_name} failed:\n{log[-600:]}\n"
+                        "Work within the allowlist, ask_user, or give_up."
+                    )
+                note = f" It was installed with pip ({req.pip_name})."
+            self.state.approved_packages.append(req.package)
+            msg = (
+                f"The user allowed {req.package}.{note} List it in TOOL['packages'] (e.g. \"packages\": "
+                f'["{req.package}"]) and import it in the tool. The user sees the package on the code review.'
+            )
+        else:
+            msg = (
+                f"The user did not allow {req.package}. Work within the allowlist, ask_user to discuss "
+                "alternatives, or give_up."
+            )
         self.save()
         return msg
 
@@ -938,7 +1198,7 @@ class CapabilityPhase:
             header = f["header"]
             if f["error"] or header.get("property") != self.gap or f["sha256"] in self.state.reviewed_files:
                 continue
-            static = custom.static_check(f["source"], "tool")
+            static = custom.static_check(f["source"], "tool", custom.header_packages(header))
             pid = f"lib-{f['name']}"
             prop = ToolProposal(
                 proposal_id=pid,
@@ -999,8 +1259,13 @@ class CapabilityPhase:
             self.review_library()
         if resume and self.state.outcome is None:
             waiting = next((p for p in self.state.proposals.values() if p.status == "waiting"), None)
+            asking = next((r for r in self.state.requests.values() if r.status == "waiting"), None)
             if waiting is not None:
                 self._wait_for(waiting)
+                first = self.await_decision()
+            elif asking is not None:
+                del self.state.requests[asking.request_id]
+                self._open_request(asking)
                 first = self.await_decision()
             done = {
                 "proposals": [
@@ -1049,7 +1314,7 @@ class CapabilityPhase:
             First user message.
         """
         messages: list[dict[str, Any]] = [{"role": "user", "content": kickoff}]
-        nudges = failures = 0
+        failures = 0
         while not self.hard_limit_hit():
             try:
                 turn = self.llm.step(CAPABILITY_SYSTEM, messages, CAPABILITY_TOOLS)
@@ -1085,33 +1350,45 @@ class CapabilityPhase:
             if self.hard_limit_hit():
                 return
             if blocks:
-                nudges = 0
                 content: Any = blocks + ([{"type": "text", "text": text}] if text else [])
             elif text:
                 content = text
             else:
-                nudges += 1
-                if nudges > MAX_NUDGES:
+                content = self.nudge()  # counts idle turns and ends the phase when stuck
+                if self.hard_limit_hit():
                     return
-                content = self.nudge()
             messages.append({"role": "user", "content": content})
 
 
-def coerce_decision(raw: Any, prop: ToolProposal) -> ToolDecision:
-    """Turn a callback's answer into a decision for a proposal.
+def coerce_decision(raw: Any, prop: ToolProposal | UserRequest) -> ToolDecision:
+    """Turn a callback's answer into a decision for a proposal or a request.
 
     Parameters
     ----------
     raw : ToolDecision, dict, str or None
-        ``None`` cancels the tool; a string is an action.
-    prop : ToolProposal
-        The proposal decided on.
+        ``None`` cancels the tool (or denies a package); a string is an action, or the answer
+        to a question.
+    prop : ToolProposal or UserRequest
+        What was decided on.
 
     Returns
     -------
     ToolDecision
-        The decision, at the proposal's stage.
+        The decision, at the proposal's stage (or the request's kind).
     """
+    if isinstance(prop, UserRequest):
+        if isinstance(raw, ToolDecision):
+            return raw.model_copy(update={"proposal_id": prop.request_id, "stage": prop.kind})
+        if isinstance(raw, dict):
+            action, message = raw.get("action"), raw.get("message")
+        elif raw is None:
+            action, message = ("deny" if prop.kind == "package" else "answer"), None
+        elif prop.kind == "question" and raw != "cancel_run":
+            action, message = "answer", str(raw)
+        else:
+            action, message = str(raw), None
+        action = action or ("answer" if prop.kind == "question" else "deny")
+        return ToolDecision(proposal_id=prop.request_id, stage=prop.kind, action=action, message=message)  # type: ignore[arg-type]
     if isinstance(raw, ToolDecision):
         return raw.model_copy(update={"proposal_id": prop.proposal_id, "stage": prop.stage})
     if raw is None:

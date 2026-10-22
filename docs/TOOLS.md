@@ -457,6 +457,24 @@ Submit the source for an accepted plan (AT-10 to AT-13). **Input:** `proposal_id
 `{checks}` with the failing check's report (the agent fixes it and calls again, up to 3 times), or, once the
 checks pass and the user has decided, `{proposal_id, checks, decision: {action, message}}`.
 
+#### `request_package`
+Ask the user to allow a package outside the allowlist, e.g. phonopy (and to install it with pip when the
+server lacks it). **Input:** `module` (import name), `pip_name` (or null), `reason`. Returns at once; the
+answer (`allow`, `deny` or `cancel_run`) is the next message. An allowed package goes in `TOOL["packages"]`;
+the static check, the sandbox and later runs then allow it for that tool only (`CustomTool.packages`).
+Names are checked: no URLs, paths or pip flags.
+
+#### `ask_user`
+Ask the user a question (`question`, `options`). The answer is the next message. The user never reads the
+agent's plain text as a question.
+
+#### `give_up`
+End the phase without a tool (`reason`); the run screens stability only and the brief says why.
+
+**No dead ends.** A change request at the code stage may be answered with a new plan (`propose_tool`
+again) or new code. Two turns in a row without a tool call, with nothing waiting for the user, end the
+phase with "the agent made no progress", instead of nudging forever.
+
 ### The tool file
 
 One tool per file, `<tool_library_dir>/<name>.py`, with its tests in `test_<name>.py`. A user can write one by
@@ -548,6 +566,7 @@ Section `capability`. Each event's payload has `kind` plus:
 | `registered` | the `CustomTool` |
 | `cancelled` | `{proposal_id, scope: "tool" or "run", supplies_target, reason}` |
 | `log` | `{message}` from `hp.log` |
+| `package`, `question` | `{request, allowed}`: a `UserRequest` waiting for the user |
 
 Tool calls of the phase are ordinary `tool` events with `phase: "capability"` and string call IDs
 (`cap1`, `cap2`, ...), so they never collide with the campaign's.

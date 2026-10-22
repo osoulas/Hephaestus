@@ -245,9 +245,15 @@ export class RunModel {
       this.phase.tools = "input";
       this.log.push({ type: "capability", kind, seq: e.seq, proposal: p.proposal, allowed: p.allowed || [], decision: null, time: e.time });
       return;
+    } else if (kind === "package" || kind === "question") {
+      cap.waiting = { proposal_id: p.request.request_id, stage: kind };
+      this.phase.tools = "input";
+      this.log.push({ type: "capability", kind, seq: e.seq, request: p.request, allowed: p.allowed || [], decision: null, time: e.time });
+      return;
     } else if (kind === "decision") {
       const d = p.decision;
-      const card = [...this.log].reverse().find((x) => x.type === "capability" && x.proposal && x.proposal.proposal_id === d.proposal_id && x.kind === d.stage && !x.decision);
+      const idOf = (x) => (x.proposal ? x.proposal.proposal_id : x.request ? x.request.request_id : null);
+      const card = [...this.log].reverse().find((x) => x.type === "capability" && idOf(x) === d.proposal_id && x.kind === d.stage && !x.decision);
       if (card) card.decision = d;
       if (cap.waiting && cap.waiting.proposal_id === d.proposal_id) cap.waiting = null;
       this.phase.tools = "active";

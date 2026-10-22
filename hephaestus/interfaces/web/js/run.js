@@ -7,7 +7,7 @@ import { ago, check, cid as cidText, cidLong, cidTag, clamp, download, stripCode
 import { decorateBrief } from "./brief.js";
 import { renderMarkdown } from "./markdown.js";
 import { PHASES, RunModel, toolKind } from "./model.js";
-import { capabilityLine, proposalCard } from "./tools.js";
+import { capabilityLine, proposalCard, requestCard } from "./tools.js";
 import { CONFIG_GROUPS, configName, modelName, specGrid, targetText } from "./spec.js";
 import { CrystalViewer, elementStyle, parseCif } from "./viewer.js";
 
@@ -953,7 +953,16 @@ export function mountRun(root, id, tab, hooks) {
       "div.callout.warning.tool-banner",
       null,
       icon("wrench"),
-      h("div", null, h("strong", null, w.stage === "plan" ? "The agent proposes a new tool." : "The tool's code is ready for review."), " The run waits for your decision."),
+      h(
+        "div",
+        null,
+        h(
+          "strong",
+          null,
+          { plan: "The agent proposes a new tool.", code: "The tool's code is ready for review.", package: "The agent asks to use a package outside the sandbox.", question: "The agent has a question for you." }[w.stage],
+        ),
+        " The run waits for your answer.",
+      ),
       h(
         "button.btn.sm.primary",
         {
@@ -1010,10 +1019,12 @@ export function mountRun(root, id, tab, hooks) {
       case "tool":
         return toolEntry(e, key, open, time);
       case "capability": {
-        if (!e.proposal) return capabilityLine(e, time);
+        if (!e.proposal && !e.request) return capabilityLine(e, time);
         const w = model.capability && model.capability.waiting;
-        const waiting = Boolean(w && !e.decision && w.proposal_id === e.proposal.proposal_id && w.stage === e.kind && model.running && !model.isReplay);
-        return proposalCard(e, { runId: id, waiting, drafts: ui.toolDrafts, open, onSent: () => ((lastTabSig = null), render()) });
+        const itemId = e.proposal ? e.proposal.proposal_id : e.request.request_id;
+        const waiting = Boolean(w && !e.decision && w.proposal_id === itemId && w.stage === e.kind && model.running && !model.isReplay);
+        const ctx = { runId: id, waiting, drafts: ui.toolDrafts, open, onSent: () => ((lastTabSig = null), render()) };
+        return e.request ? requestCard(e, ctx) : proposalCard(e, ctx);
       }
       case "round": {
         const r = e.round;
@@ -1903,6 +1914,12 @@ function summary(c) {
       return `${i.name} · ${label(i.property || "")}`;
     case "write_tool":
       return `code for proposal ${i.proposal_id}`;
+    case "request_package":
+      return `asks to use ${i.module}`;
+    case "ask_user":
+      return i.question || "";
+    case "give_up":
+      return i.reason || "";
     default:
       return i.candidate_id ? `${cidText(i.candidate_id)}${comp ? ` ${comp}` : ""}` : Object.values(i).slice(0, 2).join(" · ");
   }

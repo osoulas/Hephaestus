@@ -531,3 +531,188 @@ def test_at2_capability_tools_are_not_in_the_campaign() -> None:
 
     names = {t["name"] for t in custom.campaign_tools(workspace())}
     assert "propose_tool" not in names and "write_tool" not in names and "read_tool_source" not in names
+
+
+# ---------------------------------------------------------------- asking the user (no dead ends)
+
+PHONOPY_TOOL = TOOL_SOURCE.replace("import math\n", "import math\n\nimport phonopy\n").replace(
+    '"author": "agent",', '"packages": ["phonopy"],\n    "author": "agent",'
+)
+
+
+def phase(tmp_path: Path, turns: list, decide: Any) -> CapabilityPhase:
+    """Return a capability phase for the thermal expansion gap.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Test folder.
+    turns : list
+        Scripted turns.
+    decide : callable
+        Decision callback.
+
+    Returns
+    -------
+    CapabilityPhase
+        The phase.
+    """
+    from factories import workspace
+
+    ws = workspace(custom_tools="ask", tool_library_dir=str(tmp_path / "lib"))
+    ws.spec = ws.spec.model_copy(update={"target_property": GAP, "target_units": "1e-6/K"})
+    return CapabilityPhase(
+        ws,
+        ScriptedLLM(turns=turns),
+        handlers(),
+        EventBus(tmp_path),
+        tmp_path / "cap",
+        GAP,
+        decide=decide,
+        toolkit_factory=fake_factory,
+    )
+
+
+def test_a_code_change_needing_a_package_is_asked_for_not_a_dead_end(tmp_path: Path) -> None:
+    """The run that got stuck: "use phonopy" at code review. The agent asks, is allowed, and delivers."""
+    turns = [
+        [{"tool": "propose_tool", "input": plan()}],
+        write_turn(),
+        [
+            {
+                "tool": "write_tool",
+                "input": {"proposal_id": "t1", "source": PHONOPY_TOOL, "tests": TEST_SOURCE},
+            }
+        ],
+        [
+            {
+                "tool": "request_package",
+                "input": {"module": "phonopy", "pip_name": None, "reason": "Force constants."},
+            }
+        ],
+        [
+            {
+                "tool": "write_tool",
+                "input": {"proposal_id": "t1", "source": PHONOPY_TOOL, "tests": TEST_SOURCE},
+            }
+        ],
+    ]
+    decide, seen = decider("accept", {"action": "revise", "message": "use phonopy"}, "allow", "accept")
+    ph = phase(tmp_path, turns, decide)
+    assert ph.run() == "filled"
+    assert [getattr(x, "kind", getattr(x, "stage", None)) for x in seen] == [
+        "plan",
+        "code",
+        "package",
+        "code",
+    ]
+    pkg = seen[2]
+    assert (
+        pkg.package == "phonopy" and pkg.installed is True
+    )  # already in the environment: nothing to install
+    tool = ph.ws.custom_tools["toy_expansion"]
+    assert tool.packages == ["phonopy"]
+    checks = [
+        e
+        for e in map(json.loads, (tmp_path / "r-test" / "events.jsonl").read_text().splitlines())
+        if e["payload"].get("kind") == "checks"
+    ]
+    first_try = checks[1]["payload"]["checks"]["static"]["report"]
+    assert "not allowed" in first_try and "request_package" in first_try  # the way out is named
+    assert custom.scan_library(tmp_path / "lib")[0][0].packages == ["phonopy"]
+
+
+def test_a_code_change_can_go_back_to_a_new_plan(tmp_path: Path) -> None:
+    """After a change request on the code, the agent may propose a revised plan instead of rewriting."""
+    turns = [
+        [{"tool": "propose_tool", "input": plan()}],
+        write_turn(),
+        [{"tool": "propose_tool", "input": plan() | {"method": "Equation-of-state fit."}}],
+        write_turn(),
+    ]
+    decide, seen = decider("accept", {"action": "revise", "message": "different method"}, "accept", "accept")
+    ph = phase(tmp_path, turns, decide)
+    assert ph.run() == "filled"
+    assert [p.stage for p in seen] == ["plan", "code", "plan", "code"] and seen[
+        2
+    ].method == "Equation-of-state fit."
+
+
+def test_a_stuck_agent_ends_the_phase_instead_of_looping(tmp_path: Path) -> None:
+    """Text-only turns with nothing waiting end the phase after a few turns, with the reason."""
+    turns = [[{"tool": "propose_tool", "input": plan()}]] + [[{"text": "Please choose A, B or C."}]] * 20
+    ph = phase(tmp_path, turns, decider("accept")[0])
+    assert ph.run() == "failed"
+    assert "no progress" in ph.state.end_reason
+    assert len(ph.llm.turns) >= 20 - 4  # stopped after a handful of idle turns, not twenty
+
+
+def test_ask_user_reaches_the_user_and_the_answer_reaches_the_agent(tmp_path: Path) -> None:
+    """A question is answered by a plain string; denying a package says so to the agent."""
+    told: list[str] = []
+
+    def after(messages: list) -> list:
+        """Record the answer, then give up.
+
+        Parameters
+        ----------
+        messages : list
+            Conversation.
+
+        Returns
+        -------
+        list
+            Turn.
+        """
+        told.append(json.dumps(messages[-1]["content"]))
+        return [{"tool": "request_package", "input": {"module": "phonopy", "pip_name": None, "reason": "r"}}]
+
+    def last(messages: list) -> list:
+        """Record the denial, then give up.
+
+        Parameters
+        ----------
+        messages : list
+            Conversation.
+
+        Returns
+        -------
+        list
+            Turn.
+        """
+        told.append(json.dumps(messages[-1]["content"]))
+        return [{"tool": "give_up", "input": {"reason": "needs phonopy"}}]
+
+    turns = [
+        [{"tool": "ask_user", "input": {"question": "Strain or EOS?", "options": ["Strain", "EOS"]}}],
+        after,
+        last,
+    ]
+    decide, seen = decider("EOS", "deny")
+    ph = phase(tmp_path, turns, decide)
+    assert ph.run() == "failed" and "gave up: needs phonopy" in ph.state.end_reason
+    assert seen[0].kind == "question" and seen[0].options == ["Strain", "EOS"]
+    assert "EOS" in told[0] and "did not allow phonopy" in told[1]
+
+
+def test_a_package_request_waits_through_the_hub(tmp_path: Path) -> None:
+    """Without a callback the request waits for allow or deny from the API."""
+    turns = [
+        [{"tool": "request_package", "input": {"module": "phonopy", "pip_name": None, "reason": "r"}}],
+        [{"tool": "give_up", "input": {"reason": "done"}}],
+    ]
+    ph = phase(tmp_path, turns, None)
+    out: list[str] = []
+    t = threading.Thread(target=lambda: out.append(ph.run()))
+    t.start()
+    for _ in range(200):
+        if HUB.waiting(ph.ws.run_id):
+            break
+        threading.Event().wait(0.05)
+    w = HUB.waiting(ph.ws.run_id)[0]
+    assert w["stage"] == "package" and w["allowed"] == ["allow", "cancel_run", "deny"]
+    with pytest.raises(ValueError):
+        HUB.submit(ph.ws.run_id, ToolDecision(proposal_id=w["proposal_id"], stage="package", action="accept"))  # type: ignore[arg-type]
+    HUB.submit(ph.ws.run_id, ToolDecision(proposal_id=w["proposal_id"], stage="package", action="allow"))  # type: ignore[arg-type]
+    t.join(10)
+    assert out == ["failed"] and ph.state.approved_packages == ["phonopy"]
