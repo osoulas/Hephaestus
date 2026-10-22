@@ -245,7 +245,7 @@ export class RunModel {
       this.phase.tools = "input";
       this.log.push({ type: "capability", kind, seq: e.seq, proposal: p.proposal, allowed: p.allowed || [], decision: null, time: e.time });
       return;
-    } else if (kind === "package" || kind === "question") {
+    } else if (kind === "package" || kind === "question" || kind === "give_up") {
       cap.waiting = { proposal_id: p.request.request_id, stage: kind };
       this.phase.tools = "input";
       this.log.push({ type: "capability", kind, seq: e.seq, request: p.request, allowed: p.allowed || [], decision: null, time: e.time });

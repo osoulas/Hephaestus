@@ -78,6 +78,66 @@ async function sendDecision(ctx, draft, id, action, message = null, btn = null) 
 }
 
 /**
+ * The card for the agent's proposal to stop without a tool: let it stop, or point it elsewhere.
+ * @param {object} entry Log entry {kind, request, allowed, decision}.
+ * @param {object} ctx {runId, waiting (bool), drafts, onSent}.
+ * @returns {HTMLElement}
+ */
+function giveUpCard(entry, ctx) {
+  const r = entry.request;
+  const key = `${r.request_id}:give_up`;
+  const draft = ctx.drafts[key] || { text: "" };
+  ctx.drafts[key] = draft;
+  const d = entry.decision;
+  const status = d
+    ? pill(d.action === "allow" ? "Stopped" : d.action === "answer" ? "Redirected" : label(d.action), d.action === "answer" ? "good" : "warning", d.action === "answer" ? "check" : "stop")
+    : ctx.waiting
+      ? pill("Needs your answer", "warning", "alert")
+      : pill("Not answered", "", "info");
+  const head = h(
+    "div.tool-card-head",
+    null,
+    h("div.log-icon.decision", null, icon("alert")),
+    h(
+      "div",
+      null,
+      h("div.tool-card-kicker", null, "The agent proposes to stop"),
+      h("div.tool-card-title", null, "Stop without a tool?"),
+      h("div.muted", null, "If it stops, the run cannot evaluate this property. You can tell it what to build instead."),
+    ),
+    status,
+  );
+  const body = h("div.tool-card-body", null, h("p", null, h("strong", null, "Why: "), r.question));
+  if (d && d.message) body.append(h("div.callout", null, icon("message"), h("div", null, h("strong", null, "You said: "), d.message)));
+  if (ctx.waiting && !d) {
+    if (draft.sent) {
+      body.append(h("div.tool-decide", null, h("span.muted", null, h("span.spinner"), " Sent: waiting for the agent…")));
+    } else {
+      const box = h("textarea.input", { rows: 2, placeholder: "Build this instead, e.g. a lattice-limited mobility proxy at a fixed carrier density", value: draft.text, oninput: (e) => (draft.text = e.target.value) });
+      body.append(
+        h(
+          "div.tool-decide",
+          null,
+          h(
+            "div.tool-revise",
+            null,
+            box,
+            h(
+              "div.tool-actions",
+              null,
+              h("button.btn.primary", { onclick: (ev) => (draft.text.trim() ? sendDecision(ctx, draft, r.request_id, "answer", draft.text.trim(), ev.currentTarget) : toast("Say what to build instead.", "warning")) }, icon("wrench"), "Build this instead"),
+              h("button.btn", { onclick: (ev) => sendDecision(ctx, draft, r.request_id, "allow", null, ev.currentTarget) }, icon("stop"), "Let it stop"),
+              h("button.btn.ghost.danger", { onclick: (ev) => confirm("Cancel the whole run? Nothing else runs.") && sendDecision(ctx, draft, r.request_id, "cancel_run", null, ev.currentTarget) }, icon("x"), "Cancel the run"),
+            ),
+          ),
+        ),
+      );
+    }
+  }
+  return h(`div.log-entry.tool-card${ctx.waiting && !d ? ".waiting" : ""}`, { dataset: { tool: `${r.request_id}-give_up` } }, head, body);
+}
+
+/**
  * The card for a package request or a question from the tool builder.
  * @param {object} entry Log entry {kind, request, allowed, decision}.
  * @param {object} ctx {runId, waiting (bool), drafts, onSent}.
@@ -85,6 +145,7 @@ async function sendDecision(ctx, draft, id, action, message = null, btn = null) 
  */
 export function requestCard(entry, ctx) {
   const r = entry.request;
+  if (entry.kind === "give_up") return giveUpCard(entry, ctx);
   const isPkg = entry.kind === "package";
   const key = `${r.request_id}:${entry.kind}`;
   const draft = ctx.drafts[key] || { text: "" };

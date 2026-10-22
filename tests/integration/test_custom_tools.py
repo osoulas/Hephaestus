@@ -688,9 +688,10 @@ def test_ask_user_reaches_the_user_and_the_answer_reaches_the_agent(tmp_path: Pa
         after,
         last,
     ]
-    decide, seen = decider("EOS", "deny")
+    decide, seen = decider("EOS", "deny", "allow")
     ph = phase(tmp_path, turns, decide)
-    assert ph.run() == "failed" and "gave up: needs phonopy" in ph.state.end_reason
+    assert ph.run() == "failed" and "gave up, with the user's agreement: needs phonopy" in ph.state.end_reason
+    assert seen[2].kind == "give_up"
     assert seen[0].kind == "question" and seen[0].options == ["Strain", "EOS"]
     assert "EOS" in told[0] and "did not allow phonopy" in told[1]
 
@@ -702,6 +703,27 @@ def test_a_package_request_waits_through_the_hub(tmp_path: Path) -> None:
         [{"tool": "give_up", "input": {"reason": "done"}}],
     ]
     ph = phase(tmp_path, turns, None)
+
+    def answer_next(stage: str, action: str) -> None:
+        """Wait for the next request at ``stage`` and answer it.
+
+        Parameters
+        ----------
+        stage : str
+            Request kind.
+        action : str
+            Action.
+        """
+        for _ in range(200):
+            w = [x for x in HUB.waiting(ph.ws.run_id) if x["stage"] == stage]
+            if w:
+                HUB.submit(
+                    ph.ws.run_id, ToolDecision(proposal_id=w[0]["proposal_id"], stage=stage, action=action)
+                )  # type: ignore[arg-type]
+                return
+            threading.Event().wait(0.05)
+        raise AssertionError(f"nothing waiting at {stage}")
+
     out: list[str] = []
     t = threading.Thread(target=lambda: out.append(ph.run()))
     t.start()
@@ -714,6 +736,7 @@ def test_a_package_request_waits_through_the_hub(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         HUB.submit(ph.ws.run_id, ToolDecision(proposal_id=w["proposal_id"], stage="package", action="accept"))  # type: ignore[arg-type]
     HUB.submit(ph.ws.run_id, ToolDecision(proposal_id=w["proposal_id"], stage="package", action="allow"))  # type: ignore[arg-type]
+    answer_next("give_up", "allow")
     t.join(10)
     assert out == ["failed"] and ph.state.approved_packages == ["phonopy"]
 
@@ -821,3 +844,37 @@ def test_a_decision_already_made_cannot_be_withdrawn(tmp_path: Path) -> None:
     HUB.clear("r-x")
     HUB.open("r-x", "t1", "code", {"accept"})
     assert HUB.withdraw("r-x", "t1", "code") is True and HUB.waiting("r-x") == []
+
+
+def test_giving_up_is_the_users_call(tmp_path: Path) -> None:
+    """The agent proposes to stop; the user points it at a proxy instead, and it builds that."""
+    told: list[str] = []
+
+    def redirected(messages: list) -> list:
+        """Record the user's direction, then propose the proxy.
+
+        Parameters
+        ----------
+        messages : list
+            Conversation.
+
+        Returns
+        -------
+        list
+            Turn.
+        """
+        told.append(json.dumps(messages[-1]["content"]))
+        return [{"tool": "propose_tool", "input": plan()}]
+
+    turns = [
+        [{"tool": "give_up", "input": {"reason": "Exact conductivity needs electronic structure."}}],
+        redirected,
+        write_turn(),
+    ]
+    decide, seen = decider(
+        {"action": "answer", "message": "Build the lattice-limited mobility proxy."}, "accept", "accept"
+    )
+    ph = phase(tmp_path, turns, decide)
+    assert ph.run() == "filled"
+    assert seen[0].kind == "give_up" and "electronic structure" in seen[0].question
+    assert "does not want to stop" in told[0] and "lattice-limited mobility proxy" in told[0]
