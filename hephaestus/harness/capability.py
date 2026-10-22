@@ -38,7 +38,7 @@ from hephaestus.core.types import (
 )
 from hephaestus.harness.agent import LITERATURE_TOOLS, shorten
 from hephaestus.harness.prompts import CAPABILITY_SYSTEM, capability_kickoff
-from hephaestus.llm.base import LLM, LLMError
+from hephaestus.llm.base import LLM, LLMError, UsageLimitError
 from hephaestus.tools import custom
 from hephaestus.tools.registry import TOOLS, CandidateState, Handler, ToolError, Workspace, execute
 
@@ -1386,6 +1386,8 @@ class CapabilityPhase:
                     driver(CAPABILITY_SYSTEM, kickoff, CAPABILITY_TOOLS, self)
                 else:
                     self._loop(kickoff)
+            except UsageLimitError:
+                raise  # the runner pauses the run; the phase resumes from its saved state
             except LLMError as exc:
                 self.errors.append(ErrorRecord(step="capability", code="llm_failed", message=str(exc)[:500]))
         if self.state.outcome is None:
@@ -1416,6 +1418,8 @@ class CapabilityPhase:
         while not self.hard_limit_hit():
             try:
                 turn = self.llm.step(CAPABILITY_SYSTEM, messages, CAPABILITY_TOOLS)
+            except UsageLimitError:
+                raise
             except LLMError as exc:
                 failures += 1
                 self.errors.append(ErrorRecord(step="capability", code="llm_failed", message=str(exc)[:500]))
@@ -1481,7 +1485,9 @@ def coerce_decision(raw: Any, prop: ToolProposal | UserRequest) -> ToolDecision:
             action, message = raw.get("action"), raw.get("message")
         elif raw is None:
             action, message = {"package": "deny", "question": "answer", "give_up": "allow"}[prop.kind], None
-        elif (prop.kind == "question" and raw != "cancel_run") or (prop.kind == "give_up" and raw not in ("allow", "cancel_run")):
+        elif (prop.kind == "question" and raw != "cancel_run") or (
+            prop.kind == "give_up" and raw not in ("allow", "cancel_run")
+        ):
             action, message = "answer", str(raw)
         else:
             action, message = str(raw), None
