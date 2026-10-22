@@ -538,3 +538,31 @@ def test_ui4_literature_view(tmp_path: Path) -> None:
     assert code == 1 and "No run nope" in out
     code, out = cli(["show", "r-demo", "--root", str(runs)], tmp_path)
     assert "hephaestus literature r-demo" in out
+
+
+def test_input_box_grows_to_show_a_long_goal() -> None:
+    """A goal longer than the terminal is wide wraps onto more rows instead of hiding all but the last."""
+    import asyncio
+
+    async def rows(text: str) -> tuple[int, int]:
+        """Measure the box for ``text`` at 60 columns.
+
+        Parameters
+        ----------
+        text : str
+            Text in the box.
+
+        Returns
+        -------
+        tuple of int
+            Preferred and largest height, in rows.
+        """
+        area = repl.input_area("▸ ")
+        area.text = text
+        d = area.window.preferred_height(width=60, max_available_height=40)
+        return d.preferred, d.max
+
+    preferred, _ = asyncio.run(rows("Find a lead-free oxide perovskite with a higher bulk modulus than SrTiO3. " * 2))
+    assert 3 <= preferred <= repl.INPUT_MAX_LINES
+    _, largest = asyncio.run(rows("word " * 200))
+    assert largest == repl.INPUT_MAX_LINES

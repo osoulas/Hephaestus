@@ -1073,6 +1073,45 @@ def make_reader(session: Session) -> ReadLine:
         return input
 
 
+INPUT_MAX_LINES = 6  # the input box grows with a long goal up to this many rows, then scrolls
+
+
+def input_area(prompt: str, history: Any = None, completer: Any = None) -> Any:
+    """Build the input box's text area: one logical line that wraps and grows to show all of it.
+
+    prompt_toolkit fixes a single-line ``TextArea`` at one row, so a goal wider than the terminal
+    showed only its last wrapped row. The height here follows the wrapped text instead.
+
+    Parameters
+    ----------
+    prompt : str
+        Prompt shown before the text, e.g. ``"▸ "``.
+    history : prompt_toolkit History, optional
+        Input history (the main prompt only).
+    completer : prompt_toolkit Completer, optional
+        Slash-command completer (the main prompt only).
+
+    Returns
+    -------
+    prompt_toolkit.widgets.TextArea
+        The text area, at least one row and at most ``INPUT_MAX_LINES``.
+    """
+    from prompt_toolkit.layout.dimension import Dimension
+    from prompt_toolkit.widgets import TextArea
+
+    area = TextArea(
+        prompt=[("class:prompt", prompt)],
+        multiline=False,
+        wrap_lines=True,
+        history=history,
+        completer=completer,
+        complete_while_typing=True,
+        dont_extend_height=True,
+    )
+    area.window.height = Dimension(min=1, max=INPUT_MAX_LINES)
+    return area
+
+
 class BoxReader:
     """Claude Code-style input: a bordered box, a completion menu, hints and the status row.
 
@@ -1150,7 +1189,6 @@ class BoxReader:
         from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, VSplit, Window
         from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.layout.menus import CompletionsMenu
-        from prompt_toolkit.widgets import TextArea
 
         session = self.session
         is_main = prompt == PROMPT
@@ -1179,15 +1217,7 @@ class BoxReader:
                 for text, display, meta in completions(session, before):
                     yield Completion(text, start_position=-len(word), display=display, display_meta=meta)
 
-        area = TextArea(
-            prompt=[("class:prompt", prompt)],
-            multiline=False,
-            wrap_lines=True,
-            history=self.history if is_main else None,
-            completer=Slash() if is_main else None,
-            complete_while_typing=True,
-            dont_extend_height=True,
-        )
+        area = input_area(prompt, history=self.history if is_main else None, completer=Slash() if is_main else None)
         kb = KeyBindings()
 
         def accept(buffer: Any) -> bool:

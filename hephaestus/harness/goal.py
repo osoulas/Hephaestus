@@ -16,6 +16,11 @@ from hephaestus.llm.base import LLM, LLMError
 
 TOXIC = {"lead": "Pb", "cadmium": "Cd", "mercury": "Hg", "arsenic": "As", "thallium": "Tl"}
 STABILITY_CONSTRAINTS = ("thermodynamically stable", "dynamically stable")
+# A hard constraint that states a stability check, in the parser's words or ours (GP-12)
+STABILITY_PATTERNS = {
+    "thermodynamically stable": re.compile(r"thermodynamic|\bhull\b|e_hull", re.IGNORECASE),
+    "dynamically stable": re.compile(r"(?<!thermo)dynamic|phonon|imaginary", re.IGNORECASE),
+}
 NOVELTY_CONSTRAINT = "novel: not an experimentally known compound and not previously reported"
 
 PARSER_SYSTEM = """\
@@ -334,16 +339,18 @@ def apply_stability_options(spec: SearchSpec, cfg: RunConfig) -> SearchSpec:
     ]
     for on, name, rule, skipped in checks:
         hc = spec.hard_constraints
-        at = next((i for i, h in enumerate(hc) if h.lower().startswith(name)), None)
+        hits = [i for i, h in enumerate(hc) if STABILITY_PATTERNS[name].search(h)]
         if on:
-            # Keep the goal's own wording in place unless the run changed the threshold
-            if at is None:
+            # Keep the goal's own wording in place unless the run changed the threshold; drop repeats
+            if not hits:
                 hc.append(f"{name}: {rule}")
-            elif name.startswith("thermo") and cfg.e_hull_max_eV_per_atom is not None:
-                hc[at] = f"{name}: {rule}"
+            else:
+                if name.startswith("thermo") and cfg.e_hull_max_eV_per_atom is not None:
+                    hc[hits[0]] = f"{name}: {rule}"
+                spec.hard_constraints = [h for i, h in enumerate(hc) if i not in hits[1:]]
             spec.assumptions = [a for a in spec.assumptions if a != skipped]
         else:
-            spec.hard_constraints = [h for h in hc if not h.lower().startswith(name)]
+            spec.hard_constraints = [h for i, h in enumerate(hc) if i not in hits]
             if skipped not in spec.assumptions:
                 spec.assumptions.append(skipped)
     return spec
