@@ -409,6 +409,7 @@ so events of different calls can interleave: pair them by `call_id`. The payload
 
 Other event sections:
 - `agent` — the orchestrator's text and thinking: `{kind: "text" | "thinking", text}`.
+- `capability` — agent-built tools; see *Agent-built tools* below.
 - `orchestrator` — round results `{best, stop, rule, scores, llm_scores}`, and the end of the campaign
   `{submitted, usage}`.
 - `final_calculation` — `{verdict, checks, notes}`.
@@ -425,3 +426,121 @@ Other event sections:
 4. **Add a scripted-model case** in `tests/integration/test_agent_loop.py` if the harness must react to the
    new tool's result.
 5. **Tell the UI and CLI owners** if the event payload gains fields.
+
+## Agent-built tools
+
+When the goal's property has no tool, a capability phase runs before the campaign: the agent proposes a tool,
+the user accepts the plan, the agent writes it, and the user reviews the code (`docs/REQUIREMENTS.md`,
+Section 14). This section is the contract for the phase's tools, the tool file, the toolkit and the events.
+
+### Capability-phase tools
+
+These exist only in the capability phase's conversation, never in the campaign (AT-2). The literature tools
+are also available in the phase.
+
+#### `read_tool_source`
+Read our own tools for inspiration and scope (AT-5). **Input:** `function` (string or null). With null it
+returns `{functions: [{module, name, signature, docstring}]}` for the public functions of
+`tools/simulation.py` and `tools/structures.py`; with a name it returns `{module, name, source}`. Functions of
+`RunConfig.disabled_capabilities` are hidden; asking for one returns an error.
+
+#### `propose_tool`
+Propose a plan, or a revised plan, for the user's decision (AT-6, AT-7). **Input:** the plan fields of
+`ToolProposal`: `name`, `property`, `units`, `description`, `method`, `citations`, `inputs` (JSON schema),
+`building_blocks`, `expected_runtime_s`, `supplies_target`, `if_cancelled`. **Returns**, once the user has
+decided: `{proposal_id, decision: {action, message}}`. The call waits for the user; the wait counts against no
+budget (AT-25).
+
+#### `write_tool`
+Submit the source for an accepted plan (AT-10 to AT-13). **Input:** `proposal_id`, `source` (the tool file),
+`tests` (the test file). Code runs the static check, the tests and the trial run. **Returns** either
+`{checks}` with the failing check's report (the agent fixes it and calls again, up to 3 times), or, once the
+checks pass and the user has decided, `{proposal_id, checks, decision: {action, message}}`.
+
+### The tool file
+
+One tool per file, `<tool_library_dir>/<name>.py`, with its tests in `test_<name>.py`. A user can write one by
+hand; it is reviewed like an agent's (AT-21). The `TOOL` header must be a literal dict, because code reads it
+with `ast.literal_eval` before the file is approved and never imports an unapproved file.
+
+```python
+"""Bulk modulus from a Birch-Murnaghan fit of energy against volume."""
+
+TOOL = {
+    "name": "bulk_modulus_eos",
+    "property": "bulk_modulus",
+    "units": "GPa",
+    "description": "Isotropic strain of ±4 % in 7 steps, ions relaxed at each volume, third-order "
+                   "Birch-Murnaghan fit.",
+    "method": "Equation-of-state fit (Birch 1947).",
+    "citations": ["<paper_id>"],
+    "inputs": {"type": "object", "properties": {}, "additionalProperties": False},
+    "building_blocks": ["relax", "single_point"],
+    "author": "agent",
+}
+
+
+def run(structure: dict, inputs: dict, hp) -> dict:
+    """Compute the bulk modulus of one structure.
+
+    Parameters
+    ----------
+    structure : dict
+        The candidate's current structure, as a pymatgen ``Structure.as_dict()``.
+    inputs : dict
+        The declared inputs, validated against ``TOOL["inputs"]``.
+    hp : Toolkit
+        Building blocks, run by the main process (see *The toolkit*).
+
+    Returns
+    -------
+    dict
+        ``{"value": float, "units": str, "details": dict}``; ``units`` must equal ``TOOL["units"]``.
+    """
+```
+
+The test file holds plain `test_*` functions that take `hp`; they run in the sandbox like the tool. Results
+must be JSON. Allowed imports: `math`, `statistics`, `itertools`, `functools`, `numpy`, `scipy`,
+`pymatgen.core`, `pymatgen.analysis`, `pymatgen.symmetry`, `ase`, `ase.build`, `ase.units`, `ase.eos`.
+
+### The toolkit (`hp`)
+
+The worker process sends each call over a pipe; the main process runs it with the run's potential (the final
+potential and dtype in the final re-check), under `model_lock` and the cache (AT-15). Structures are pymatgen
+dicts; units are eV, Å, GPa and THz.
+
+| Call | Returns |
+| --- | --- |
+| `hp.single_point(structure)` | `{energy_eV, forces_eV_per_A, stress_GPa}` (stress as a 3×3 list) |
+| `hp.relax(structure, fix_cell=False, fmax=0.01)` | `{structure, energy_eV_per_atom, converged}` |
+| `hp.phonons(structure, supercell=None)` | `{frequencies_THz, qpoints, min_frequency_THz}` |
+| `hp.md(structure, temperature_K, duration_ps)` | `{energies_eV, temperatures_K, final_structure, stable}` |
+| `hp.log(message)` | none; shown in the orchestrator log |
+
+Each toolkit call adds to the run's compute time. A tool may use none of them.
+
+### In the campaign
+
+An approved tool appears as `custom_<name>` with input `candidate_id` plus its declared inputs (AT-16). The
+harness runs it on the candidate's current structure. **Returns:** `{candidate_id, property, value, units,
+model: "agent-built:<name>@<sha8>", uncertainty: null, note: "agent-built tool"}`, plus `target` when it
+supplies the target property (AT-17). It never sets `thermo_stable`, `dyn_stable` or `mechanically_stable`
+(AT-18). Results are cached under the tool's sha256 and the structure (AT-23).
+
+### Capability events
+
+Section `capability`. Each event's payload has `kind` plus:
+
+| `kind` | Payload |
+| --- | --- |
+| `gap` | `{property, units, custom_tools}` |
+| `library` | `{reused: [name], unapproved: [file]}` |
+| `plan` | the `ToolProposal` at the plan stage, with `revision` |
+| `checks` | `{proposal_id, revision, checks}` after each `write_tool` |
+| `code` | the `ToolProposal` at the code stage, with `source`, `tests`, `checks` and the trial output |
+| `decision` | the `ToolDecision` |
+| `registered` | the `CustomTool` |
+| `cancelled` | `{proposal_id, scope: "tool" or "run", supplies_target}` |
+
+A `plan` or `code` event with no later `decision` for the same `proposal_id` means the run is waiting for the
+user; the UI and CLI show the card with its actions (AT-24, AT-27, AT-28).

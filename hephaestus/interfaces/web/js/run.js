@@ -62,8 +62,19 @@ export function mountRun(root, id, tab, hooks) {
   let stateTimer = null;
   let alive = true;
 
+  // Opening a run replays its history; drawing each event would flash "running" and walk through
+  // every phase. Hold drawing until the stored status is known and, for a run that is not live,
+  // until the history has arrived (a safety timeout releases it regardless).
+  let holding = !model.isReplay;
+  const release = () => {
+    if (!holding) return;
+    holding = false;
+    clearTimeout(holdTimer);
+    schedule();
+  };
+  const holdTimer = setTimeout(release, 2000);
   const schedule = () => {
-    if (scheduled) return;
+    if (scheduled || holding) return;
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
@@ -75,7 +86,10 @@ export function mountRun(root, id, tab, hooks) {
     try {
       model.setState(await api(`/runs/${encodeURIComponent(id)}`));
     } catch (e) {
-      if (e.status === 404) ui.notFound = true;
+      if (e.status === 404) {
+        ui.notFound = true;
+        release();
+      }
     }
     schedule();
   }
@@ -150,6 +164,7 @@ export function mountRun(root, id, tab, hooks) {
       () => {
         model.ended = true;
         model.running = false;
+        release();
         lastHeadSig = null;
         const total = ui.replayInfo && ui.replayInfo.total_events;
         // A stopped replay shows only what it replayed; a finished one may show the stored state.
@@ -164,8 +179,11 @@ export function mountRun(root, id, tab, hooks) {
     );
   }
 
-  if (!model.isReplay) loadState();
-  else loadReplayInfo();
+  if (!model.isReplay) {
+    loadState().then(() => {
+      if (model.state && model.state.running) release(); // live: show progress as it streams
+    });
+  } else loadReplayInfo();
   connect();
   const ticker = setInterval(() => model.running && tick(), 1000);
   const onTheme = () => viewer && viewer.draw();
@@ -277,6 +295,7 @@ export function mountRun(root, id, tab, hooks) {
   // ------------------------------------------------------------------ render
 
   function render() {
+    if (holding) return;
     renderHead();
     const sig = tabSignature();
     if (sig === lastTabSig) return;
