@@ -158,6 +158,17 @@ hephaestus backends | login | signin | serve
 (detached).
 
 
+### Notebook (marimo)
+
+```bash
+marimo edit notebooks/run_goal.py      # or: marimo run notebooks/run_goal.py, to hide the code
+```
+
+A reactive notebook over the Python API: review the goal and answer the parser's questions, start the
+run, watch the latest events, approve the agent's tool plans and code (or answer its questions and
+package requests) on cards, then read the candidates and the lab brief. Every check and verdict is the
+engine's own; the notebook only displays them and sends your decisions.
+
 ### Python API
 
 This underlies both the web GUI and interactive CLI, and can be accessed directly:

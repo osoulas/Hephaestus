@@ -57,6 +57,7 @@ dev = [
   "mypy>=1.11",
   "pre-commit>=4.0",
   "pytest>=8.3",
+  "marimo>=0.25",
   "pytest-cov>=5.0",
   "ruff>=0.6",
 ]
@@ -119,3 +120,11 @@ pretty = true
 show_error_codes = true
 ignore_missing_imports = true
 warn_unreachable = true
+
+[tool.ruff.lint.per-file-ignores]
+# marimo notebooks show each cell's last expression on screen, which is what B018 flags
+"notebooks/*" = ["B018"]
+
+[tool.marimo.runtime]
+# Run the notebook's cells when it opens, so its buttons are live (not a saved snapshot)
+auto_instantiate = true
