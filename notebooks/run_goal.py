@@ -36,7 +36,6 @@ def _():
     # Claude Code sign-in needs no key: it uses the Claude Code login on this machine.
     load_api_key()  # Anthropic API key, for "Anthropic API key" model access
     _loaded = credentials.load_secret("materials_project")  # Materials Project key, needed by every run
-
     return Experiment, mo
 
 
@@ -88,6 +87,35 @@ def _(mo):
         set_status,
         set_waiting,
     )
+
+
+@app.cell(hide_code=True)
+def _(get_session, mo, set_session, set_status, set_waiting):
+    """Offer Start over: clear every output below, stopping a run that is still going.
+
+    A separate cell, because a cell that reads the session re-runs whenever it changes: next to the goal
+    box, every reset would also wipe the goal text.
+    """
+
+    def _start_over(_):
+        """Stop a live run (it stays saved under runs/), then clear the session, status and cards."""
+        _session = get_session()
+        if _session and "exp" in _session and _session["exp"].running:
+            _session["exp"].stop("all")
+        set_session(None)
+        set_status(None)
+        set_waiting(())
+
+    start_over = mo.ui.button(label="Start over", on_click=_start_over, kind="neutral")
+    mo.hstack(
+        [
+            start_over,
+            mo.md("_Clears every output below. A run still going is stopped first and stays saved._"),
+        ],
+        justify="start",
+        align="center",
+    )
+    return
 
 
 @app.cell(hide_code=True)
@@ -226,7 +254,7 @@ def _(get_session, mo):
     return answers, parsed, questions, recheck
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(answers, get_session, mo, questions, recheck, set_session):
     """Parse again with the answers when Re-check is clicked."""
     mo.stop(not recheck.value)
@@ -249,7 +277,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(get_session, get_status, mo, parsed):
     """Offer Start once the goal is ready, and Stop while the run is active."""
     mo.stop(not parsed.ready, mo.md("_Answer the questions above, then start the run._"))
@@ -267,7 +295,7 @@ def _(get_session, get_status, mo, parsed):
     return (start,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(get_session, mo, set_status, start):
     """Start the run in the background when Start is clicked."""
     mo.stop(not start.value)
@@ -288,7 +316,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     """Tick every two seconds, so the monitor below can read the run's progress."""
     tick = mo.ui.refresh(default_interval="2s", label="Live view")
@@ -296,7 +324,7 @@ def _(mo):
     return (tick,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(get_session, get_status, get_waiting, mo, set_status, set_waiting, tick):
     """Monitor the run: show the latest events, and update status and waiting only when they change."""
     tick.value  # re-run on every tick
@@ -368,7 +396,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(get_session, get_waiting, mo):
     """Show a card for each decision the agent is waiting for, with only the actions it offers.
 
@@ -515,7 +543,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(get_session, get_status, mo):
     """Show the results once the run has ended: the best candidate, the candidates and the brief."""
     _status = get_status()
