@@ -3631,3 +3631,33 @@ details.issues[open] > summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* tool-builder cards: long questions, suggested answers and replies wrap instead of running off */
+.log-entry.tool-card,
+.tool-card-head > div,
+.tool-card-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tool-card .tool-actions {
+  min-width: 0;
+}
+.tool-card .tool-actions .btn {
+  white-space: normal;
+  height: auto;
+  min-height: 34px;
+  max-width: 100%;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  text-align: left;
+  line-height: 1.35;
+}
+.tool-card .tool-actions .btn.sm {
+  min-height: 28px;
+}
+.tool-card .callout > div {
+  min-width: 0;
+}
+.code-view pre {
+  overflow-wrap: normal;
+}
