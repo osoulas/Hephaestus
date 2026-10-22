@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 from hephaestus.core.config import RunConfig
-from hephaestus.core.types import Conditions, ErrorRecord, SearchSpec, StabilityThresholds
+from hephaestus.core.types import Conditions, ErrorRecord, SearchSpec, StabilityThresholds, Target
 from hephaestus.llm.base import LLM, LLMError
 
 TOXIC = {"lead": "Pb", "cadmium": "Cd", "mercury": "Hg", "arsenic": "As", "thallium": "Tl"}
@@ -25,8 +25,10 @@ known material ("smaller band gap than SrTiO3"), set reference_material and leav
 null: code computes the reference with the same model as the candidates. Map the property to \
 one of the supported keys, or to "unsupported" if none fits; either way give property_name, \
 the property asked for as a short snake_case name (e.g. "thermal_expansion_coefficient"), and \
-its units in target_units. Separate hard constraints (must \
-hold) from soft preferences. Record every assumption in plain words. Ask at most three \
+its units in target_units. When the goal sets more than one property target (e.g. "a smaller \
+band gap than SrTiO3 and a higher bulk modulus"), put the main one in the target_* fields and \
+each other one in extra_targets, in the same form; every target must be met. Stability and \
+the hull are not property targets. Separate hard constraints (must hold) from soft preferences. Record every assumption in plain words. Ask at most three \
 clarifying questions, only when a required field (target property, value or reference, \
 direction) is missing or ambiguous. Give the run a short title (at most eight words, sentence \
 case, no full stop) that names the material family and the target, e.g. "Lead-free perovskite \
@@ -113,6 +115,24 @@ def goal_schema(keys: list[str]) -> dict[str, Any]:
         "assumptions": sa,
         "questions": sa,
     }
+    target = {
+        "target_property": props["target_property"],
+        "property_name": s,
+        "target_value": nn,
+        "target_units": s,
+        "direction": props["direction"],
+        "target_tolerance": nn,
+        "reference_material": sn,
+    }
+    props["extra_targets"] = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": target,
+            "required": list(target),
+            "additionalProperties": False,
+        },
+    }
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
@@ -177,6 +197,18 @@ def parse_goal(
             e_hull_max_eV_per_atom=raw.get("e_hull_max_eV_per_atom") or 0.05,
         ),
         assumptions=list(raw.get("assumptions") or []),
+        extra_targets=[
+            Target(
+                property=target_key(x),
+                value=x.get("target_value"),
+                units=x.get("target_units") or "",
+                direction=x.get("direction") or "minimise",
+                tolerance=x.get("target_tolerance"),
+                reference_material=x.get("reference_material"),
+            )
+            for x in raw.get("extra_targets") or []
+            if isinstance(x, dict)
+        ],
     )
     if raw.get("temperature_K") is None or raw.get("pressure_GPa") is None:
         spec.assumptions.append("Operating conditions default to 300 K and ambient pressure (GP-7).")
@@ -346,19 +378,23 @@ def validate_spec(
             Element(sym)
         except Exception:
             problems.append(f"Unknown element symbol {sym!r}.")
-    if spec.target_property not in reg:
-        if not gaps_ok or spec.target_property == "unsupported":
-            problems.append(
-                f"Property {spec.target_property!r} is not supported; supported: {', '.join(reg)}."
-            )
-    else:
-        units = reg[spec.target_property].get("units")
-        if units and spec.target_units and spec.target_units.replace("³", "3") != units.replace("³", "3"):
-            problems.append(f"Units {spec.target_units!r} do not match {units!r} for {spec.target_property}.")
-    if spec.target_value is None and not spec.reference_material:
-        problems.append("No target value or reference material: ask the user (GP-5).")
-    if spec.direction == "hit" and spec.target_tolerance is None:
-        problems.append("A 'hit' target needs a tolerance.")
+    seen: set[str] = set()
+    for t in spec.targets():
+        if t.property in seen:
+            problems.append(f"{t.property} is a target twice.")
+        seen.add(t.property)
+        if t.property not in reg:
+            if (not gaps_ok or t.property == "unsupported") and not t.tool:
+                problems.append(f"Property {t.property!r} is not supported; supported: {', '.join(reg)}.")
+        else:
+            units = reg[t.property].get("units")
+            if units and t.units and t.units.replace("³", "3") != units.replace("³", "3"):
+                problems.append(f"Units {t.units!r} do not match {units!r} for {t.property}.")
+        if t.value is None and not t.reference_material:
+            name = "" if len(spec.targets()) == 1 else f" for {t.property}"
+            problems.append(f"No target value or reference material{name}: ask the user (GP-5).")
+        if t.direction == "hit" and t.tolerance is None:
+            problems.append("A 'hit' target needs a tolerance.")
     if set(spec.elements) & set(spec.excluded_elements):
         problems.append("An element is both required and excluded.")
     return problems

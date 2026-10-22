@@ -206,7 +206,29 @@ def kickoff_message(spec: SearchSpec, cfg: RunConfig) -> str:
         "band_gap_fidelity": cfg.band_gap_fidelity,
         "require_novel": cfg.require_novel,
     }
+    targets = [
+        {
+            "property": t.property,
+            "computed_by": t.tool or "predict_property",
+            "direction": t.direction,
+            "value": t.value,
+            "units": t.units,
+            "reference_material": t.reference_material,
+            "evaluable": t.evaluable,
+        }
+        for t in spec.targets()
+    ]
     note = ""
+    if len(targets) > 1:
+        note += (
+            f"There are {len(targets)} property targets and every one must be met: compute each for every "
+            f"candidate, with the tool named in computed_by. All targets: {_j(targets)}\n\n"
+        )
+    for t in spec.extra_targets:
+        if t.tool:
+            note += f"{t.property} comes from the agent-built tool {t.tool}, approved by the user; no uncertainty.\n\n"
+        elif not t.evaluable:
+            note += f"No tool can compute {t.property} in this run: it cannot be met, so submit with accept_not_met=true.\n\n"
     if spec.target_tool:
         note = (
             f"The target property comes from the agent-built tool {spec.target_tool}, approved by the user: "

@@ -210,7 +210,7 @@ export class RunModel {
       const next = { ...prev };
       for (const k of [
         "composition", "cand_round", "e_hull", "thermo_stable", "dyn_stable", "min_freq", "verdict",
-        "space_group", "value", "uncertainty", "novelty", "rationale", "evidence_ids",
+        "space_group", "value", "uncertainty", "novelty", "rationale", "evidence_ids", "targets",
       ]) {
         if (p[k] !== undefined && p[k] !== null) next[k] = p[k];
       }
