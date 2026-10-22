@@ -229,7 +229,8 @@ export function requestCard(entry, ctx) {
  * @returns {HTMLElement}
  */
 function decisionBar(prop, allowed, ctx) {
-  const key = `${prop.proposal_id}:${prop.stage}`;
+  // Keyed by revision: a revised plan or code is a new decision, not the one already sent
+  const key = `${prop.proposal_id}:${prop.stage}:r${prop.revision}`;
   const draft = ctx.drafts[key] || { open: false, text: "" };
   ctx.drafts[key] = draft;
   const send = async (action, message = null, btn = null) => {
