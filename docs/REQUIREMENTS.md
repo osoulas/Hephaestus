@@ -25,6 +25,11 @@ unchanged; new ones are marked *(new)*. Tool-level detail lives in `docs/TOOLS.m
   - crash diagnostics (DL-11)
   - new UI controls (UI-12 to UI-16)
 - **Shared types:** `Critique` gains `llm_confidence` and `llm_confidence_reason`; `RunConfig` is now listed.
+- **Agent-built tools** *(22 October, new Section 14)*. When no tool can compute the goal's property, the agent
+  proposes a tool, writes it once the user accepts the plan, and the user reviews the code before it runs.
+  Approved tools are saved as files in the working directory and reused by later runs. A capability phase is
+  added between goal parsing and the campaign (OR-1, GP-2); new types `ToolProposal`, `ToolDecision` and
+  `CustomTool`; new `RunConfig` fields.
 
 Oct 16, 2026 · @Oskar Soulas
 
@@ -105,7 +110,7 @@ Every function in the package passes one of the records below. Define them once,
 | `Quantity` | value (float), uncertainty (float or null), units (str), source (str: model name, paper ID or database ID) | Many | Inside other records |
 | `SearchSpec` | raw\_goal (str); material\_family (str); elements (list\[str\]); excluded\_elements (list\[str\]); target\_property (str, registry key); target\_value (float); target\_units (str); direction (maximise, minimise or hit); reference\_material (str or null); reference\_value (Quantity or null); conditions (temperature\_K, pressure\_GPa); hard\_constraints (list\[str\]); soft\_preferences (list\[str\]); stability\_thresholds (e\_hull\_max\_eV\_per\_atom, phonon\_min\_THz); assumptions (list\[str\]) | Goal Parser | `spec.json` |
 | `Paper` | paper\_id; title; authors (list\[str\]); year (int or null); doi; url; source (arxiv, pubmed, biorxiv, medrxiv); abstract; citation\_count (int or null); relevance (float 0 to 1); found\_via (semantic, cited, negative, similar, citing) | Literature Miner | Inside `literature.json` |
-| `Insight` | composition (str or null); property (str); value (Quantity or null); conditions (str); finding\_type (positive, negative, mechanism, synthesis); summary (str); paper\_id (str) | Literature Miner | Inside `literature.json` |
+| `Insight` | composition (str or null); property (str); value (Quantity or null); conditions (str); finding\_type (positive, negative, mechanism, synthesis, method); summary (str); paper\_id (str) | Literature Miner | Inside `literature.json` |
 | `LiteratureContext` | papers (list\[Paper\]); insights (list\[Insight\]); property\_map (dict: composition to Quantity); failed\_approaches (list\[str\]); mechanisms (list\[str\]); synthesis\_routes (list\[str\]); open\_questions (list\[str\]); field\_trend (dict: year to count); coverage\_note (str) | Literature Miner | `literature.json` |
 | `Candidate` | candidate\_id; iteration (int); composition; structure\_type (str, registry key); rationale (str); evidence\_ids (list\[str\]); prior\_estimate (Quantity or null); novelty (known, variant, novel); synthesis\_feasibility (easy, moderate, difficult, unknown); risks (list\[str\]) | Candidate Generator | `iter_N/candidates.json` |
 | `StructureRecord` | candidate\_id; cif (str); pmg\_dict (dict); source (mp:\<id>, template:\<name>, substitution); supercell (list\[int\], 3 values); n\_atoms (int); disorder\_seed (int or null); composition\_error (float, max fractional error per site) | Structure Generator | `iter_N/<candidate_id>/start.cif` + JSON |
@@ -117,7 +122,10 @@ Every function in the package passes one of the records below. Define them once,
 | `Brief` | run\_id; markdown (str); pdf\_path (str or null); cited\_paper\_ids (list\[str\]) | Brief Generator | `brief.md`, `brief.pdf` |
 | `ProgressEvent` | run\_id; time; section (str); status (started, finished, failed); iteration (int or null); payload (small JSON summary) | Orchestrator | Streamed to UI; appended to `events.jsonl` |
 | `RunState` | run\_id; spec; literature; iterations (one per review round: {candidates, structures, sims, predictions, critique}); best (candidate\_id); stop\_reason; validation; brief; errors | Orchestrator | `state.json`, rewritten after every tool call |
-| `RunConfig` *(new)* | max\_iterations (review rounds, default 3); confidence\_threshold (72); max\_tool\_calls (90); llm\_backend (auto, api, claude-code); llm\_model (default claude-opus-5-5); band\_gap\_fidelity (hse, pbe); require\_novel (bool); potential; final\_potential; cross\_check\_potential; phonon\_mode; phonon\_gate (mode\_map, strict); distortion\_threshold\_meV (2.0); run\_phonons; device; dtype; max\_atoms (80); time\_budget\_s; final\_time\_budget\_s; run\_final; seed; offline | Caller (UI, CLI, Python API) | `progress.json` |
+| `RunConfig` *(new)* | max\_iterations (review rounds, default 3); confidence\_threshold (72); max\_tool\_calls (90); llm\_backend (auto, api, claude-code); llm\_model (default claude-opus-5-5); band\_gap\_fidelity (hse, pbe); require\_novel (bool); potential; final\_potential; cross\_check\_potential; phonon\_mode; phonon\_gate (mode\_map, strict); distortion\_threshold\_meV (2.0); run\_phonons; device; dtype; max\_atoms (80); time\_budget\_s; final\_time\_budget\_s; run\_final; seed; offline; custom\_tools (off, ask); capability\_time\_budget\_s (600); max\_custom\_tools (3); max\_tool\_revisions (3); custom\_tool\_timeout\_s (300); tool\_library\_dir (`./hephaestus_tools`); disabled\_capabilities (list\[str\], empty) | Caller (UI, CLI, Python API) | `progress.json` |
+| `ToolProposal` *(new)* | proposal\_id; name (snake\_case); property (str, the gap it fills); units; description; method (str); citations (list\[str\], paper IDs); inputs (JSON schema, beyond `candidate_id`); building\_blocks (list\[str\], may be empty); expected\_runtime\_s (float); supplies\_target (bool); if\_cancelled (str, what the run loses); revision (int); stage (plan, code); source (str or null, set at the code stage); tests (str or null); checks (static, tests, trial: each {passed, report}) | Capability phase (Section 14) | `capability/proposals.json` |
+| `ToolDecision` *(new)* | proposal\_id; stage (plan, code); action (accept, revise, cancel\_tool, cancel\_run); message (str or null); time | User (UI, CLI, Python API) | `capability/decisions.json`, and as an event |
+| `CustomTool` *(new)* | name; property; units; file (path); sha256; author (agent, user); approved\_at; run\_id (str or null, the run that built it) | Capability phase, tool library | `<tool_library_dir>/manifest.json` |
 | Workspace snapshot *(new)* | everything the agent's tools share in one run: candidates with their structures and results, papers, evidence, round, budget counters, submission (see `docs/TOOLS.md`) | Harness | `workspace.json`, after every tool call |
 
 ## 1. Goal Parser
@@ -131,7 +139,7 @@ The Goal Parser turns a free-text research goal into a structured search specifi
 | ID | Requirement | Priority | Acceptance check |
 | --- | --- | --- | --- |
 | GP-1 | Extract material family, elements, target property, target value, units and direction from the goal. | Must | 10 test goals parsed correctly by hand review. |
-| GP-2 | Map the target property to one the Property Predictor supports, or flag it as unsupported before the run starts. | Must | An unsupported property (e.g. creep rate) is flagged, not silently swapped. |
+| GP-2 | Map the target property to one the Property Predictor supports, or flag it as unsupported before the run starts. An unsupported property keeps its plain name and units, and becomes a capability gap (AT-1). | Must | An unsupported property (e.g. creep rate) is flagged, not silently swapped. |
 | GP-3 | Separate hard constraints (must hold: "no lead") from soft preferences ("cheap if possible"). | Must | Constraints are labelled hard or soft in the output. |
 | GP-4 | Expand implied constraints into explicit ones, e.g. "lead-free" becomes an excluded element. | Must | Excluded-element list is populated from wording. |
 | GP-5 | Ask the user at most 3 clarifying questions when a required field is missing or ambiguous. | Should | Goal without a target value triggers a question, not a default. |
@@ -429,7 +437,7 @@ The tool-call budget (OR-10) and a user stop also prompt submission. A hard limi
 
 | ID | Requirement | Priority | Acceptance check |
 | --- | --- | --- | --- |
-| OR-1 | Fixed outer order: parse the goal, run the agent campaign, final re-check, brief. Inside the campaign the orchestrator chooses the order of tool calls, but every result passes through the code gates. | Must | Log order of the outer steps matches on every run. |
+| OR-1 | Fixed outer order: parse the goal, the capability phase (only when there is a gap, Section 14), run the agent campaign, final re-check, brief. Inside the campaign the orchestrator chooses the order of tool calls, but every result passes through the code gates. | Must | Log order of the outer steps matches on every run. |
 | OR-2 | Apply the stop rules above, in order, and record which one fired. | Must | Stop reason is always one of the rules, or "submitted". |
 | OR-3 | The submitted candidate is the answer; without a submission, code picks the best by checks, then distance to target. | Must | A late worse round does not replace an earlier better submission. |
 | OR-4 | Make thresholds, budgets and limits configurable per run (`RunConfig`). | Must | Changing the threshold changes stop behaviour. |
@@ -560,6 +568,9 @@ The UI talks to the backend over HTTP plus one event stream. All bodies are JSON
 | `GET /auth/valency` | query: start (bool) | {signed\_in, needs\_signin, access\_token\_expired, pending, url, error} | `?start=true` opens the browser sign-in (UI-11). |
 | `POST /runs/{run_id}/resume` *(new)* | none | {run\_id, resumed} | OR-6, UI-16. 409 if finished or already running. |
 | `GET /auth/claude`, `POST /auth/claude/start`, `POST /auth/claude/code`, `POST /auth/claude/cancel` *(new)* | {code} for `/code` | sign-in state {status, url, signed\_in, error} | Runs `claude auth login --claudeai`; the code endpoint is a fallback when the page shows a code (UI-12). |
+| `GET /runs/{run_id}/tool-proposals` *(new)* | none | list\[ToolProposal\] | Pending and decided proposals, with source at the code stage (AT-13). |
+| `POST /runs/{run_id}/tool-decisions` *(new)* | ToolDecision | {accepted: true} | AT-7, AT-13. 409 if the proposal is not waiting for that stage. |
+| `GET /tools`, `POST /tools/{name}/approve`, `DELETE /tools/{name}` *(new)* | none | list\[CustomTool\] and unapproved files; the approved CustomTool; {removed: true} | The tool library (AT-20, AT-21). Approve takes the file's current sha256 and refuses if it changed since it was shown. |
 | `GET /models`, `GET /health`, `GET /config/defaults` *(new)* | none | models; backend, Valency and device status; RunConfig defaults | `/health` never blocks: slow checks run in the background. |
 
 ## 12. Data, logging and persistence
@@ -605,6 +616,10 @@ runs/<run_id>/
   workspace.json
   progress.json
   submission.json
+  capability/          # only when there was a gap (Section 14)
+    proposals.json  decisions.json
+    drafts/<name>-r<revision>.py  drafts/test_<name>-r<revision>.py
+    checks/<name>-r<revision>.json
   iter_1/
     candidates.json
     critique.json
@@ -617,7 +632,11 @@ runs/<run_id>/
   brief.md
   brief.pdf
 cache/
-  llm/  valency/  mp/
+  llm/  valency/  mp/  custom/
+
+hephaestus_tools/      # in the working directory (tool_library_dir), shared by runs
+  manifest.json
+  <name>.py  test_<name>.py
 ```
 
 ## 13. Hackathon MVP cut
@@ -634,3 +653,90 @@ For the 24-hour build, ship every **Must**, restricted to oxide perovskites. The
 - Review rounds: 3 maximum; confidence threshold 72 for both the rubric and the reviewer.
 - LLM: Claude Opus 5.5 by default, via API key or Claude Code login.
 - Demo: a pre-cached run in replay mode (UI-9), plus one live run if time allows.
+- Agent-built tools (Section 14), demonstrated by rebuilding the elastic tool with `elastic` disabled.
+
+## 14. Agent-built tools *(new)*
+
+When a goal asks for a property that no tool can compute, the agent can build the tool itself. It proposes a
+plan, writes the tool only once the user accepts that plan, and the user reads the code before it runs. Approved
+tools are saved as files in the working directory and reused by later runs; nothing is added to the package.
+
+Code decides when a tool may be proposed, runs every tool in a sandbox, and keeps agent-built results out of the
+stability verdicts. The tool file format, the toolkit and the event payloads are in `docs/TOOLS.md`
+(*Agent-built tools*).
+
+**Flow.** The capability phase runs between goal parsing and the campaign, and only when there is a gap:
+
+1. **Gap (code).** The target property is not in the property registry. The registry here means the built-in
+   properties, minus `RunConfig.disabled_capabilities`, plus approved library tools.
+2. **Library.** An approved library tool for the same property is reused without asking. Unapproved files in
+   the library are shown for code review first (AT-21).
+3. **Scoping.** The scoping literature search also looks for how papers compute the property. The agent reads
+   our own tools for inspiration and scope.
+4. **Plan.** The agent proposes the tool. The user decides.
+5. **Code.** The agent writes the tool and its tests, and code checks them.
+6. **Code review.** The user reads the code and decides.
+7. **Registration.** The tool is saved to the library and added to the campaign's tool list.
+
+**User decisions**, at both the plan and the code stage:
+
+| Action | Effect |
+| --- | --- |
+| Accept | Plan stage: the agent writes the tool. Code stage: the tool is saved and registered. |
+| Request changes | The user's message goes to the agent, which revises and proposes again (up to `max_tool_revisions`). |
+| Cancel the tool | The run continues without it. If it supplied the target property, the run screens stability only and cannot meet the target. |
+| Cancel the run | The run ends before the campaign, with stop reason "cancelled by user". |
+
+**Decisions made.**
+- Agent-built results can meet the target. The target verdict is labelled "agent-built tool" and no
+  uncertainty is shown. That label is the value's explicit no-uncertainty statement (SYS-4). Relative targets
+  keep the comparison fair: the reference is computed with the same tool. "Target met" still needs the
+  reviewer's confidence above the threshold and no critical finding (OR-2).
+- No calibration step. The user's review of the plan and the code is the check.
+- The agent may write the tool from scratch or use our building blocks. Atomistic-model evaluations (energies,
+  forces, stresses, relaxations, phonons, MD) go through the toolkit, so they run under the GPU lock and the
+  cache (AT-15).
+- Tools live in the working directory, not in the package. A user can also write a tool by hand and import it.
+
+| ID | Requirement | Priority | Acceptance check |
+| --- | --- | --- | --- |
+| AT-1 | Code, not the LLM, detects a capability gap: the target property is not in the registry (built-in, minus `disabled_capabilities`, plus approved library tools). Only a gap opens the capability phase. | Must | A band gap goal never enters the phase; a thermal expansion goal does. |
+| AT-2 | The agent can propose and write tools only in the capability phase. The capability tools are not in the campaign's tool list. | Must | Calling `propose_tool` during the campaign returns an error. |
+| AT-3 | `RunConfig.custom_tools` is `off` or `ask`. Defaults: `off` for `hephaestus run` and the Python API, `ask` for the interactive CLI and the UI. With `off`, a gap ends the run before the campaign with a message naming the missing property. | Must | A gap with `off` stops with that message and no campaign. |
+| AT-4 | The scoping literature search records how papers compute the missing property as `Insight`s with finding\_type `method`, and the plan cites them. | Should | A plan's citations are papers found in this run. |
+| AT-5 | `read_tool_source` returns the signatures and docstrings of the public functions in `tools/simulation.py` and `tools/structures.py`, and the full source of one named function on request. It hides the code of disabled capabilities. | Must | With `elastic` disabled, `elastic_tensor` is neither listed nor returned. |
+| AT-6 | A plan states: name, property, units, description, method with citations, inputs, building blocks used (may be none), expected runtime, whether it supplies the target, and what the run loses if it is cancelled. | Must | A plan missing a field is refused by the tool schema. |
+| AT-7 | At the plan stage the user can accept, request changes with a message, cancel the tool or cancel the run. Revisions are capped by `max_tool_revisions` (default 3); after that, only accept or cancel are offered. | Must | Each of the four actions has its effect; a fourth revision request is refused. |
+| AT-8 | When the cancelled tool supplied the target property, the card says so before the user chooses. The run then screens stability only, "target met" cannot fire, and the brief says the target property was not evaluated. | Must | After cancelling, the stop rule is never "target met" and the brief names the missing property. |
+| AT-9 | Cancel the run ends the run before the campaign, with stop reason "cancelled by user" and no brief. | Must | The state records the stop reason; no `iter_1/` folder exists. |
+| AT-10 | The agent writes the tool only after the plan is accepted. It writes a tool file and a test file in the format of `docs/TOOLS.md`. | Must | No source exists before a plan `accept`. |
+| AT-11 | Static checks (code): imports only from the allowlist; no `open`, `exec`, `eval`, `compile`, `__import__`, `getattr`, `setattr`, `globals`, `vars`, `input` or `breakpoint`; no access to attributes starting with `_`; at most 500 lines; a valid `TOOL` header and `run` function. A failure goes back to the agent, which gets up to 3 fix attempts that do not count as user revisions. | Must | `import os`, `open(...)` and `x.__class__` each fail with a named reason. |
+| AT-12 | The agent's tests and one trial run, on the reference material (or SrTiO3 when the goal has none), pass in the sandbox. The trial result is a finite number in the declared units. | Must | A tool returning NaN or the wrong units fails the trial and goes back to the agent. |
+| AT-13 | The code review shows the full source and test file with syntax highlighting, the check results, the trial output and the toolkit calls used. The user has the same four actions as at the plan stage. | Must | The card shows every line of the file that will be saved. |
+| AT-14 | Each tool call runs in a worker process: Python's isolated mode (`python -I`), allowlisted imports only, sockets disabled, CPU and memory limits (POSIX; timeout only on Windows), and `custom_tool_timeout_s` (default 300). Inputs and outputs pass as JSON. | Must | A tool that loops forever is killed at the timeout and the call returns an error. |
+| AT-15 | The worker asks for building blocks over a pipe. The main process runs them with the run's potential, under the GPU lock and the cache. The worker never imports torch, MACE or matgl. | Must | Custom tool calls in parallel with relaxations never use the GPU at the same time; `import torch` fails the static check. |
+| AT-16 | Approved tools are added to the campaign's tool list as `custom_<name>` before the campaign's LLM session starts. Inputs are `candidate_id` plus the declared inputs. Each result is stored as a `PropertyPrediction` with model `agent-built:<name>@<sha8>` and uncertainty null, with the note "agent-built tool". | Must | The campaign's first turn lists the tool; its predictions carry the model tag. |
+| AT-17 | If the tool supplies the target property, the target check uses it for the reference material and every candidate. The verdict is labelled "agent-built tool" in the UI, CLI and brief, and no uncertainty is shown. The conservative target check equals the central one. The reviewer receives the tool's source. | Must | The reference value comes from the tool; the label appears in all three outputs. |
+| AT-18 | Agent-built results never feed the thermodynamic, dynamic or mechanical stability verdicts, budgets or stop rules other than the target check. | Must | A tool returning any value leaves `thermo_stable` and `dyn_stable` unchanged. |
+| AT-19 | The final re-check runs the tool again on the winner and the reference, with the final potential and dtype. | Should | `validation.json` has a check row for the tool's property. |
+| AT-20 | On approval, the tool is saved as `<tool_library_dir>/<name>.py` and `test_<name>.py`, and its sha256 is added to `manifest.json` as a `CustomTool`. Runs import only files whose hash matches the manifest. | Must | Editing one byte of an approved file stops it loading until it is approved again. |
+| AT-21 | A new or edited file in the library, including one written by hand, gets the same code review before it is imported: at the start of the capability phase, in the UI's tool library, or with `hephaestus tools review`. Before approval, a file is only parsed (for its header), never imported. | Must | A hand-written tool appears for review and loads after approval. |
+| AT-22 | An approved library tool for the gap's property is reused without a new proposal, with an event saying so. | Should | A second run with the same gap proposes nothing. |
+| AT-23 | Cache keys for custom tool results include the tool's sha256, so a revised or edited tool never returns an earlier version's result. | Must | Changing one line of the tool recomputes its result. |
+| AT-24 | Every proposal and decision is an event and is saved in the run folder. Replay and resume never ask again. A run killed while waiting for a decision shows the same card again on resume. | Must | Resume after a kill at the code review shows the card; replay shows the decision without asking. |
+| AT-25 | Time spent waiting for the user counts against no budget. `capability_time_budget_s` (default 600) bounds the agent's work in the phase; when it runs out, unfinished tools are treated as cancelled. At most `max_custom_tools` (default 3) tools per run. | Must | A run that waits 20 minutes for a decision still runs its full campaign. |
+| AT-26 | `RunConfig.disabled_capabilities` removes built-in capabilities for a run (`elastic` removes every mechanical property). This is for demos and tests. | Must | With `elastic` disabled, a bulk modulus goal opens a gap. |
+| AT-27 | The UI shows the plan and the code review as cards in the orchestrator log, with the four actions and a message box. The code card has a syntax-highlighted viewer. A tool library page lists approved and unapproved tools, and the settings panel exposes the `RunConfig` fields of this section. | Must | Every action can be taken from the UI. |
+| AT-28 | The interactive CLI shows the plan and the code (paged, highlighted) and asks for the decision. `hephaestus tools list`, `review` and `remove` manage the library. | Must | Every action can be taken from the CLI. |
+| AT-29 | The Python API takes a decision callback (`Experiment(goal, on_tool_proposal=fn)`) and exposes `exp.decide(proposal_id, action, message)` for step-by-step use. | Should | A scripted callback drives a run through both stages. |
+
+### Functions
+
+| Function | Inputs | Output | Notes |
+| --- | --- | --- | --- |
+| `find_gap` | SearchSpec, RunConfig, library | property name or None | AT-1, AT-26. Pure code. |
+| `capability_phase` | RunState, Workspace, LLM, bus, decide | list\[CustomTool\] or a cancel | AT-2 to AT-13. Runs its own orchestrator conversation with the capability tools only. |
+| `static_check` | source (str) | {passed, report} | AT-11. AST walk; never imports the source. |
+| `run_sandboxed` | tool file, structure dict, inputs, toolkit server, timeout\_s | result dict or `{"error": ...}` | AT-14, AT-15. |
+| `load_library` | tool\_library\_dir | {approved: list\[CustomTool\], unapproved: list\[path\]} | AT-20, AT-21. |
+| `approve_tool` | path, sha256 shown to the user | CustomTool | Refuses if the file changed since it was shown. |
