@@ -51,7 +51,114 @@ const ACTION_TEXT = {
   revise: "Changes requested",
   cancel_tool: "Tool cancelled",
   cancel_run: "Run cancelled",
+  allow: "Allowed",
+  deny: "Not allowed",
+  answer: "Answered",
 };
+
+/**
+ * Send a decision for a waiting proposal or request.
+ * @param {object} ctx {runId, onSent}.
+ * @param {object} draft Per-card draft state; `sent` is set on success.
+ * @param {string} id Proposal or request ID.
+ * @param {string} action Action.
+ * @param {string|null} message Message or answer.
+ * @param {HTMLButtonElement|null} btn Button to disable while sending.
+ */
+async function sendDecision(ctx, draft, id, action, message = null, btn = null) {
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/runs/${encodeURIComponent(ctx.runId)}/tool-decisions`, { body: { proposal_id: id, action, message } });
+    draft.sent = action;
+    ctx.onSent();
+  } catch (e) {
+    toast(e.message, "critical");
+    if (btn) btn.disabled = false;
+  }
+}
+
+/**
+ * The card for a package request or a question from the tool builder.
+ * @param {object} entry Log entry {kind, request, allowed, decision}.
+ * @param {object} ctx {runId, waiting (bool), drafts, onSent}.
+ * @returns {HTMLElement}
+ */
+export function requestCard(entry, ctx) {
+  const r = entry.request;
+  const isPkg = entry.kind === "package";
+  const key = `${r.request_id}:${entry.kind}`;
+  const draft = ctx.drafts[key] || { text: "" };
+  ctx.drafts[key] = draft;
+  const status = entry.decision
+    ? pill(ACTION_TEXT[entry.decision.action] || label(entry.decision.action), entry.decision.action === "deny" ? "warning" : "good", entry.decision.action === "deny" ? "x" : "check")
+    : ctx.waiting
+      ? pill("Needs your answer", "warning", "alert")
+      : pill("Not answered", "", "info");
+  const head = h(
+    "div.tool-card-head",
+    null,
+    h("div.log-icon.decision", null, icon(isPkg ? "box" : "message")),
+    h(
+      "div",
+      null,
+      h("div.tool-card-kicker", null, isPkg ? "Package request" : "Question from the tool builder"),
+      isPkg
+        ? h("div.tool-card-title", null, "Use ", h("span.mono", null, r.package), " in the tool?")
+        : h("div.tool-card-title", null, r.question),
+      isPkg ? h("div.muted", null, "It is outside the sandbox's allowlist, so the agent needs your permission.") : null,
+    ),
+    status,
+  );
+  const body = h("div.tool-card-body");
+  if (isPkg) {
+    body.append(h("p", null, h("strong", null, "Why: "), r.question));
+    body.append(
+      r.installed
+        ? h("div.callout.info", null, icon("check"), h("div", null, `${r.package} is already installed on the server. Allowing it lets the tool import it.`))
+        : h("div.callout.warning", null, icon("download"), h("div", null, "Not installed. Allowing it runs ", h("span.mono", null, `pip install ${r.pip_name}`), " in the server's Python.")),
+    );
+  }
+  if (entry.decision && entry.decision.message) body.append(h("div.callout", null, icon("message"), h("div", null, h("strong", null, "You answered: "), entry.decision.message)));
+  if (ctx.waiting && !entry.decision) {
+    const bar = h("div.tool-actions");
+    if (draft.sent) {
+      bar.append(h("span.muted", null, h("span.spinner"), ` ${ACTION_TEXT[draft.sent]}: waiting for the agent…`));
+    } else if (isPkg) {
+      append(bar, [
+        h("button.btn.primary", { onclick: (ev) => sendDecision(ctx, draft, r.request_id, "allow", null, ev.currentTarget) }, icon("check"), r.installed ? "Allow" : "Allow and install"),
+        h("button.btn", { onclick: (ev) => sendDecision(ctx, draft, r.request_id, "deny", null, ev.currentTarget) }, icon("x"), "Don't allow"),
+        h("button.btn.ghost.danger", { onclick: (ev) => confirm("Cancel the whole run? Nothing else runs.") && sendDecision(ctx, draft, r.request_id, "cancel_run", null, ev.currentTarget) }, icon("stop"), "Cancel the run"),
+      ]);
+    } else {
+      const box = h("textarea.input", { rows: 2, placeholder: "Your answer", value: draft.text, oninput: (e) => (draft.text = e.target.value) });
+      const opts = (r.options || []).map((o) => h("button.btn.sm", { onclick: (ev) => sendDecision(ctx, draft, r.request_id, "answer", o, ev.currentTarget) }, o));
+      append(bar, [
+        opts.length ? h("div.tool-actions", null, opts) : null,
+      ]);
+      body.append(
+        h(
+          "div.tool-decide",
+          null,
+          bar,
+          h(
+            "div.tool-revise",
+            null,
+            box,
+            h(
+              "div.tool-actions",
+              null,
+              h("button.btn.primary", { onclick: (ev) => (draft.text.trim() ? sendDecision(ctx, draft, r.request_id, "answer", draft.text.trim(), ev.currentTarget) : toast("Type an answer.", "warning")) }, icon("message"), "Send answer"),
+              h("button.btn.ghost.danger", { onclick: (ev) => confirm("Cancel the whole run? Nothing else runs.") && sendDecision(ctx, draft, r.request_id, "cancel_run", null, ev.currentTarget) }, icon("stop"), "Cancel the run"),
+            ),
+          ),
+        ),
+      );
+      return h(`div.log-entry.tool-card.waiting`, { id: `tool-${r.request_id}-${entry.kind}` }, head, body);
+    }
+    body.append(h("div.tool-decide", null, bar));
+  }
+  return h(`div.log-entry.tool-card${ctx.waiting && !entry.decision ? ".waiting" : ""}`, { id: `tool-${r.request_id}-${entry.kind}` }, head, body);
+}
 
 /**
  * Buttons for a proposal waiting for the user: accept, request changes, cancel the tool or the run.
@@ -269,7 +376,14 @@ export function capabilityLine(e, time) {
       break;
     case "cancelled":
       title = p.scope === "run" ? "Run cancelled" : "No tool";
-      text = p.scope === "run" ? "You cancelled the run." : p.reason === "budget" ? "The tool builder ran out of time. The run screens stability only." : "The run continues without the tool and screens stability only.";
+      text =
+        p.scope === "run"
+          ? "You cancelled the run."
+          : p.reason === "budget"
+            ? "The tool builder ran out of time. The run screens stability only."
+            : p.reason && p.reason !== "cancelled by the user" && p.reason !== "failed"
+              ? `No tool: ${p.reason}. The run screens stability only.`
+              : "The run continues without the tool and screens stability only.";
       ic = "x";
       break;
     case "log":

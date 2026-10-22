@@ -353,8 +353,8 @@ class RunState(Record):
     versions: dict[str, str] = Field(default_factory=dict)
 
 
-ToolStage = Literal["plan", "code"]
-ToolAction = Literal["accept", "revise", "cancel_tool", "cancel_run"]
+ToolStage = Literal["plan", "code", "package", "question"]
+ToolAction = Literal["accept", "revise", "cancel_tool", "cancel_run", "allow", "deny", "answer"]
 
 
 class ToolCheck(Record):
@@ -391,6 +391,20 @@ class ToolProposal(Record):
     revisions_left: int = 0
 
 
+class UserRequest(Record):
+    """Something the tool builder asks the user: a package outside the sandbox, or a question."""
+
+    request_id: str
+    kind: Literal["package", "question"]
+    question: str  # the agent's reason (package) or question
+    package: str | None = None  # import name, e.g. "phonopy"
+    pip_name: str | None = None  # what to install when it is missing
+    installed: bool | None = None  # whether the server's Python can import it now
+    options: list[str] = Field(default_factory=list)  # suggested answers to a question
+    status: Literal["waiting", "answered"] = "waiting"
+    answer: str | None = None
+
+
 class ToolDecision(Record):
     """The user's decision on a proposal at the plan or the code stage (AT-7, AT-13)."""
 
@@ -413,3 +427,4 @@ class CustomTool(Record):
     approved_at: datetime = Field(default_factory=utcnow)
     run_id: str | None = None
     description: str = ""
+    packages: list[str] = Field(default_factory=list)  # imports beyond the allowlist, approved by the user

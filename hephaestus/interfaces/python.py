@@ -769,7 +769,8 @@ class Experiment:
         Returns
         -------
         list of dict
-            ``ToolProposal`` fields plus ``waiting`` (bool) and ``allowed`` (actions).
+            ``ToolProposal`` fields (or ``UserRequest`` fields, with ``kind``) plus ``waiting``
+            (bool) and ``allowed`` (actions).
         """
         cap = load_state(self.files.root / "capability") if self.exists else None
         if cap is None:
@@ -785,6 +786,11 @@ class Experiment:
                     "allowed": w["allowed"] if w else [],
                 }
             )
+        for r in cap.requests.values():  # package requests and questions from the agent
+            w = waits.get(r.request_id)
+            out.append(
+                {**r.model_dump(mode="json"), "waiting": w is not None, "allowed": w["allowed"] if w else []}
+            )
         return out
 
     def decide(self, proposal_id: str, action: str, message: str | None = None) -> ToolDecision:
@@ -794,10 +800,10 @@ class Experiment:
         ----------
         proposal_id : str
             Proposal, e.g. ``"t1"``.
-        action : {"accept", "revise", "cancel_tool", "cancel_run"}
-            The decision.
+        action : {"accept", "revise", "cancel_tool", "cancel_run", "allow", "deny", "answer"}
+            The decision; ``allow`` and ``deny`` answer a package request, ``answer`` a question.
         message : str, optional
-            What to change, for ``revise``.
+            What to change, for ``revise``; the answer, for ``answer``.
 
         Returns
         -------
@@ -1185,7 +1191,7 @@ def tool_library(library_dir: str | Path | None = None) -> dict[str, Any]:
         source, tests = custom.load_sources(t)
         rows.append({**t.model_dump(mode="json"), "source": source, "tests": tests})
     for f in unapproved:
-        f["check"] = custom.static_check(f["source"], "tool")
+        f["check"] = custom.static_check(f["source"], "tool", custom.header_packages(f["header"]))
     return {"dir": str(lib.resolve()), "approved": rows, "unapproved": unapproved}
 
 

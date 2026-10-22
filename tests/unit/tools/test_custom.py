@@ -310,3 +310,20 @@ def test_at20_handler_refuses_a_tool_edited_after_approval(tmp_path: Path) -> No
     (tmp_path / "lib" / "toy_expansion.py").write_text(TOOL_SOURCE + "\n", encoding="utf-8")
     with pytest.raises(ToolError, match="changed since it was approved"):
         custom.make_handler(tool, fake_factory)(ws, "c1-1")
+
+
+def test_approved_packages_pass_the_static_check_and_the_sandbox(tmp_path: Path) -> None:
+    """A package the user allowed is importable in the tool; without approval it is refused."""
+    src = TOOL_SOURCE.replace("import math\n", "import math\n\nimport phonopy\n")
+    assert not custom.static_check(src, "tool")["passed"]
+    assert custom.static_check(src, "tool", ["phonopy"])["passed"]
+    path = write(tmp_path, src)
+    assert not custom.run_sandboxed("run", path, FakeToolkit("toy"))["ok"]
+    assert custom.run_sandboxed("run", path, FakeToolkit("toy"), extra=["phonopy"])["ok"]
+
+
+def test_install_package_refuses_anything_but_a_plain_name() -> None:
+    """URLs, paths and flags never reach pip."""
+    for bad in ("https://evil.example/x.tar.gz", "../x", "--index-url=x", "x; rm -rf /"):
+        ok, why = custom.install_package(bad)
+        assert not ok and "not a plain package name" in why

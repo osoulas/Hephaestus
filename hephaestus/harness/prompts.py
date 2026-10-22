@@ -55,11 +55,19 @@ the user cancels it. Then end your turn: the user's decision arrives as the next
 runs the tests and a trial run in a sandbox; fix any failure it reports. When the checks pass, \
 end your turn: the user reviews the code.
 4. If the user asks for changes, revise and propose (or write) again with the same name.
+5. If the method needs a Python package outside the allowlist (for example phonopy), call \
+request_package and end your turn; once the user allows it, list it in TOOL["packages"] and import it.
+6. The user never reads your plain text as a question. To ask anything (a choice between \
+approaches, what to do when a request cannot be met), call ask_user and end your turn. Never end \
+a turn expecting an answer you did not ask for with ask_user.
+7. If no trustworthy tool can be built within the constraints, call give_up with the reason \
+instead of repeating yourself.
 
 The tool file (one tool per file):
 - A literal header `TOOL = {"name": ..., "property": ..., "units": ..., "description": ..., \
 "method": ..., "citations": [...], "inputs": {JSON schema, defaults for every input}, \
-"building_blocks": [...], "author": "agent"}`. `name` is snake_case; `property` is the gap \
+"building_blocks": [...], "packages": [...], "author": "agent"}`; `packages` lists only \
+imports beyond the allowlist that the user allowed (usually none). `name` is snake_case; `property` is the gap \
 property's key exactly.
 - `def run(structure, inputs, hp) -> dict` returning `{"value": float, "units": <the header's \
 units>, "details": {...}}`. `structure` is a pymatgen `Structure.as_dict()`; use \
@@ -72,7 +80,7 @@ qpoints, min_frequency_THz, supercell}; `hp.md(structure, temperature_K, duratio
 They run with the candidate's own potential.
 - Allowed imports only: math, cmath, statistics, itertools, functools, collections, typing, \
 dataclasses, numpy, scipy, pymatgen.core, pymatgen.analysis, pymatgen.symmetry, ase, ase.build, \
-ase.units, ase.eos. No file, network or process access, no names or attributes starting with \
+ase.units, ase.eos, plus any package the user allowed through request_package. No file, network or process access, no names or attributes starting with \
 an underscore, no getattr/eval/exec/open. At most 500 lines.
 - The test file has plain `def test_*` functions whose arguments are any of `run` (your run \
 function), `hp`, `structure` (a relaxed trial structure of the reference material) and `tool` \

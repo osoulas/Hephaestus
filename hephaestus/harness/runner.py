@@ -630,6 +630,7 @@ def _capability(
         why = {
             "cancelled_tool": "the user cancelled the tool for it",
             "budget": "the capability phase ran out of time",
+            "failed": phase.state.end_reason or "no tool could be built for it",
         }
         new = ws.spec.model_copy(deep=True)
         new.target_evaluable = False
