@@ -1,4 +1,4 @@
-"""Commands shared by the subcommands and the REPL's slash commands: runs, show, brief, backends, sign-ins.
+"""Commands shared by the subcommands and the REPL's slash commands: runs, show, brief, tools, sign-ins.
 
 Each prints to a console and returns an exit code. They only read stored runs and call the Python
 API or the sign-in helpers; nothing here computes a result.
@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import getpass
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.markup import escape
@@ -18,15 +20,23 @@ from rich.text import Text
 from hephaestus.interfaces.cli.render import brief_panel, literature_view, result_line, spec_panel
 from hephaestus.interfaces.cli.stream import EXIT_FAILED, EXIT_OK, describe_blocker, history_renderer
 from hephaestus.interfaces.cli.theme import DASH, GLYPH, mark
+from hephaestus.interfaces.python import PROFILES as API_PROFILES
 from hephaestus.interfaces.python import (
+    Experiment,
     ExperimentError,
+    approve_tool,
     backend_status,
     device_status,
     list_runs,
     models,
+    remove_tool,
     run_blockers,
     simulation_status,
+    tool_library,
 )
+
+# Setting profiles by name, from the Python API's list (the web composer shows the same).
+PROFILES: dict[str, dict[str, Any]] = {p["id"]: p["values"] for p in API_PROFILES}
 
 
 def runs_view(console: Console, root: Path | None = None, limit: int = 20) -> int:
@@ -51,23 +61,30 @@ def runs_view(console: Console, root: Path | None = None, limit: int = 20) -> in
         console.print(result_line("[muted]No runs yet. Type a goal to start one.[/]"))
         return EXIT_OK
     t = Table(box=None, header_style="muted", pad_edge=False, padding=(0, 2))
-    for col in ("run", "status", "best", "stop", "created", "goal"):
-        t.add_column(col, no_wrap=col != "goal", overflow="ellipsis")
-    colours = {"finished": "ok", "failed": "bad", "running": "accent", "needs_input": "warn"}
+    for col in ("run", "status", "best", "stop", "created", "title"):
+        t.add_column(col, no_wrap=col != "title", overflow="ellipsis")
+    colours = {
+        "finished": "ok",
+        "failed": "bad",
+        "running": "accent",
+        "needs_input": "warn",
+        "capability": "accent",
+        "stopped": "warn",
+    }
     for r in runs[:limit]:
         status = "running" if r.get("running") else str(r.get("status"))
         resumable = status not in ("finished", "running", "created")
         label = f"[{colours.get(status, 'muted')}]{status}[/]" + (
             " [faint](resumable)[/]" if resumable else ""
         )
-        goal = str(r.get("raw_goal") or "")
+        goal = str(r.get("title") or r.get("raw_goal") or "")
         t.add_row(
             f"[id]{r['run_id']}[/]",
             label,
             str(r.get("best") or DASH),
             str(r.get("stop_reason") or DASH),
             str(r.get("created_at", ""))[:16].replace("T", " "),
-            goal if len(goal) <= 60 else goal[:57] + "…",
+            escape(goal if len(goal) <= 60 else goal[:57] + "…"),
         )
     console.print(t)
     return EXIT_OK
@@ -95,6 +112,7 @@ def show_view(console: Console, run_id: str, root: Path | None = None) -> int:
     except ExperimentError as exc:
         console.print(result_line(f"[bad]{exc}[/]"))
         return EXIT_FAILED
+    console.print(Text.assemble((exp.title, "bold"), "  ", (exp.run_id, "id")))
     if r.spec:
         console.print(spec_panel(r.spec))
     if r.rounds:
@@ -103,12 +121,21 @@ def show_view(console: Console, run_id: str, root: Path | None = None) -> int:
     if r.candidates:
         console.print(Text("Candidates", style="accent"))
         console.print(r.candidates_table())
-    console.print(r.summary(exp.state, brief_path=str(exp.files.brief_md) if exp.brief else None))
+    compute = exp.files.compute_brief_md
+    console.print(
+        r.summary(
+            exp.state,
+            brief_path=str(exp.files.brief_md) if exp.brief else None,
+            compute_path=str(compute) if compute.exists() else None,
+        )
+    )
     return EXIT_OK
 
 
-def brief_view(console: Console, run_id: str, root: Path | None = None, pdf: bool = False) -> int:
-    """Print a run's brief, or the path of its PDF (UI-8).
+def brief_view(
+    console: Console, run_id: str, root: Path | None = None, pdf: bool = False, compute: bool = False
+) -> int:
+    """Print a run's lab brief or computational brief, or the path of its PDF (UI-8, BG-7).
 
     Parameters
     ----------
@@ -120,6 +147,8 @@ def brief_view(console: Console, run_id: str, root: Path | None = None, pdf: boo
         Runs folder.
     pdf : bool
         Print the PDF path instead.
+    compute : bool
+        The computational brief (methods, settings and every number) instead of the lab brief.
 
     Returns
     -------
@@ -127,7 +156,6 @@ def brief_view(console: Console, run_id: str, root: Path | None = None, pdf: boo
         Exit code.
     """
     from hephaestus.interfaces.cli.stream import locate_run
-    from hephaestus.interfaces.python import Experiment
 
     rid, base = locate_run(run_id, root)
     try:
@@ -135,19 +163,203 @@ def brief_view(console: Console, run_id: str, root: Path | None = None, pdf: boo
     except ExperimentError as exc:
         console.print(result_line(f"[bad]{exc}[/]"))
         return EXIT_FAILED
+    what = "computational brief" if compute else "brief"
     if pdf:
-        path = exp.brief_pdf
+        path = exp.compute_brief_pdf if compute else exp.brief_pdf
         if path is None:
-            console.print(result_line("[warn]No PDF for this run.[/]"))
+            console.print(result_line(f"[warn]No PDF of the {what} for this run.[/]"))
             return EXIT_FAILED
         console.print(str(path))
         return EXIT_OK
-    brief = exp.brief
+    brief = exp.compute_brief if compute else exp.brief
     if brief is None:
-        console.print(result_line(f"[warn]Run {rid} has no brief yet.[/]"))
+        console.print(result_line(f"[warn]Run {rid} has no {what} yet.[/]"))
         return EXIT_FAILED
-    console.print(brief_panel(brief))
+    console.print(brief_panel(brief, title="computational brief" if compute else None))
     return EXIT_OK
+
+
+def rename_cmd(console: Console, run_id: str, title: str, root: Path | None = None) -> int:
+    """Set a run's title, as the web UI's rename does (UI-9).
+
+    Parameters
+    ----------
+    console : rich.console.Console
+        Output console.
+    run_id : str
+        Run ID or folder path.
+    title : str
+        New title; empty restores the parser's.
+    root : pathlib.Path, optional
+        Runs folder.
+
+    Returns
+    -------
+    int
+        Exit code.
+    """
+    from hephaestus.interfaces.cli.stream import locate_run
+
+    rid, base = locate_run(run_id, root)
+    try:
+        new = Experiment.load(rid, base).set_title(title)
+    except (ExperimentError, ValueError) as exc:
+        console.print(result_line(f"[bad]{escape(str(exc))}[/]"))
+        return EXIT_FAILED
+    console.print(result_line(f"[id]{rid}[/] is now titled [bold]{escape(new)}[/]"))
+    return EXIT_OK
+
+
+TOOL_ACTIONS = ("list", "review", "show", "remove")
+
+
+def tools_cmd(
+    console: Console,
+    action: str = "list",
+    name: str | None = None,
+    library_dir: str | Path | None = None,
+    *,
+    ask: Callable[[str], str] | None = None,
+    confirm: Callable[[str, bool], bool] | None = None,
+) -> int:
+    """List, review, show or remove the agent-built tools in the library (AT-20, AT-21, AT-28).
+
+    ``review`` shows each file waiting for review (its static check, then the code and tests,
+    paged on a terminal) and approves it by the fingerprint shown, so a file edited meanwhile is
+    refused by the engine.
+
+    Parameters
+    ----------
+    console : rich.console.Console
+        Output console.
+    action : {"list", "review", "show", "remove"}
+        What to do.
+    name : str, optional
+        Tool to act on (``review`` without one walks every waiting file).
+    library_dir : str or pathlib.Path, optional
+        Library folder; the run options' ``tool_library_dir`` by default.
+    ask : callable, optional
+        ``ask(prompt) -> line``; ``review`` needs it.
+    confirm : callable, optional
+        ``confirm(question, default) -> bool``; ``remove`` asks when given.
+
+    Returns
+    -------
+    int
+        Exit code.
+    """
+    from hephaestus.interfaces.cli.cards import code_view, library_table
+    from hephaestus.interfaces.cli.decide import make_choose, page
+
+    if action not in TOOL_ACTIONS:
+        console.print(result_line(f"[bad]Unknown action {escape(action)}[/]: use {', '.join(TOOL_ACTIONS)}."))
+        return EXIT_FAILED
+    lib = tool_library(library_dir)
+    if action == "list":
+        console.print(library_table(lib))
+        return EXIT_OK
+    approved = {str(a["name"]): a for a in lib["approved"]}
+    waiting = {str(u["name"]): u for u in lib["unapproved"]}
+    if action in ("show", "remove") and not name:
+        console.print(result_line(f"[warn]Name a tool:[/] hephaestus tools {action} <name>."))
+        return EXIT_FAILED
+    if action == "show":
+        tool = approved.get(name or "") or waiting.get(name or "")
+        if tool is None:
+            console.print(result_line(f"[bad]No tool called {escape(str(name))} in {escape(lib['dir'])}.[/]"))
+            return EXIT_FAILED
+        console.print(_tool_header(tool, approved=name in approved))
+        page(console, code_view(str(tool.get("source") or ""), str(tool.get("tests") or "")))
+        return EXIT_OK
+    if action == "remove":
+        if name not in approved and name not in waiting:
+            console.print(result_line(f"[bad]No tool called {escape(str(name))} in {escape(lib['dir'])}.[/]"))
+            return EXIT_FAILED
+        if confirm is not None and not confirm(f"Remove {name} and its tests from the library?", False):
+            console.print(result_line("[muted]Kept.[/]"))
+            return EXIT_OK
+        removed = remove_tool(str(name), library_dir)
+        console.print(
+            result_line(
+                f"Removed [tool]{escape(str(name))}[/]." if removed else "[warn]Nothing to remove.[/]"
+            )
+        )
+        return EXIT_OK if removed else EXIT_FAILED
+    # review
+    todo = [waiting[name]] if name in waiting else ([] if name else list(waiting.values()))
+    if name and not todo:
+        note = "is already approved" if name in approved else f"is not in {lib['dir']}"
+        console.print(result_line(f"[warn]{escape(name)} {escape(note)}.[/]"))
+        return EXIT_FAILED
+    if not todo:
+        console.print(result_line("[muted]Nothing waits for review.[/]"))
+        return EXIT_OK
+    if ask is None:
+        console.print(result_line("[warn]Reviewing needs a terminal to answer in.[/]"))
+        return EXIT_FAILED
+    choose = make_choose(console, ask)
+    for f in todo:
+        console.print(_tool_header(f, approved=False))
+        if f.get("error"):
+            console.print(result_line(f"[bad]{escape(str(f['error']))}[/]"))
+        page(console, code_view(str(f.get("source") or ""), str(f.get("tests") or "")))
+        while True:
+            key = choose(
+                f"Approve {f['name']}?",
+                [("a", "approve"), ("v", "view again"), ("s", "skip"), ("r", "remove")],
+            )
+            if key == "v":
+                page(console, code_view(str(f.get("source") or ""), str(f.get("tests") or "")))
+                continue
+            break
+        if key == "a":
+            try:
+                approve_tool(str(f["name"]), str(f["sha256"]), library_dir)
+            except ExperimentError as exc:
+                console.print(result_line(f"[bad]{escape(str(exc))}[/]"))
+                continue
+            console.print(
+                result_line(f"[ok]Approved[/] [tool]{escape(str(f['name']))}[/]: runs can use it now.")
+            )
+        elif key == "r":
+            remove_tool(str(f["name"]), library_dir)
+            console.print(result_line(f"Removed [tool]{escape(str(f['name']))}[/]."))
+        else:
+            console.print(result_line(f"[muted]Skipped {escape(str(f['name']))}.[/]"))
+    return EXIT_OK
+
+
+def _tool_header(tool: dict[str, Any], *, approved: bool) -> Text:
+    """Summarise a library tool above its code: name, property, units, status and static check.
+
+    Parameters
+    ----------
+    tool : dict
+        An ``approved`` or ``unapproved`` row of ``tool_library()``.
+    approved : bool
+        Which list it came from.
+
+    Returns
+    -------
+    rich.text.Text
+        Two or three lines.
+    """
+    h = tool if approved else (tool.get("header") or {})
+    out = Text.assemble((str(tool.get("name")), "tool"), "  ")
+    out.append(f"{h.get('property') or DASH}", style="bold")
+    if h.get("units"):
+        out.append(f" ({h.get('units')})", style="muted")
+    if approved:
+        out.append(f"  {GLYPH['ok']} approved", style="ok")
+    else:
+        out.append("  edited: review again" if tool.get("changed") else "  needs review", style="warn")
+        check = tool.get("check") or {}
+        if check:
+            out.append(f"\n  static check {mark(check.get('passed'))} ")
+            out.append(str(check.get("report") or ""), style="muted")
+    if h.get("description"):
+        out.append(f"\n  {h.get('description')}", style="muted")
+    return out
 
 
 def literature_cmd(

@@ -15,7 +15,7 @@ from hephaestus.harness import runner
 from hephaestus.interfaces.cli import actions, repl
 from hephaestus.interfaces.cli.app import main
 from hephaestus.interfaces.cli.render import Renderer
-from hephaestus.interfaces.cli.stream import Detached, stream
+from hephaestus.interfaces.cli.stream import Detached, Prompts, stream
 from hephaestus.interfaces.cli.theme import make_console
 from hephaestus.llm.scripted import ScriptedLLM
 from hephaestus.tools.stubs import check_novelty, stub_handlers
@@ -334,6 +334,7 @@ class FakeRun:
         """
         self.interrupts = interrupts
         self.stopped = 0
+        self.modes: list[str] = []
         self.calls: list[bool] = []
 
     def events(self, include_history: bool = True) -> Iterator[ProgressEvent]:
@@ -362,8 +363,13 @@ class FakeRun:
             self.interrupts -= 1
             raise KeyboardInterrupt
 
-    def stop(self) -> bool:
+    def stop(self, mode: str = "campaign") -> bool:
         """Record a stop request.
+
+        Parameters
+        ----------
+        mode : str
+            ``campaign`` or ``all``.
 
         Returns
         -------
@@ -371,6 +377,7 @@ class FakeRun:
             True.
         """
         self.stopped += 1
+        self.modes.append(mode)
         return True
 
     def wait(self) -> None:
@@ -394,6 +401,95 @@ def test_second_ctrl_c_detaches() -> None:
     with pytest.raises(Detached) as exc:
         stream(run, make_console(file=io.StringIO()), Renderer())  # type: ignore[arg-type]
     assert exc.value.run_id == "r-fake" and run.stopped == 1
+
+
+def _prompts(*answers: str) -> Prompts:
+    """Build prompts that type the given answers in order.
+
+    Parameters
+    ----------
+    *answers : str
+        Lines to type.
+
+    Returns
+    -------
+    Prompts
+        Interactive prompts; confirmations answer yes.
+    """
+    lines = iter(answers)
+    return Prompts(ask=lambda _q: next(lines), confirm=lambda _q, _d: True)
+
+
+@pytest.mark.parametrize(("key", "mode"), [("s", "campaign"), ("e", "all")])
+def test_or8_ctrl_c_menu_stops_the_search_or_everything(key: str, mode: str) -> None:
+    """With someone to ask, Ctrl+C offers stop modes; the chosen one reaches ``Experiment.stop``."""
+    run = FakeRun(interrupts=1)
+    console = make_console(file=io.StringIO(), width=140, record=True)
+    stream(run, console, Renderer(), prompts=_prompts(key))  # type: ignore[arg-type]
+    assert run.modes == [mode] and run.calls == [True, False]
+    out = console.export_text()
+    assert "Stop this run?" in out and "Stopping" in out
+
+
+def test_or8_ctrl_c_menu_detach_and_keep() -> None:
+    """Detach raises ``Detached``; keep running does not stop the run."""
+    run = FakeRun(interrupts=1)
+    with pytest.raises(Detached):
+        stream(run, make_console(file=io.StringIO()), Renderer(), prompts=_prompts("d"))  # type: ignore[arg-type]
+    assert run.stopped == 0
+    run = FakeRun(interrupts=1)
+    stream(run, make_console(file=io.StringIO()), Renderer(), prompts=_prompts("keep"))  # type: ignore[arg-type]
+    assert run.stopped == 0 and run.calls == [True, False]
+
+
+class FakeReplay(FakeRun):
+    """A replay handle whose stream is interrupted, to test the replay menu."""
+
+    def __init__(self, interrupts: int) -> None:
+        """Start at 1x.
+
+        Parameters
+        ----------
+        interrupts : int
+            Interrupts to raise.
+        """
+        super().__init__(interrupts)
+        self.replay_control: dict[str, Any] = {"speed": 1.0}
+        self.speeds: list[float] = []
+
+    def set_replay_speed(self, speed: float) -> None:
+        """Record a speed change.
+
+        Parameters
+        ----------
+        speed : float
+            New speed.
+        """
+        self.speeds.append(speed)
+        self.replay_control["speed"] = speed
+
+
+@pytest.mark.parametrize(("key", "speed"), [("f", 2.0), ("s", 0.5), ("i", 0.0)])
+def test_ui9_replay_menu_changes_the_speed(key: str, speed: float) -> None:
+    """Ctrl+C during a replay offers speeds; the replay keeps streaming at the new one."""
+    run = FakeReplay(interrupts=1)
+    console = make_console(file=io.StringIO(), width=140, record=True)
+    stream(run, console, Renderer(replaying=True), stoppable=False, prompts=_prompts(key))  # type: ignore[arg-type]
+    assert run.speeds == [speed] and run.stopped == 0 and run.calls == [True, False]
+    assert "Replay at 1" in console.export_text()
+
+
+def test_ui9_replay_menu_ends_the_replay() -> None:
+    """Ending the replay from the menu detaches."""
+    run = FakeReplay(interrupts=1)
+    with pytest.raises(Detached):
+        stream(
+            run,
+            make_console(file=io.StringIO()),
+            Renderer(replaying=True),
+            stoppable=False,
+            prompts=_prompts("e"),
+        )  # type: ignore[arg-type]
 
 
 def test_or1_run_refused_when_it_cannot_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

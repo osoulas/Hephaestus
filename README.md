@@ -54,27 +54,43 @@ review stream past, ending with the brief. Commands start with `/` and Tab compl
 
 | Command | Does |
 | --- | --- |
-| `/model`, `/backend`, `/novel`, `/config` | Choose the model, the model access, novelty and other run options |
-| `/runs`, `/show <id>`, `/brief [id]` | List runs; show a run's rounds and candidates; print its brief |
+| `/model`, `/backend`, `/novel`, `/config`, `/profile` | Choose the model, the model access, novelty, every other run option (grouped), or a preset of budgets |
+| `/runs`, `/show <id>`, `/rename [id] <title>` | List runs; show a run's rounds and candidates; retitle it |
+| `/brief [id] [compute] [pdf]` | Print the lab brief, or the computational brief (methods, settings, every number) |
+| `/tools [list\|review\|show\|remove] [name]` | The library of agent-built tools: review waiting files, read or remove approved ones |
 | `/resume <id>`, `/replay <id> [speed]` | Continue an interrupted run; replay a stored one offline |
 | `/backends`, `/login`, `/signin` | Readiness; Claude Code and Valency sign-in |
 | `/help`, `/exit` | |
 
-While a campaign runs, **Ctrl+C** asks it to stop: it submits its best candidate and still writes
-the brief. A second Ctrl+C detaches; resume the run later with `hephaestus resume <id>`.
+**Agent-built tools.** When no tool computes a target property, the session (where
+`custom_tools` defaults to `ask`) lets the agent research and write one. Each step waits for you
+in the log: accept the plan, request changes or cancel; then review the code (paged and
+highlighted, with its static check, tests and trial run) and approve it; allow or deny a package;
+answer a question; or let the agent give up or point it at something else. The answers go
+through `Experiment.decide`, so the engine decides what each one does. A run resumed while a card
+waits asks again.
+
+**Ctrl+C** opens a menu while a campaign runs: stop the search (the best candidate still gets
+the re-check and the brief), stop everything (resume later), detach, or keep running. During a
+replay it changes the speed, pauses, resumes or ends it. Without a terminal the first Ctrl+C stops
+the search and the second detaches; resume the run later with `hephaestus resume <id>`.
 
 The subcommands do the same without the session:
 
 ```bash
 hephaestus run "<goal>" [--backend claude-code] [--model claude-sonnet-5-5] [--novel] [--yes] [--json]
+          [--profile quick|standard|thorough] [--band-gap-model megnet-hse] [--custom-tools ask|off]
+          [--no-hull] [--no-phonons] [--e-hull-max 0.05] [--no-elastic] [--tool-library DIR]
 hephaestus parse "<goal>" [--json]
-hephaestus runs | show <id> | brief <id> [--pdf]
+hephaestus runs | show <id> | rename <id> <title> | brief <id> [--compute] [--pdf]
+hephaestus tools [list | review [name] | show <name> | remove <name>] [--dir DIR]
 hephaestus resume <id>
 hephaestus replay <id or run folder> [--speed 4]
 hephaestus backends | login | signin | serve
 ```
 
-`--yes` never asks: a goal that needs answers exits with code 3. `--json` prints events as JSON
+`run` leaves agent-built tools off unless `--custom-tools ask` is given, and refuses `ask` with
+`--yes`, `--json` or no terminal, since nobody could review the tool. `--yes` never asks: a goal that needs answers exits with code 3. `--json` prints events as JSON
 lines. The exit codes are 0 (done), 1 (failed or refused), 2 (usage), 3 (needs input) and 130
 (detached).
 

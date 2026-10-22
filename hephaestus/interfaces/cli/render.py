@@ -26,6 +26,13 @@ from rich.table import Table
 from rich.text import Text
 
 from hephaestus.core.types import ProgressEvent, RunState
+from hephaestus.interfaces.cli.cards import (
+    cancelled_text,
+    code_card,
+    decision_text,
+    plan_card,
+    request_card,
+)
 from hephaestus.interfaces.cli.theme import (
     DASH,
     GLYPH,
@@ -38,6 +45,7 @@ from hephaestus.interfaces.cli.theme import (
     mark,
     panel,
     sparkline,
+    strip_codes,
 )
 
 THINKING_LINES = 2  # lines of thinking shown unless verbose
@@ -62,6 +70,13 @@ CALL_ARGS: dict[str, list[str]] = {
     "candidate_status": [],
     "request_review": [],
     "submit_final": ["candidate_id", "runner_up_id"],
+    # The tool builder's own tools (agent-built tools, Section 14)
+    "read_tool_source": ["function"],
+    "propose_tool": ["name"],
+    "write_tool": ["proposal_id"],
+    "request_package": ["module"],
+    "ask_user": [],
+    "give_up": [],
 }
 
 # What the status line says while a tool runs.
@@ -82,6 +97,12 @@ VERBS: dict[str, str] = {
     "candidate_status": "Checking candidates",
     "request_review": "Asking the reviewer",
     "submit_final": "Submitting",
+    "read_tool_source": "Reading how our tools are written",
+    "propose_tool": "Planning a tool",
+    "write_tool": "Writing and testing the tool",
+    "request_package": "Asking to use a package",
+    "ask_user": "Asking you a question",
+    "give_up": "Proposing to stop",
 }
 
 # Names of the final re-check's steps (``final_step`` events), as the web UI shows them.
@@ -106,6 +127,7 @@ CANDIDATE_FIELDS = (
     "value",
     "uncertainty",
     "novelty",
+    "targets",
 )
 
 
@@ -147,6 +169,7 @@ class Renderer:
     model: str | None = None
     phase: str = "Starting"
     stopping: bool = False
+    stop_all: bool = False  # the user stopped everything: no re-check or brief follows
     submitted: dict[str, Any] | None = None
     stop_rule: str | None = None
     usage: dict[str, Any] = field(default_factory=dict)
@@ -158,11 +181,17 @@ class Renderer:
     _local_start: float | None = None
     live: bool = False  # True while watching a running run: open time spans run up to the clock
     replaying: bool = False  # Ctrl+C ends a replay rather than stopping a campaign
+    menu: bool = False  # Ctrl+C opens a menu (someone can answer), so the hint names its choices
     campaign_span: list[datetime | None] = field(default_factory=lambda: [None, None])
     final_span: list[datetime | None] = field(default_factory=lambda: [None, None])
     in_campaign: bool = False  # draw the timeline gutter from the campaign's start to the run's end
     final_steps: dict[str, _Call] = field(default_factory=dict)  # open final re-check steps, by tool
     _pending: list[RenderableType] = field(default_factory=list)  # round line held until its review prints
+    # Agent-built tools (Section 14): the property being built for, and every card by (phase, id, stage).
+    cap_property: str | None = None
+    agent_built: set[str] = field(default_factory=set)  # properties computed by an agent-built tool
+    cards: dict[tuple[str, str, str], dict[str, Any]] = field(default_factory=dict)
+    answered: set[tuple[str, str, int]] = field(default_factory=set)  # sent from here, decision event pending
 
     # ------------------------------------------------------------------ dispatch
 
@@ -274,6 +303,8 @@ class Renderer:
             text.append(elapsed(used) if used is not None else DASH, style=style)
             if budget:
                 text.append(f" / {elapsed(float(budget))}", style="faint")
+            elif budget is not None:
+                text.append(" · no limit", style="faint")  # a budget of 0 (OR-9)
         return text
 
     def candidate_facts(self, cid: str) -> str:
@@ -291,15 +322,43 @@ class Renderer:
         """
         c = self.candidates.get(cid, {})
         facts = [str(c.get("composition") or "")]
-        if c.get("value") is not None:
-            prop = str((self.spec or {}).get("target_property", "value")).replace("_", " ")
+        rows = c.get("targets") or []
+        if rows:  # several targets: every one must be met (GP-1)
+            for r in rows:
+                facts.append(target_fact(r))
+        elif c.get("value") is not None:
+            prop_key = str((self.spec or {}).get("target_property", "value"))
+            prop = prop_key.replace("_", " ")
             units = (self.spec or {}).get("target_units", "")
-            facts.append(f"{prop} {fmt_quantity(c.get('value'), c.get('uncertainty'), units)}")
+            if self.is_agent_built(prop_key):
+                facts.append(f"{prop} {fmt_quantity(c.get('value'), None, units)} [accent](agent-built)[/]")
+            else:
+                facts.append(f"{prop} {fmt_quantity(c.get('value'), c.get('uncertainty'), units)}")
         if c.get("e_hull") is not None:
             facts.append(f"E_hull {fmt_num(c.get('e_hull'), 3)} eV/atom {mark(c.get('thermo_stable'))}")
         if c.get("verdict"):
             facts.append(f"phonons {c.get('verdict')} {mark(c.get('dyn_stable'))}")
         return " · ".join(f for f in facts if f)
+
+    def is_agent_built(self, prop: str) -> bool:
+        """Whether a target property is computed by an agent-built tool (AT-17).
+
+        Parameters
+        ----------
+        prop : str
+            Property key.
+
+        Returns
+        -------
+        bool
+            True when the spec names a tool for it or a result came from one.
+        """
+        spec = self.spec or {}
+        if prop in self.agent_built:
+            return True
+        if prop == spec.get("target_property") and spec.get("target_tool"):
+            return True
+        return any(t.get("property") == prop and t.get("tool") for t in spec.get("extra_targets") or [])
 
     def _on_run(self, e: ProgressEvent) -> list[RenderableType]:
         """Run header, or the run's end.
@@ -327,8 +386,8 @@ class Renderer:
                     for x in (
                         cfg.get("llm_backend"),
                         cfg.get("llm_model"),
-                        f"{cfg.get('max_iterations', '?')} rounds max",
-                        f"{cfg.get('max_tool_calls', '?')} tool calls max",
+                        _limit(cfg.get("max_iterations"), "rounds"),
+                        _limit(cfg.get("max_tool_calls"), "tool calls"),
                         "novel only" if cfg.get("require_novel") else None,
                     )
                     if x
@@ -336,6 +395,9 @@ class Renderer:
                 .strip()
             )
             head = Text.assemble((f" {verb.upper()} ", "tab.accent"), " ", (e.run_id, "id"))
+            title = (self.spec or {}).get("title")
+            if title:
+                head.append(f"  {strip_codes(str(title))}", style="bold")
             return [
                 Text(),
                 head,
@@ -350,6 +412,9 @@ class Renderer:
                 f"[bad]{x.get('step', '?')}[/] {x.get('code', '')}: {x.get('message', '')}" for x in errors
             ]
             return [panel("\n".join(lines) or "The run failed.", "run failed", "bad")]
+        if p.get("status") == "stopped":
+            reason = _escape(str(p.get("stop_reason") or "stopped by the user"))
+            return [self._line(GLYPH["mark"], f"[warn]Run stopped[/] · {reason}", "warn")]
         return []
 
     def _on_goal_parser(self, e: ProgressEvent) -> list[RenderableType]:
@@ -468,6 +533,8 @@ class Renderer:
         took = (e.time - call.started).total_seconds() if call else None
         raw = p.get("result")
         result: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        if str(result.get("model") or "").startswith("agent-built:") and result.get("property"):
+            self.agent_built.add(str(result["property"]))
         if tool == "propose_candidate" and result.get("accepted") and result.get("candidate_id"):
             new = self.candidates.setdefault(result["candidate_id"], {"candidate_id": result["candidate_id"]})
             new.setdefault("composition", inp.get("composition"))
@@ -481,7 +548,7 @@ class Renderer:
             return [
                 head,
                 result_line(summarise(tool, inp, review, p)),
-                review_panel(review, self.config),
+                review_panel(review, self.config, self.spec),
                 *held,
             ]
         return [head, result_line(summarise(tool, inp, result, p, verbose=self.verbose))]
@@ -502,7 +569,7 @@ class Renderer:
         p = e.payload
         if e.status == "started":
             self.phase = "Re-checking at higher fidelity"
-            who = ", ".join(p.get("candidates") or [])
+            who = ", ".join(str(c) for c in p.get("candidates") or [] if c)
             return [
                 round_rule("final re-check"),
                 self._line(GLYPH["mark"], f"Re-checking [id]{who}[/] at higher fidelity", "ember"),
@@ -543,6 +610,163 @@ class Renderer:
             return [line, result_line(f"[bad]failed[/] {_escape(str(p.get('error') or ''))}".rstrip())]
         return [line]
 
+    def _on_capability(self, e: ProgressEvent) -> list[RenderableType]:
+        """Agent-built tools: the gap, plans and code for review, requests, decisions and the outcome (AT-24, AT-28).
+
+        Every card is kept by (phase property, id, stage), newest revision last, so the stream knows
+        which card the run is waiting for. A card with no later decision or withdrawal is open.
+
+        Parameters
+        ----------
+        e : ProgressEvent
+            A ``capability`` event; ``payload.kind`` says which.
+
+        Returns
+        -------
+        list of RenderableType
+            Output.
+        """
+        p = e.payload
+        kind = str(p.get("kind"))
+        prop = str(p.get("property") or self.cap_property or "")
+        if kind == "gap":
+            self.cap_property = prop
+            self.in_campaign = True
+            self.phase = f"Researching a tool for {prop.replace('_', ' ')}"
+            units = f" ({_escape(str(p['units']))})" if p.get("units") else ""
+            return [
+                round_rule(f"build tool {GLYPH['dot']} {prop.replace('_', ' ')}"),
+                self._line(
+                    GLYPH["mark"],
+                    f"No tool computes {prop.replace('_', ' ')}{units}. The agent will read how papers compute "
+                    "it and propose a tool; you review the plan, then the code, before the search starts.",
+                    "ember",
+                ),
+            ]
+        if kind == "library":
+            name = ", ".join(p.get("reused") or [])
+            return [
+                self._line(
+                    GLYPH["mark"],
+                    f"Reusing [tool]{_escape(name)}[/] for {prop.replace('_', ' ')}: approved earlier.",
+                    "ember",
+                )
+            ]
+        if kind in ("plan", "code"):
+            prop_d = p.get("proposal") or {}
+            phase = str(prop_d.get("property") or self.cap_property or "")
+            key = (phase, str(prop_d.get("proposal_id")), kind)
+            self._remember(key, kind, prop_d, p.get("allowed") or [])
+            waiting = self.live and not self.replaying
+            if kind == "plan":
+                return [plan_card(prop_d, waiting=waiting)]
+            return [code_card(prop_d, waiting=waiting)]
+        if kind in ("package", "question", "give_up"):
+            req = p.get("request") or {}
+            key = (str(self.cap_property or ""), str(req.get("request_id")), kind)
+            self._remember(key, kind, req, p.get("allowed") or [])
+            return [request_card(req, waiting=self.live and not self.replaying)]
+        if kind == "decision":
+            d = p.get("decision") or {}
+            for card in reversed(list(self.cards.values())):
+                if (
+                    card["id"] == str(d.get("proposal_id"))
+                    and card["stage"] == str(d.get("stage"))
+                    and card["decision"] is None
+                ):
+                    card["decision"] = d
+                    break
+            self.phase = f"Working on the tool for {(self.cap_property or '').replace('_', ' ')}"
+            return [self._line(GLYPH["mark"], decision_text(d, p.get("name")), "accent")]
+        if kind == "withdrawn":
+            for card in reversed(list(self.cards.values())):
+                if (
+                    card["id"] == str(p.get("proposal_id"))
+                    and card["stage"] == "code"
+                    and card["decision"] is None
+                ):
+                    card["withdrawn"] = str(p.get("reason") or "")
+                    break
+            return [
+                result_line(f"[warn]The agent withdrew its code:[/] {_escape(str(p.get('reason') or ''))}")
+            ]
+        if kind == "checks":
+            checks = p.get("checks") or {}
+            failed = [k for k, v in checks.items() if not (v or {}).get("passed")]
+            text = (
+                f"[bad]{', '.join(failed)} failed[/]; the agent is fixing it"
+                if failed
+                else f"{mark(True)} all checks passed"
+            )
+            return [result_line(f"code checks: {text}")]
+        if kind == "registered":
+            tool = p.get("tool") or {}
+            self.phase = "Thinking"
+            return [
+                self._line(
+                    GLYPH["mark"],
+                    f"[tool]{_escape(str(tool.get('name')))}[/] is saved to the tool library and available to "
+                    "the campaign.",
+                    "ok",
+                )
+            ]
+        if kind == "cancelled":
+            said = False
+            for card in self.cards.values():  # nothing waits any more
+                if card["decision"] is None and card["withdrawn"] is None:
+                    card["withdrawn"] = "cancelled"
+                said = said or (card["decision"] or {}).get("action") == "cancel_run"
+            if p.get("scope") == "run" and said:
+                return []  # the decision line already said so
+            return [self._line(GLYPH["mark"], cancelled_text(p), "warn")]
+        if kind == "log":
+            return [result_line(f"[muted]{_escape(str(p.get('message') or ''))}[/]")]
+        return [result_line(f"[muted]tool builder: {_escape(kind)}[/]")]
+
+    def _remember(
+        self, key: tuple[str, str, str], stage: str, payload: dict[str, Any], allowed: list[str]
+    ) -> None:
+        """Keep the newest card for a (phase, id, stage); a re-shown or revised card replaces the old one.
+
+        Parameters
+        ----------
+        key : tuple
+            ``(phase property, id, stage)``.
+        stage : str
+            ``plan``, ``code``, ``package``, ``question`` or ``give_up``.
+        payload : dict
+            The proposal or request.
+        allowed : list of str
+            Actions the engine offers.
+        """
+        self.cards.pop(key, None)  # move to the end: newest last
+        self.cards[key] = {
+            "key": key,
+            "id": key[1],
+            "stage": stage,
+            "payload": payload,
+            "allowed": list(allowed),
+            "revision": int(payload.get("revision") or 1),
+            "decision": None,
+            "withdrawn": None,
+        }
+
+    def open_card(self) -> dict[str, Any] | None:
+        """Return the newest card with no decision, not withdrawn and not already answered from here.
+
+        Returns
+        -------
+        dict or None
+            The card the run is most likely waiting for; the stream confirms with the engine.
+        """
+        for card in reversed(list(self.cards.values())):
+            if card["decision"] is not None or card["withdrawn"] is not None:
+                continue
+            if (card["id"], card["stage"], card["revision"]) in self.answered:
+                continue
+            return card
+        return None
+
     def _on_brief_generator(self, e: ProgressEvent) -> list[RenderableType]:
         """Brief progress.
 
@@ -564,7 +788,8 @@ class Renderer:
         self.brief = e.payload
         cited = len(e.payload.get("cited") or [])
         pdf = " · PDF written" if e.payload.get("pdf") else ""
-        return [self._line(GLYPH["mark"], f"Brief written · cites {cited} papers{pdf}", "ember")]
+        compute = " · computational brief too" if e.payload.get("compute") else ""
+        return [self._line(GLYPH["mark"], f"Brief written · cites {cited} papers{pdf}{compute}", "ember")]
 
     # ------------------------------------------------------------------ pieces
 
@@ -668,8 +893,15 @@ class Renderer:
         """
         now = self.clock()
         start = self._local_start if self._local_start is not None else now
+        waiting = self.live and not self.replaying and not self.calls and self.open_card() is not None
         if self.stopping:
-            verb = "Stopping: submitting the best candidate"
+            verb = (
+                "Stopping after the current calculation"
+                if self.stop_all
+                else "Stopping: submitting the best candidate"
+            )
+        elif waiting:
+            verb = "Waiting for your decision"
         elif self.calls:
             verb = _verb(next(reversed(self.calls.values())))
         elif self.final_steps:
@@ -684,16 +916,21 @@ class Renderer:
             bits.append(f"round {min(self.round, int(max_rounds))}/{max_rounds}")
         if max_calls:
             bits.append(f"{self.tool_calls}/{max_calls} tools")
-        bits.append(
-            "^C ends the replay" if self.replaying else ("^C again to detach" if self.stopping else "^C stop")
-        )
+        if self.menu:
+            bits.append("^C speed, pause or end" if self.replaying else "^C stop or detach")
+        else:
+            bits.append(
+                "^C ends the replay"
+                if self.replaying
+                else ("^C again to detach" if self.stopping else "^C stop")
+            )
         line = ember_frame(now)
         line.append(f" {verb}", style="accent")
         for bit in bits:
             line.append(f"  {GLYPH['sep']} ", style="gutter")
             line.append(bit, style="muted")
         rows: list[RenderableType] = [line]
-        if self.campaign_span[0] is not None:
+        if self.campaign_span[0] is not None and not waiting:
             rows.append(Text.assemble("   ", self.budget_text()))
         for call in list(self.calls.values())[-4:]:
             target = f" {call.candidate_id}" if call.candidate_id else ""
@@ -722,10 +959,26 @@ class Renderer:
         for col in ("E_hull", "", "min THz", "phonons", ""):
             t.add_column(col, no_wrap=True)
         t.add_column(f"{prop} ({units})" if units else prop, no_wrap=True)
+        extras = [x for x in (self.spec or {}).get("extra_targets") or [] if x.get("property")]
+        for x in extras:
+            label = str(x["property"]).replace("_", " ")
+            t.add_column(f"{label} ({x['units']})" if x.get("units") else label, no_wrap=True)
         t.add_column("sg", no_wrap=True)
         best = (self.submitted or {}).get("candidate_id")
         for cid, c in self.candidates.items():
             name = f"[accent]{cid}[/]" if cid == best else f"[id]{cid}[/]"
+            rows = {r.get("property"): r for r in c.get("targets") or []}
+            extra_cells = []
+            for x in extras:
+                r = rows.get(x["property"])
+                if r is None or r.get("value") is None:
+                    extra_cells.append(
+                        "not evaluated" if r is not None and r.get("evaluable") is False else DASH
+                    )
+                elif r.get("agent_built"):
+                    extra_cells.append(f"{fmt_num(r['value'])} [accent]agent-built[/]")
+                else:
+                    extra_cells.append(fmt_quantity(r["value"], r.get("uncertainty")))
             t.add_row(
                 name,
                 str(c.get("composition") or ""),
@@ -735,6 +988,7 @@ class Renderer:
                 str(c.get("verdict") or DASH),
                 mark(c.get("dyn_stable")) if c.get("verdict") else mark(None),
                 fmt_quantity(c.get("value"), c.get("uncertainty")) if c.get("value") is not None else DASH,
+                *extra_cells,
                 str(c.get("space_group") or DASH),
             )
         return t
@@ -762,7 +1016,9 @@ class Renderer:
             )
         return t
 
-    def summary(self, state: RunState | None = None, brief_path: str | None = None) -> RenderableType:
+    def summary(
+        self, state: RunState | None = None, brief_path: str | None = None, compute_path: str | None = None
+    ) -> RenderableType:
         """End-of-run summary box.
 
         Parameters
@@ -770,7 +1026,9 @@ class Renderer:
         state : RunState, optional
             Final state; fields from the events are used when omitted.
         brief_path : str, optional
-            Where the brief was written.
+            Where the lab brief was written.
+        compute_path : str, optional
+            Where the computational brief was written.
 
         Returns
         -------
@@ -786,7 +1044,10 @@ class Renderer:
         grid = Table.grid(padding=(0, 2))
         grid.add_column(style="muted", no_wrap=True)
         grid.add_column()
-        grid.add_row("status", f"[{colour}]{status}[/]" + (f" · {stop}" if stop else ""))
+        title = (state.spec.title if state and state.spec else None) or (self.spec or {}).get("title")
+        if title:
+            grid.add_row("title", f"[bold]{_escape(str(title))}[/]")
+        grid.add_row("status", f"[{colour}]{status}[/]" + (f" · {_escape(str(stop))}" if stop else ""))
         if best:
             grid.add_row("best", f"[accent]{best}[/] {self.candidate_facts(best)}")
         if self.submitted:
@@ -802,7 +1063,7 @@ class Renderer:
                 grid.add_row("budgets", self.budget_text())
         tokens = (state.usage if state and state.usage else None) or self.usage
         if tokens and any(tokens.values()):
-            grid.add_row("tokens", " · ".join(f"{k.replace('_', ' ')} {v:,}" for k, v in tokens.items() if v))
+            grid.add_row("tokens", token_text(tokens))
         lit = state.literature if state is not None else None
         if state is not None and lit is not None and lit.papers:
             n_fail = len(lit.failed_approaches)
@@ -812,9 +1073,13 @@ class Renderer:
                 f"{'' if n_fail == 1 else 'es'} [faint]· hephaestus literature {self.run_id or state.run_id}[/]",
             )
         if brief_path:
-            grid.add_row("brief", brief_path)
+            grid.add_row("lab brief", brief_path)
+        if compute_path:
+            grid.add_row("compute brief", compute_path)
         rid = self.run_id or (state.run_id if state else "")
         hints = [f"hephaestus replay {rid}", f"hephaestus brief {rid}"]
+        if compute_path:
+            hints.append(f"hephaestus brief {rid} --compute")
         if status not in ("finished", "needs_input"):
             hints.insert(0, f"hephaestus resume {rid}")
         grid.add_row("run", f"[id]{rid}[/]")
@@ -823,6 +1088,46 @@ class Renderer:
 
 
 # ---------------------------------------------------------------------- call lines
+
+
+def token_text(usage: dict[str, Any]) -> str:
+    """Token use in words: input, output and cache, with the tool builder's share (DL-9).
+
+    Parameters
+    ----------
+    usage : dict
+        ``RunState.usage``: keys such as ``input_tokens``, ``cache_read_input_tokens`` and
+        ``capability_input_tokens``.
+
+    Returns
+    -------
+    str
+        E.g. ``"12,400 in · 3,100 out · cache 8,000 read / 1,200 written · tool builder 2,000"``.
+    """
+
+    def get(key: str) -> int:
+        """Return one count.
+
+        Parameters
+        ----------
+        key : str
+            Usage key.
+
+        Returns
+        -------
+        int
+            The count, 0 when absent.
+        """
+        return int(usage.get(key) or 0)
+
+    parts = [f"{get('input_tokens'):,} in", f"{get('output_tokens'):,} out"]
+    read, wrote = get("cache_read_input_tokens"), get("cache_creation_input_tokens")
+    if read or wrote:
+        parts.append(f"cache {read:,} read / {wrote:,} written")
+    builder = sum(int(v or 0) for k, v in usage.items() if k.startswith("capability_"))
+    if builder:
+        parts.append(f"tool builder {builder:,}")
+    return " · ".join(parts)
 
 
 def _escape(text: str) -> str:
@@ -840,7 +1145,7 @@ def _escape(text: str) -> str:
     """
     from rich.markup import escape
 
-    return escape(text)
+    return escape(strip_codes(text))
 
 
 def _verb(call: _Call) -> str:
@@ -856,6 +1161,8 @@ def _verb(call: _Call) -> str:
     str
         E.g. ``"Relaxing c1-1"``.
     """
+    if call.tool.startswith("custom_"):
+        return f"Running the agent-built {call.tool[7:]} on {call.candidate_id or ''}".strip()
     template = VERBS.get(call.tool, f"Running {call.tool}")
     prop = str(call.input.get("property", "a property")).replace("_", " ")
     return template.format(cid=call.candidate_id or call.input.get("candidate_id", ""), prop=prop).strip()
@@ -1418,6 +1725,86 @@ def _generic(inp: dict[str, Any], r: dict[str, Any], p: dict[str, Any], verbose:
     return _escape(text) or "[muted]done[/]"
 
 
+def _agent_built(inp: dict[str, Any], r: dict[str, Any], p: dict[str, Any], verbose: bool = False) -> str:
+    """``custom_<name>``: the value from an agent-built tool, labelled as such, with no error bar (AT-17).
+
+    Parameters
+    ----------
+    inp, r, p : dict
+        Input, result and payload.
+    verbose : bool
+        Unused.
+
+    Returns
+    -------
+    str
+        Markup.
+    """
+    prop = str(r.get("property") or "").replace("_", " ")
+    text = f"{prop} [bold]{fmt_quantity(r.get('value'), None, r.get('units', ''))}[/]"
+    text += " [accent](agent-built tool, no error bar)[/]"
+    target = r.get("target") or {}
+    if target.get("value") is not None:
+        sym = DIRECTION.get(str(target.get("direction")), "vs")
+        ref = f" ({target['reference']})" if target.get("reference") else ""
+        text += f" · target {sym} {fmt_num(target['value'])}{ref}"
+    return text
+
+
+def _read_source(inp: dict[str, Any], r: dict[str, Any], p: dict[str, Any], verbose: bool = False) -> str:
+    """``read_tool_source``: which source the tool builder read.
+
+    Parameters
+    ----------
+    inp, r, p : dict
+        Input, result and payload.
+    verbose : bool
+        Unused.
+
+    Returns
+    -------
+    str
+        Markup.
+    """
+    fn = inp.get("function")
+    return f"source of {_escape(str(fn))}" if fn else "our simulation and structure tools"
+
+
+def _builder_wait(inp: dict[str, Any], r: dict[str, Any], p: dict[str, Any], verbose: bool = False) -> str:
+    """``propose_tool``, ``write_tool``, ``request_package``, ``ask_user``, ``give_up``: what was sent.
+
+    Parameters
+    ----------
+    inp, r, p : dict
+        Input, result and payload.
+    verbose : bool
+        Unused.
+
+    Returns
+    -------
+    str
+        Markup.
+    """
+    tool = str(p.get("tool"))
+    waiting = r.get("status") == "waiting_for_user"
+    if tool == "propose_tool":
+        what = f"plan for [tool]{_escape(str(inp.get('name') or ''))}[/]"
+    elif tool == "write_tool":
+        if r.get("passed") is False or (r.get("checks") and not waiting):
+            failed = [k for k, v in (r.get("checks") or {}).items() if not (v or {}).get("passed")]
+            return f"[bad]checks failed:[/] {', '.join(failed) or 'see the report'}"
+        what = f"code for proposal {_escape(str(inp.get('proposal_id') or ''))}"
+    elif tool == "request_package":
+        if r.get("allowed"):
+            return f"{_escape(str(inp.get('module') or ''))} is already allowed"
+        what = f"a request to use {_escape(str(inp.get('module') or ''))}"
+    elif tool == "ask_user":
+        what = f"a question: {_escape(str(inp.get('question') or ''))}"
+    else:
+        what = f"a proposal to stop: {_escape(str(inp.get('reason') or ''))}"
+    return f"sent {what}" + (" [warn]· waiting for you[/]" if waiting else "")
+
+
 Summariser = Callable[..., str]
 SUMMARISERS: dict[str, Summariser] = {
     "search_literature": _papers,
@@ -1436,6 +1823,12 @@ SUMMARISERS: dict[str, Summariser] = {
     "candidate_status": _status,
     "request_review": _review,
     "submit_final": _submit,
+    "read_tool_source": _read_source,
+    "propose_tool": _builder_wait,
+    "write_tool": _builder_wait,
+    "request_package": _builder_wait,
+    "ask_user": _builder_wait,
+    "give_up": _builder_wait,
 }
 
 
@@ -1462,7 +1855,7 @@ def summarise(
     str
         Markup; a failing summariser falls back to the generic one.
     """
-    fn = SUMMARISERS.get(tool, _generic)
+    fn = SUMMARISERS.get(tool) or (_agent_built if tool.startswith("custom_") else _generic)
     try:
         return fn(inp, result, payload, verbose)
     except Exception:
@@ -1472,13 +1865,67 @@ def summarise(
 # ---------------------------------------------------------------------- panels
 
 
-def spec_panel(spec: dict[str, Any]) -> Panel:
-    """Show the parsed search specification before a run starts (UI-2).
+def _target_line(t: dict[str, Any]) -> str:
+    """One target in the spec: ``"band gap < SrTiO3 · reference 3.12 ± 0.65 eV"`` (GP-1, GP-11).
+
+    Parameters
+    ----------
+    t : dict
+        A ``Target`` (or the primary target's fields under the same names).
+
+    Returns
+    -------
+    str
+        Markup.
+    """
+    prop = str(t.get("property", "")).replace("_", " ")
+    sym = DIRECTION.get(str(t.get("direction")), str(t.get("direction", "")))
+    text = f"{prop} {sym} "
+    if t.get("value") is not None:
+        text += f"{fmt_num(t['value'])} {t.get('units', '')}".rstrip()
+    elif t.get("reference_material"):
+        text += f"{t['reference_material']} [muted](computed with the same model)[/]"
+    ref = t.get("reference_value") or {}
+    if ref:
+        text += f" [muted]· reference {fmt_quantity(ref.get('value'), ref.get('uncertainty'), ref.get('units', ''))}[/]"
+    if t.get("tolerance") is not None:
+        text += f" ± {fmt_num(t['tolerance'])}"
+    if t.get("tool"):
+        text += f" [accent]· agent-built: {_escape(str(t['tool']))}[/]"
+    if t.get("evaluable") is False:
+        text += " [warn]· not evaluated (no tool)[/]"
+    return text
+
+
+def _limit(value: Any, what: str) -> str:
+    """Describe a budget, where 0 means no limit (OR-9, OR-10).
+
+    Parameters
+    ----------
+    value : Any
+        The budget, or ``None`` when unknown.
+    what : str
+        Unit, e.g. ``"rounds"``.
+
+    Returns
+    -------
+    str
+        E.g. ``"3 rounds max"``, ``"no limit on rounds"`` or ``"? rounds max"``.
+    """
+    if value is None:
+        return f"? {what} max"
+    return f"no limit on {what}" if not value else f"{value} {what} max"
+
+
+def spec_panel(spec: dict[str, Any], gap: str | None = None) -> Panel:
+    """Show the parsed search specification before a run starts (UI-2, GP-1).
 
     Parameters
     ----------
     spec : dict
         ``SearchSpec`` as a dict.
+    gap : str, optional
+        A target property no tool computes yet (``ParseResult.gap``); the agent will build one (AT-1).
 
     Returns
     -------
@@ -1488,27 +1935,45 @@ def spec_panel(spec: dict[str, Any]) -> Panel:
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="muted", no_wrap=True)
     grid.add_column()
-    prop = str(spec.get("target_property", "")).replace("_", " ")
-    sym = DIRECTION.get(str(spec.get("direction")), str(spec.get("direction", "")))
-    target = f"{prop} {sym} "
-    ref_val = spec.get("reference_value") or {}
-    if spec.get("target_value") is not None:
-        target += f"{fmt_num(spec['target_value'])} {spec.get('target_units', '')}"
-    elif spec.get("reference_material"):
-        target += f"{spec['reference_material']} [muted](computed with the same model)[/]"
-    if ref_val:
-        target += f" [muted]· reference {fmt_quantity(ref_val.get('value'), ref_val.get('uncertainty'), ref_val.get('units', ''))}[/]"
-    if spec.get("target_tolerance") is not None:
-        target += f" ± {fmt_num(spec['target_tolerance'])}"
+    primary = {
+        "property": spec.get("target_property"),
+        "value": spec.get("target_value"),
+        "units": spec.get("target_units", ""),
+        "direction": spec.get("direction"),
+        "tolerance": spec.get("target_tolerance"),
+        "reference_material": spec.get("reference_material"),
+        "reference_value": spec.get("reference_value"),
+        "tool": spec.get("target_tool"),
+        "evaluable": spec.get("target_evaluable", True),
+    }
+    extras = spec.get("extra_targets") or []
+    if spec.get("title"):
+        grid.add_row("title", f"[bold]{_escape(str(spec['title']))}[/]")
     grid.add_row("family", _escape(str(spec.get("material_family", ""))))
-    grid.add_row("target", target)
+    if extras:
+        grid.add_row("targets", "[muted]all must be met[/]")
+        for t in [primary, *extras]:
+            grid.add_row("", f"{GLYPH['tool']} {_target_line(t)}")
+    else:
+        grid.add_row("target", _target_line(primary))
+    if gap:
+        grid.add_row(
+            "new tool",
+            f"[warn]No tool computes {_escape(gap.replace('_', ' '))} yet.[/] The agent will read how papers "
+            "compute it and propose a tool; you review the plan and then the code before the search starts.",
+        )
     th = spec.get("stability_thresholds") or {}
-    grid.add_row(
-        "stability",
-        f"E_hull ≤ {fmt_num(th.get('e_hull_max_eV_per_atom', 0.05))} eV/atom · "
-        f"phonons ≥ {fmt_num(th.get('phonon_min_THz', -0.1), 1)} THz "
-        "[muted](decided by code)[/]",
+    hull = (
+        f"E_hull ≤ {fmt_num(th.get('e_hull_max_eV_per_atom', 0.05))} eV/atom"
+        if th.get("thermodynamic", True)
+        else "hull check off"
     )
+    phon = (
+        f"phonons ≥ {fmt_num(th.get('phonon_min_THz', -0.1), 1)} THz"
+        if th.get("dynamic", True)
+        else "phonons off"
+    )
+    grid.add_row("stability", f"{hull} · {phon} [muted](decided by code)[/]")
     if spec.get("elements"):
         grid.add_row("elements", ", ".join(spec["elements"]))
     if spec.get("excluded_elements"):
@@ -1548,7 +2013,9 @@ def questions_panel(questions: list[str], errors: list[Any]) -> Panel:
     return panel("\n".join(lines) or "The goal could not be parsed.", "needs input", "warn")
 
 
-def review_panel(review: dict[str, Any], config: dict[str, Any] | None = None) -> Panel:
+def review_panel(
+    review: dict[str, Any], config: dict[str, Any] | None = None, spec: dict[str, Any] | None = None
+) -> Panel:
     """Show the reviewer's critique for one round, with the code rubric and checks (Section 7, UI-5).
 
     Parameters
@@ -1557,6 +2024,8 @@ def review_panel(review: dict[str, Any], config: dict[str, Any] | None = None) -
         ``request_review`` result.
     config : dict, optional
         Run config, for the confidence threshold.
+    spec : dict, optional
+        Search spec; with an agent-built target the "within error" check does not apply (AT-17).
 
     Returns
     -------
@@ -1584,13 +2053,23 @@ def review_panel(review: dict[str, Any], config: dict[str, Any] | None = None) -
     checks = review.get("checks") or {}
     if checks:
         labels = {
-            "target_met_central": "target (central)",
-            "target_met_conservative": "target (value \u2212 uncertainty)",
-            "thermo_stable": "thermo",
-            "dyn_stable": "dynamic",
+            "target_met_central": "target met",
+            "target_met_conservative": "within error",
+            "thermo_stable": "on the hull",
+            "dyn_stable": "dynamically stable",
             "all_passed": "all checks",
         }
-        head.add_row("checks", "  ".join(f"{mark(v)} {labels.get(k, k)}" for k, v in checks.items()))
+        skip = {"targets"} | ({"target_met_conservative"} if (spec or {}).get("target_tool") else set())
+        cells = []
+        for k, v in checks.items():
+            if k in skip or isinstance(v, list | dict):
+                continue
+            cells.append(
+                f"{mark(v)} {labels.get(k, k)}" if v is not None else f"[muted]off[/] {labels.get(k, k)}"
+            )
+        head.add_row("checks", "  ".join(cells))
+        for r in checks.get("targets") or []:
+            head.add_row("", target_fact(r))
     rows: list[RenderableType] = [head]
     findings = review.get("findings") or []
     if findings:
@@ -1617,6 +2096,47 @@ def review_panel(review: dict[str, Any], config: dict[str, Any] | None = None) -
     if review.get("stop_rule"):
         rows.append(Text.from_markup(f"[accent]stop rule fired: {review['stop_rule']}[/]"))
     return panel(Group(*rows), f"review · round {review.get('round', '?')}")
+
+
+def target_fact(r: dict[str, Any]) -> str:
+    """One target's value and verdict: ``"band gap 2.20 ± 0.65 eV ✓"`` or ``"… (agent-built) ✓"`` (GP-1, AT-17).
+
+    Parameters
+    ----------
+    r : dict
+        Target row: ``{property, value, uncertainty, units, met_central, met_conservative, evaluable, agent_built}``.
+
+    Returns
+    -------
+    str
+        Markup; the tick or cross is the harness's target check.
+    """
+    prop = str(r.get("property") or "").replace("_", " ")
+    if r.get("evaluable") is False:
+        return f"{prop} [warn]not evaluated[/]"
+    if r.get("value") is None:
+        return f"{prop} {DASH}"
+    if r.get("agent_built"):
+        return f"{prop} {fmt_quantity(r['value'], None, r.get('units', ''))} [accent](agent-built)[/] {mark(r.get('met_central'))}"
+    within = " [muted]within error[/]" if r.get("met_conservative") else ""
+    return f"{prop} {fmt_quantity(r['value'], r.get('uncertainty'), r.get('units', ''))} {mark(r.get('met_central'))}{within}"
+
+
+# Readable names for the final re-check's rows (as the web UI's CHECK_NAMES).
+CHECK_NAMES = {
+    "e_hull_eV_per_atom": "E_hull (eV/atom)",
+    "e_hull": "E_hull (eV/atom)",
+    "thermo_stable": "on the hull",
+    "dyn_stable": "dynamically stable",
+    "min_frequency_THz": "lowest phonon (THz)",
+    "min_freq": "lowest phonon (THz)",
+    "md_stable": "stable in MD",
+    "target_met": "target met",
+    "target_met_conservative": "target met within error",
+    "band_gap": "band gap (eV)",
+    "bulk_modulus": "bulk modulus (GPa)",
+    "disorder_spread_eV_per_atom": "disorder spread (eV/atom)",
+}
 
 
 def validation_panel(p: dict[str, Any]) -> Panel:
@@ -1654,32 +2174,35 @@ def validation_panel(p: dict[str, Any]) -> Panel:
         return mark(v) if isinstance(v, bool) else fmt_num(v, 3)
 
     for c in p.get("checks") or []:
+        name = str(c.get("name", ""))
         t.add_row(
-            str(c.get("name", "")),
+            CHECK_NAMES.get(name, name.replace("_", " ")),
             show(c.get("screening_value")),
             show(c.get("final_value")),
             show(c.get("delta")),
         )
     rows: list[RenderableType] = [t]
     for note in p.get("notes") or []:
-        rows.append(Text(f"{GLYPH['dot']} {note}", style="muted"))
+        rows.append(Text(f"{GLYPH['dot']} {strip_codes(str(note))}", style="muted"))
     return panel(Group(*rows), f"final re-check · {verdict}", colour)
 
 
-def brief_panel(markdown: str) -> Panel:
-    """Render the experimental brief as Markdown (UI-8).
+def brief_panel(markdown: str, title: str | None = None) -> Panel:
+    """Render the experimental brief (or the computational one) as Markdown (UI-8).
 
     Parameters
     ----------
     markdown : str
         Brief text.
+    title : str, optional
+        Panel title; ``"experimental brief"`` by default.
 
     Returns
     -------
     rich.panel.Panel
         The panel.
     """
-    return panel(Markdown(markdown), "experimental brief", padding=(1, 2))
+    return panel(Markdown(markdown), title or "experimental brief", padding=(1, 2))
 
 
 def literature_view(
