@@ -562,7 +562,9 @@ def test_input_box_grows_to_show_a_long_goal() -> None:
         d = area.window.preferred_height(width=60, max_available_height=40)
         return d.preferred, d.max
 
-    preferred, _ = asyncio.run(rows("Find a lead-free oxide perovskite with a higher bulk modulus than SrTiO3. " * 2))
+    preferred, _ = asyncio.run(
+        rows("Find a lead-free oxide perovskite with a higher bulk modulus than SrTiO3. " * 2)
+    )
     assert 3 <= preferred <= repl.INPUT_MAX_LINES
     _, largest = asyncio.run(rows("word " * 200))
     assert largest == repl.INPUT_MAX_LINES

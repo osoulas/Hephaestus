@@ -1217,7 +1217,9 @@ class BoxReader:
                 for text, display, meta in completions(session, before):
                     yield Completion(text, start_position=-len(word), display=display, display_meta=meta)
 
-        area = input_area(prompt, history=self.history if is_main else None, completer=Slash() if is_main else None)
+        area = input_area(
+            prompt, history=self.history if is_main else None, completer=Slash() if is_main else None
+        )
         kb = KeyBindings()
 
         def accept(buffer: Any) -> bool:

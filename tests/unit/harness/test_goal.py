@@ -127,7 +127,7 @@ def test_gp12_parser_stability_wording_is_not_duplicated() -> None:
 
 
 def test_gp12_thermodynamic_wording_is_not_read_as_dynamic() -> None:
-    """"Thermodynamically stable" alone still gets the dynamic check added."""
+    """A goal saying only "thermodynamically stable" still gets the dynamic check added."""
     spec, _, _ = parse(scripts.PARSED | {"hard_constraints": ["Thermodynamically stable on the hull"]})
     assert spec is not None
     assert spec.hard_constraints[0] == "Thermodynamically stable on the hull"
