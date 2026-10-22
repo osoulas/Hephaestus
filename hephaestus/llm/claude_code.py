@@ -19,7 +19,7 @@ from collections.abc import Coroutine
 from typing import Any
 
 from hephaestus.llm.auth import claude_code_status
-from hephaestus.llm.base import Backend, CampaignHost, LLMError, Turn
+from hephaestus.llm.base import Backend, CampaignHost, LLMError, Turn, UsageLimitError
 
 SERVER = "hephaestus"
 STREAM_CLOSE_TIMEOUT_MS = "300000"
@@ -52,6 +52,25 @@ async def only_hephaestus_tools(name: str, args: dict[str, Any], context: Any) -
     return PermissionResultDeny(
         message=f"{name} is not available in Hephaestus; use the Hephaestus tools only."
     )
+
+
+def usage_limit(resets_at: int | None, detail: Any) -> UsageLimitError:
+    """Build the pause signal for a usage limit (the run pauses, it does not fail).
+
+    Parameters
+    ----------
+    resets_at : int or None
+        Unix time the window resets, if reported.
+    detail : Any
+        What the CLI sent, for the message.
+
+    Returns
+    -------
+    UsageLimitError
+        The exception to raise.
+    """
+    when = f" until {resets_at}" if resets_at else ""
+    return UsageLimitError(f"Claude usage limit reached{when}: {str(detail)[:200]}", resets_at)
 
 
 class ClaudeCodeLLM:
@@ -273,6 +292,8 @@ class ClaudeCodeLLM:
             if isinstance(msg, ResultMessage):
                 self.last_usage = {k: int(v) for k, v in (msg.usage or {}).items() if isinstance(v, int)}
                 if msg.is_error:
+                    if "rate limit" in str(msg.result or "").lower() or msg.subtype == "rate_limit":
+                        raise usage_limit(None, {"result": msg.result})
                     raise LLMError(f"Claude Code error: {msg.result or msg.subtype}")
                 result = msg.structured_output if msg.structured_output is not None else msg.result
         if isinstance(result, str):
@@ -410,13 +431,19 @@ class ClaudeCodeLLM:
         kickoff : str
             First message.
         """
-        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ThinkingBlock
+        from claude_agent_sdk import AssistantMessage, RateLimitEvent, ResultMessage, TextBlock, ThinkingBlock
 
         prompt = kickoff
         for _ in range(getattr(campaign, "max_prompts", MAX_NUDGES + 1)):
             await client.query(prompt)
             interrupted = False
             async for msg in client.receive_response():
+                if isinstance(msg, RateLimitEvent) and msg.rate_limit_info.status == "rejected":
+                    await client.interrupt()
+                    raise usage_limit(msg.rate_limit_info.resets_at, msg.rate_limit_info.raw)
+                if isinstance(msg, AssistantMessage) and msg.error == "rate_limit":
+                    await client.interrupt()
+                    raise usage_limit(None, {"error": msg.error})
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
                         if isinstance(block, ThinkingBlock):

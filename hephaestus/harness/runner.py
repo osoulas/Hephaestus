@@ -23,6 +23,7 @@ from hephaestus.core.types import (
     SearchSpec,
     Submission,
     ValidationReport,
+    utcnow,
 )
 from hephaestus.harness.agent import Campaign, NoveltyFn
 from hephaestus.harness.brief import assemble_brief
@@ -31,7 +32,7 @@ from hephaestus.harness.capability import HUB, CapabilityPhase, Decider, find_ga
 from hephaestus.harness.compute_brief import assemble_compute_brief
 from hephaestus.harness.goal import apply_stability_options, parse_goal, validate_for_run
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot, sync_state, write_artifacts
-from hephaestus.llm.base import LLM, LoggedLLM, make_llm
+from hephaestus.llm.base import LLM, LoggedLLM, UsageLimitError, make_llm
 from hephaestus.tools import custom
 from hephaestus.tools.registry import (
     CandidateState,
@@ -432,87 +433,154 @@ def _drive(
         _ABORTS[rid] = abort
     bus = deps.bus
     try:
-        llm, reviewer = _models(state.config, deps, files)
-        meter = UsageMeter(state, llm, reviewer)
-        bus.emit(
-            rid,
-            "run",
-            "started",
-            {"resume": resume, "goal": state.raw_goal, "config": state.config.model_dump()},
-        )
-        if state.spec is None and not _parse(state, files, llm, answers, bus):
-            return state
-        handlers = dict(deps.handlers) if deps.handlers is not None else load_default_handlers()
-        ws, critiques = _workspace(state, files, resume)
-        outcome = _capability(state, files, ws, llm, handlers, deps, stop)
-        if outcome in ("cancelled_run", "off"):
-            if outcome == "off":
-                state.status = "failed"
-            else:
-                state.status, state.stop_reason = "stopped", "cancelled by user"
-            meter.update()
-            save_json(files.state, state)
-            bus.emit(
-                rid,
-                "run",
-                "failed" if outcome == "off" else "finished",
-                {
-                    "status": state.status,
-                    "stop_reason": state.stop_reason,
-                    "best": None,
-                    "errors": [e.model_dump() for e in state.errors],
-                },
-            )
-            return state
-        handlers.update(custom.custom_handlers(ws, deps.toolkit_factory))
-        needs_ref = any(
-            t.reference_material and t.reference_value is None and t.evaluable for t in ws.spec.targets()
-        )
-        if needs_ref and not ws.candidates:
-            spec, errors = resolve_reference(ws, handlers)
-            state.errors += errors
-            ws.spec = state.spec = spec
-            if any(t.value is None and t.evaluable for t in spec.targets()):
-                state.status = "failed"
-                state.errors.append(
-                    ErrorRecord(step="reference", code="no_target", message="Reference value unavailable.")
-                )
-                save_json(files.state, state)
-                bus.emit(rid, "run", "failed", {"errors": [e.model_dump() for e in state.errors]})
-                return state
-        state.status = "running"
-        if ws.submitted is None:
-            _campaign(state, files, ws, critiques, llm, reviewer, handlers, deps, stop, resume, meter)
-        else:
-            state.stop_reason = state.stop_reason or "submitted"
-        sync_state(state, ws, [it.critique for it in state.iterations if it.critique])
-        write_artifacts(files, state)
-        if not abort.is_set():
-            _final(state, files, ws, deps, bus, handlers, stop)
-        if not abort.is_set():
-            _brief(state, files, ws, llm, bus)
-        state.status = "stopped" if abort.is_set() else "finished"
-        if abort.is_set():
-            state.stop_reason = "user_abort"
-        meter.update()
-        save_json(files.state, state)
-        bus.emit(
-            rid,
-            "run",
-            "finished",
-            {
-                "status": state.status,
-                "stop_reason": state.stop_reason,
-                "best": state.best,
-                "errors": len(state.errors),
-            },
-        )
-        return state
+        return _drive_steps(state, files, deps, answers, resume, stop, abort)
+    except UsageLimitError as exc:
+        return _pause(state, files, bus, exc)
     finally:
         with _LOCK:
             _STOPS.pop(rid, None)
             _ABORTS.pop(rid, None)
             ACTIVE.pop(rid, None)
+
+
+def _pause(state: RunState, files: RunFiles, bus: EventBus, exc: UsageLimitError) -> RunState:
+    """Stop at a Claude usage limit and keep the run resumable (AT-30).
+
+    Everything done so far is saved (the campaign and the capability phase save after every tool
+    call), so ``resume`` continues from the same folder once the limit resets.
+
+    Parameters
+    ----------
+    state : RunState
+        State to mark paused.
+    files : RunFiles
+        Run paths.
+    bus : EventBus
+        Events.
+    exc : UsageLimitError
+        The limit, with its reset time when reported.
+
+    Returns
+    -------
+    RunState
+        The paused state.
+    """
+    state.status = "paused"
+    state.pause = {
+        "reason": "usage_limit",
+        "message": str(exc)[:300],
+        "resets_at": exc.resets_at,
+        "at": utcnow().isoformat(),
+    }
+    save_json(files.state, state)
+    bus.emit(
+        state.run_id,
+        "run",
+        "failed",  # the event stream has no "paused" status; the payload says it is a pause
+        {"status": "paused", "reason": "usage_limit", "resets_at": exc.resets_at, "message": str(exc)[:300]},
+    )
+    return state
+
+
+def _drive_steps(
+    state: RunState,
+    files: RunFiles,
+    deps: Deps,
+    answers: dict[str, str] | None,
+    resume: bool,
+    stop: threading.Event,
+    abort: threading.Event,
+) -> RunState:
+    """Run the outer steps of ``_drive``; a usage limit propagates to ``_drive``, which pauses.
+
+    Parameters
+    ----------
+    state, files, deps, answers, resume, stop, abort
+        As for ``_drive``.
+
+    Returns
+    -------
+    RunState
+        Final state.
+    """
+    rid, bus = state.run_id, deps.bus
+    state.pause = None  # resumed after a pause: the limit has reset, so the pause is over
+    llm, reviewer = _models(state.config, deps, files)
+    meter = UsageMeter(state, llm, reviewer)
+    bus.emit(
+        rid,
+        "run",
+        "started",
+        {"resume": resume, "goal": state.raw_goal, "config": state.config.model_dump()},
+    )
+    if state.spec is None and not _parse(state, files, llm, answers, bus):
+        return state
+    handlers = dict(deps.handlers) if deps.handlers is not None else load_default_handlers()
+    ws, critiques = _workspace(state, files, resume)
+    outcome = _capability(state, files, ws, llm, handlers, deps, stop)
+    if outcome in ("cancelled_run", "off"):
+        if outcome == "off":
+            state.status = "failed"
+        else:
+            state.status, state.stop_reason = "stopped", "cancelled by user"
+        meter.update()
+        save_json(files.state, state)
+        bus.emit(
+            rid,
+            "run",
+            "failed" if outcome == "off" else "finished",
+            {
+                "status": state.status,
+                "stop_reason": state.stop_reason,
+                "best": None,
+                "errors": [e.model_dump() for e in state.errors],
+            },
+        )
+        return state
+    handlers.update(custom.custom_handlers(ws, deps.toolkit_factory))
+    needs_ref = any(
+        t.reference_material and t.reference_value is None and t.evaluable for t in ws.spec.targets()
+    )
+    if needs_ref and not ws.candidates:
+        spec, errors = resolve_reference(ws, handlers)
+        state.errors += errors
+        ws.spec = state.spec = spec
+        if any(t.value is None and t.evaluable for t in spec.targets()):
+            state.status = "failed"
+            state.errors.append(
+                ErrorRecord(step="reference", code="no_target", message="Reference value unavailable.")
+            )
+            save_json(files.state, state)
+            bus.emit(rid, "run", "failed", {"errors": [e.model_dump() for e in state.errors]})
+            return state
+    state.status = "running"
+    if ws.submitted is None:
+        _campaign(state, files, ws, critiques, llm, reviewer, handlers, deps, stop, resume, meter)
+    else:
+        state.stop_reason = state.stop_reason or "submitted"
+    sync_state(state, ws, [it.critique for it in state.iterations if it.critique])
+    write_artifacts(files, state)
+    if not abort.is_set():
+        _final(state, files, ws, deps, bus, handlers, stop)
+    if not abort.is_set():
+        _brief(state, files, ws, llm, bus)
+    state.status = "stopped" if abort.is_set() else "finished"
+    if abort.is_set():
+        state.stop_reason = "user_abort"
+    meter.update()
+    save_json(files.state, state)
+    bus.emit(
+        rid,
+        "run",
+        "finished",
+        {
+            "status": state.status,
+            "stop_reason": state.stop_reason,
+            "best": state.best,
+            "errors": len(state.errors),
+        },
+    )
+    return state
 
 
 def _parse(state: RunState, files: RunFiles, llm: LLM, answers: dict[str, str] | None, bus: EventBus) -> bool:
