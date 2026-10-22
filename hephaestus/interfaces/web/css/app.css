@@ -3446,3 +3446,178 @@ details.issues[open] > summary {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ------------------------------------------------------------------ agent-built tools */
+
+.stepper.five {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.log-entry.tool-card {
+  display: block;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 14px 16px;
+  margin: 8px 0;
+}
+.log-entry.tool-card.waiting {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--hairline));
+  box-shadow: 0 0 0 3px var(--warning-wash);
+}
+.tool-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+.tool-card-kicker {
+  font: 600 11px/1.3 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+.tool-card-title {
+  font-weight: 600;
+  margin: 2px 0;
+}
+.tool-card-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  min-width: 0;
+}
+.tool-card-body p {
+  margin: 0;
+}
+.tool-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.tool-check {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+.tool-check .secondary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-decide {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+.tool-actions,
+.tool-lib-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.tool-revise {
+  display: grid;
+  gap: 8px;
+}
+.tool-revise textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
+.btn.danger,
+.btn.ghost.danger {
+  color: var(--critical-ink);
+}
+.code-view {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  max-height: 460px;
+  overflow: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font: 12px/1.55 var(--mono);
+}
+.code-gutter {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 8px;
+  text-align: right;
+  color: var(--ink-3);
+  user-select: none;
+  border-right: 1px solid var(--hairline);
+}
+.code-view pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: visible;
+  white-space: pre;
+}
+.code-view code {
+  font: inherit;
+}
+.tok-kw {
+  color: var(--series-1);
+  font-weight: 600;
+}
+.tok-str {
+  color: var(--good-ink);
+}
+.tok-com {
+  color: var(--ink-3);
+  font-style: italic;
+}
+.tok-num {
+  color: var(--serious-ink);
+}
+.tok-fn {
+  color: var(--ember);
+}
+.tool-tests summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.tool-banner {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 12px 0 0;
+}
+.tools-page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 28px 16px 60px;
+}
+.tools-page .section-title {
+  font-size: 15px;
+  margin: 22px 0 10px;
+}
+.tool-lib-card {
+  margin-bottom: 12px;
+}
+.tool-lib-card .card-body {
+  display: grid;
+  gap: 10px;
+}
+@media (max-width: 900px) {
+  .stepper.five {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .tool-card-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .tool-card-head > .pill {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+.sidebar-actions {
+  display: grid;
+  gap: 6px;
+}
