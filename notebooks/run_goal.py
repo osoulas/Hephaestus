@@ -23,12 +23,19 @@ __generated_with = "0.25.2"
 app = marimo.App(width="medium", app_title="Hephaestus: run a goal")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
-    """Import the marimo API and the Python API."""
+    """Import the marimo API and the Python API, and load saved keys as the CLI and web server do."""
     import marimo as mo
 
+    from hephaestus.core import credentials
     from hephaestus.interfaces.python import Experiment
+    from hephaestus.llm.auth import load_api_key
+
+    # Keys saved by `hephaestus login` live in ~/.hephaestus/; put them in the environment unless already set.
+    # Claude Code sign-in needs no key: it uses the Claude Code login on this machine.
+    load_api_key()  # Anthropic API key, for "Anthropic API key" model access
+    credentials.load_secret("materials_project")  # Materials Project key, needed by every run
 
     return Experiment, mo
 
@@ -45,7 +52,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     """Create the state that links the background run to the page (see the module docstring)."""
     get_session, set_session = mo.state(None)  # {"exp": Experiment, "parsed": ParseResult} or {"error": str}
@@ -61,7 +68,7 @@ def _(mo):
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     """Show the goal box and the run settings."""
     goal = mo.ui.text_area(
@@ -83,7 +90,7 @@ def _(mo):
     return backend, custom_tools, goal, no_elastic, review
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     Experiment,
     backend,
@@ -114,7 +121,7 @@ def _(
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(get_session, mo):
     """Show the parsed specification, the capability gap, and the parser's questions."""
     session = get_session()
