@@ -33,18 +33,15 @@ def _():
     return Experiment, mo
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    """Introduce the notebook."""
-    mo.md(
-        """
-        # Hephaestus
+    mo.md(r"""
+    # Hephaestus
 
-        Describe the material you need. Review the goal, answer any questions, then start the run. If the
-        goal needs a property no built-in tool computes, the agent proposes a tool and waits for you to
-        approve the plan and then the code.
-        """
-    )
+    Describe the material you need. Review the goal, answer any questions, then start the run. If the
+    goal needs a property no built-in tool computes, the agent proposes a tool and waits for you to
+    approve the plan and then the code.
+    """)
     return
 
 
@@ -54,7 +51,14 @@ def _(mo):
     get_session, set_session = mo.state(None)  # {"exp": Experiment, "parsed": ParseResult} or {"error": str}
     get_status, set_status = mo.state(None)  # the run's status, e.g. "running", "finished"
     get_waiting, set_waiting = mo.state(())  # (signature, cards): the decisions the agent is waiting for
-    return get_session, get_status, get_waiting, set_session, set_status, set_waiting
+    return (
+        get_session,
+        get_status,
+        get_waiting,
+        set_session,
+        set_status,
+        set_waiting,
+    )
 
 
 @app.cell
@@ -378,7 +382,7 @@ def _(get_session, get_waiting, mo):
         return mo.callout(mo.vstack(parts), kind="warn")
 
     mo.vstack([_card(c) for c in _items])
-    return card_buttons, card_messages
+    return
 
 
 @app.cell
