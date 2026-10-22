@@ -258,6 +258,12 @@ export class RunModel {
       if (cap.waiting && cap.waiting.proposal_id === d.proposal_id) cap.waiting = null;
       this.phase.tools = "active";
       if (card) return; // the card shows the decision
+    } else if (kind === "withdrawn") {
+      const card = [...this.log].reverse().find((x) => x.type === "capability" && x.kind === "code" && x.proposal && x.proposal.proposal_id === p.proposal_id && !x.decision && !x.withdrawn);
+      if (card) card.withdrawn = p.reason;
+      if (cap.waiting && cap.waiting.proposal_id === p.proposal_id) cap.waiting = null;
+      this.phase.tools = "active";
+      if (card) return; // the card shows it
     } else if (kind === "registered") {
       cap.registered = p.tool;
       this.phase.tools = "done";

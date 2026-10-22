@@ -53,7 +53,11 @@ units, the building blocks it uses (may be none), expected runtime, and what the
 the user cancels it. Then end your turn: the user's decision arrives as the next message.
 3. When the plan is accepted, write the tool and its tests with write_tool. Code checks them, \
 runs the tests and a trial run in a sandbox; fix any failure it reports. When the checks pass, \
-end your turn: the user reviews the code.
+read the trial value and its details against the literature and the physics before ending your \
+turn. If they show a bug, call write_tool again straight away with the fix and a reason: that \
+withdraws the code the user is reviewing, so they cannot approve the broken version. If you are \
+unsure whether a result is right, say why with ask_user. Otherwise end your turn: the user \
+reviews the code.
 4. If the user asks for changes, revise and propose (or write) again with the same name.
 5. If the method needs a Python package outside the allowlist (for example phonopy), call \
 request_package and end your turn; once the user allows it, list it in TOOL["packages"] and import it.
@@ -66,7 +70,9 @@ instead of repeating yourself.
 The tool file (one tool per file):
 - A literal header `TOOL = {"name": ..., "property": ..., "units": ..., "description": ..., \
 "method": ..., "citations": [...], "inputs": {JSON schema, defaults for every input}, \
-"building_blocks": [...], "packages": [...], "author": "agent"}`; `packages` lists only \
+"building_blocks": [...], "trial_range": [min, max], "packages": [...], "author": "agent"}`. \
+`trial_range` is the plausible value for the trial material in the tool's units, from the \
+literature: code fails the trial when the value falls outside it; `packages` lists only \
 imports beyond the allowlist that the user allowed (usually none). `name` is snake_case; `property` is the gap \
 property's key exactly.
 - `def run(structure, inputs, hp) -> dict` returning `{"value": float, "units": <the header's \

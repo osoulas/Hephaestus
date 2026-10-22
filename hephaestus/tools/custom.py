@@ -296,6 +296,29 @@ def header_packages(header: dict[str, Any]) -> list[str]:
     return [str(p) for p in raw if isinstance(p, str) and MODULE_RE.match(p)] if isinstance(raw, list) else []
 
 
+def header_trial_range(header: dict[str, Any]) -> tuple[float, float] | None:
+    """Return the plausible trial value a tool declares (``TOOL["trial_range"]``), if valid.
+
+    Parameters
+    ----------
+    header : dict
+        The ``TOOL`` header.
+
+    Returns
+    -------
+    tuple of float or None
+        ``(min, max)`` with min <= max; ``None`` when missing or malformed.
+    """
+    raw = header.get("trial_range")
+    if not isinstance(raw, list | tuple) or len(raw) != 2:
+        return None
+    try:
+        lo, hi = float(raw[0]), float(raw[1])
+    except (TypeError, ValueError):
+        return None
+    return (lo, hi) if math.isfinite(lo) and math.isfinite(hi) and lo <= hi else None
+
+
 def importable(module: str) -> bool:
     """Whether the server's Python (which the sandbox uses) can import a package.
 

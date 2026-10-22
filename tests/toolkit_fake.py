@@ -19,6 +19,7 @@ TOOL = {
     "citations": [],
     "inputs": {"type": "object", "properties": {"scale": {"type": "number", "default": 2.0}}},
     "building_blocks": ["single_point"],
+    "trial_range": [1.0, 100.0],
     "author": "agent",
 }
 

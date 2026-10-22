@@ -971,7 +971,8 @@ export function mountRun(root, id, tab, hooks) {
             if (ui.tab !== "activity") location.hash = `#/run/${encodeURIComponent(id)}/activity`;
             else render();
             setTimeout(() => {
-              const el = document.getElementById(`tool-${w.proposal_id}-${w.stage}`);
+              const all = document.querySelectorAll(`[data-tool="${w.proposal_id}-${w.stage}"]`);
+              const el = all[all.length - 1]; // the newest card: earlier ones may be withdrawn
               if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
             }, 50);
           },
@@ -1022,7 +1023,7 @@ export function mountRun(root, id, tab, hooks) {
         if (!e.proposal && !e.request) return capabilityLine(e, time);
         const w = model.capability && model.capability.waiting;
         const itemId = e.proposal ? e.proposal.proposal_id : e.request.request_id;
-        const waiting = Boolean(w && !e.decision && w.proposal_id === itemId && w.stage === e.kind && model.running && !model.isReplay);
+        const waiting = Boolean(w && !e.decision && !e.withdrawn && w.proposal_id === itemId && w.stage === e.kind && model.running && !model.isReplay);
         const ctx = { runId: id, waiting, drafts: ui.toolDrafts, open, onSent: () => ((lastTabSig = null), render()) };
         return e.request ? requestCard(e, ctx) : proposalCard(e, ctx);
       }

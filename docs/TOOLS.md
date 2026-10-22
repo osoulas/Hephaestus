@@ -453,7 +453,8 @@ budget (AT-25).
 
 #### `write_tool`
 Submit the source for an accepted plan (AT-10 to AT-13). **Input:** `proposal_id`, `source` (the tool file),
-`tests` (the test file). Code runs the static check, the tests and the trial run. **Returns** either
+`tests` (the test file), `reason` (null, or why it replaces code the user is reviewing). Code runs the
+static check, the tests and the trial run. **Returns** either
 `{checks}` with the failing check's report (the agent fixes it and calls again, up to 3 times), or, once the
 checks pass and the user has decided, `{proposal_id, checks, decision: {action, message}}`.
 
@@ -470,6 +471,12 @@ agent's plain text as a question.
 
 #### `give_up`
 End the phase without a tool (`reason`); the run screens stability only and the brief says why.
+
+**The agent's second look.** Every tool declares `TOOL["trial_range"]`, the plausible value for the trial
+material from the literature; a trial value outside it fails the checks before the user sees the code. If
+the agent finds a bug after its code is shown, `write_tool` with a `reason` withdraws the open card (event
+`withdrawn`, `{proposal_id, revision, reason}`) and resubmits; it uses none of the user's change requests but
+counts against the three fix attempts, and is refused once the user has decided.
 
 **No dead ends.** A change request at the code stage may be answered with a new plan (`propose_tool`
 again) or new code. Two turns in a row without a tool call, with nothing waiting for the user, end the

@@ -153,11 +153,11 @@ export function requestCard(entry, ctx) {
           ),
         ),
       );
-      return h(`div.log-entry.tool-card.waiting`, { id: `tool-${r.request_id}-${entry.kind}` }, head, body);
+      return h(`div.log-entry.tool-card.waiting`, { dataset: { tool: `${r.request_id}-${entry.kind}` } }, head, body);
     }
     body.append(h("div.tool-decide", null, bar));
   }
-  return h(`div.log-entry.tool-card${ctx.waiting && !entry.decision ? ".waiting" : ""}`, { id: `tool-${r.request_id}-${entry.kind}` }, head, body);
+  return h(`div.log-entry.tool-card${ctx.waiting && !entry.decision ? ".waiting" : ""}`, { dataset: { tool: `${r.request_id}-${entry.kind}` } }, head, body);
 }
 
 /**
@@ -281,7 +281,9 @@ export function proposalCard(entry, ctx) {
   const p = entry.proposal;
   const isPlan = entry.kind === "plan";
   const who = p.author === "user" ? "Your library file" : "The agent";
-  const status = entry.decision
+  const status = entry.withdrawn
+    ? pill("Withdrawn by the agent", "info", "edit")
+    : entry.decision
     ? pill(ACTION_TEXT[entry.decision.action] || label(entry.decision.action), entry.decision.action === "accept" ? "good" : entry.decision.action === "revise" ? "info" : "warning", entry.decision.action === "accept" ? "check" : "edit")
     : ctx.waiting
       ? pill("Needs your decision", "warning", "alert")
@@ -318,7 +320,10 @@ export function proposalCard(entry, ctx) {
   } else {
     const checks = Object.entries(p.checks || {});
     body.append(h("ul.tool-checks", null, checks.map(([k, c]) => checkRow(k, c))));
-    if (p.trial) body.append(h("div.callout.info", null, icon("flask"), h("div", null, `Trial run on ${p.trial.material}: `, h("strong", null, `${Number(p.trial.value).toPrecision(4)} ${p.units}`))));
+    if (p.trial) {
+      const range = p.trial.range ? ` · expected ${p.trial.range[0]} to ${p.trial.range[1]} ${p.units} from the literature` : "";
+      body.append(h("div.callout.info", null, icon("flask"), h("div", null, `Trial run on ${p.trial.material}: `, h("strong", null, `${Number(p.trial.value).toPrecision(4)} ${p.units}`), range)));
+    }
     if ((p.toolkit_calls || []).length) body.append(h("div.muted", null, `Building blocks used: ${p.toolkit_calls.join(", ")}`));
     body.append(h("div.field-label", null, "Tool"), codeView(p.source));
     if (p.tests) {
@@ -332,9 +337,10 @@ export function proposalCard(entry, ctx) {
       );
     }
   }
+  if (entry.withdrawn) body.prepend(h("div.callout.warning", null, icon("edit"), h("div", null, h("strong", null, "The agent withdrew this code: "), entry.withdrawn, " A fixed version follows below.")));
   if (entry.decision && entry.decision.message) body.append(h("div.callout", null, icon("message"), h("div", null, h("strong", null, "You asked: "), entry.decision.message)));
-  if (ctx.waiting && !entry.decision) body.append(decisionBar(p, entry.allowed || [], ctx));
-  return h(`div.log-entry.tool-card${ctx.waiting && !entry.decision ? ".waiting" : ""}`, { id: `tool-${p.proposal_id}-${entry.kind}` }, head, body);
+  if (ctx.waiting && !entry.decision && !entry.withdrawn) body.append(decisionBar(p, entry.allowed || [], ctx));
+  return h(`div.log-entry.tool-card${ctx.waiting && !entry.decision ? ".waiting" : ""}`, { dataset: { tool: `${p.proposal_id}-${entry.kind}` } }, head, body);
 }
 
 /**
