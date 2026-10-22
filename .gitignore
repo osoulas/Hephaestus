@@ -47,3 +47,6 @@ change_in_git
 # Hephaestus run folders and the external-call cache (tokens live in ~/.hephaestus/)
 runs/
 cache/
+
+# marimo's saved outputs of the last session
+__marimo__/

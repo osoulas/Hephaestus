@@ -124,3 +124,7 @@ warn_unreachable = true
 [tool.ruff.lint.per-file-ignores]
 # marimo notebooks show each cell's last expression on screen, which is what B018 flags
 "notebooks/*" = ["B018"]
+
+[tool.marimo.runtime]
+# Run the notebook's cells when it opens, so its buttons are live (not a saved snapshot)
+auto_instantiate = true
