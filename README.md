@@ -25,18 +25,23 @@ uncertainties, and a brief that cites every claim.
 
 ## Why it's different
 
-Most LLM-driven discovery loops let the model decide when a result is good enough. Hephaestus does not.
+Most LLM-driven discovery loops stop when the model says it is done. Hephaestus does not, and it can
+build the tools a goal needs.
 
-- **Code decides, never the model.** Stability verdicts, the target check, the submission gate, the budgets
-  and the stop rules are plain code. The model reads these results and cannot override them.
+- **It builds the tools it lacks.** When no built-in tool computes a property, the agent researches the
+  method in the literature, proposes a tool, and writes it once you accept the plan. You read the code and
+  approve it before it runs. Approved tools are saved and reused in later runs, so the library grows with
+  every goal. Each tool runs in a sandbox, and its results are labelled as agent-built.
 - **Literature first.** The agent searches Valency Bond for the property, the chemistry and failed attempts,
   and every proposed composition cites the papers behind it.
+- **Two independent scores must both pass.** Code scores each candidate on its checks, and an independent
+  reviewer LLM scores it on its own confidence. The target is met only when the code's score and the
+  reviewer's confidence both reach the threshold, the code checks pass, and the reviewer raises no critical
+  finding. The model cannot override the code's checks, and the reviewer cannot override the code.
 - **Checked twice.** The winner is re-checked at higher fidelity (a larger potential, full phonons, a
   recomputed reference) before the brief is written.
 - **Honest numbers.** Every predicted value carries an uncertainty or says it has none, and the brief's
   numbers come only from stored results.
-- **It builds what it lacks.** When no tool computes a property, the agent proposes one, you review the plan
-  and then the code, and approved tools are reused in later runs.
 
 ## How a run works
 
