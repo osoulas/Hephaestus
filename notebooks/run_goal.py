@@ -35,7 +35,7 @@ def _():
     # Keys saved by `hephaestus login` live in ~/.hephaestus/; put them in the environment unless already set.
     # Claude Code sign-in needs no key: it uses the Claude Code login on this machine.
     load_api_key()  # Anthropic API key, for "Anthropic API key" model access
-    credentials.load_secret("materials_project")  # Materials Project key, needed by every run
+    _loaded = credentials.load_secret("materials_project")  # Materials Project key, needed by every run
 
     return Experiment, mo
 
@@ -43,11 +43,33 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Hephaestus
+    # Hephaestus: run a goal
 
-    Describe the material you need. Review the goal, answer any questions, then start the run. If the
-    goal needs a property no built-in tool computes, the agent proposes a tool and waits for you to
-    approve the plan and then the code.
+    Describe a material in plain English. Hephaestus reads the literature, proposes compositions, checks
+    them by simulation and writes a lab brief that cites its sources. This notebook runs one goal from
+    start to finish, and lets you approve any tool the agent builds along the way.
+
+    **Before you start.** You need a way to reach Claude and a Materials Project key. Both are set up with
+    `hephaestus login` (see *Troubleshooting* at the bottom); the notebook loads saved keys on its own.
+    Run `hephaestus backends` in a terminal to see what is ready.
+
+    **How to use it**
+
+    1. **Describe the goal** in the box below and click **Review goal**.
+    2. **Check the specification** the parser reads from it. Answer its questions if it asks any.
+    3. **Start the run.** It works in the background; this page keeps updating.
+    4. **Watch the run** in the live view: each step the agent takes appears as it happens.
+    5. **Decide** when the agent asks you: if the goal needs a property no built-in tool computes, the
+       agent proposes a tool and waits for you to accept the plan and then the code.
+    6. **Read the results**: the recommended composition, every candidate, and the lab brief.
+
+    **How long it takes.** Reading the goal takes under a minute (the first call through a Claude Code
+    login can take one to two minutes to start). A full run takes several minutes on a laptop CPU, and a
+    little longer when the agent builds a tool.
+
+    **What decides the result.** Code, not the model, decides the stability checks, the target check and
+    when to stop. The run meets its target only when the code's score and an independent reviewer's
+    confidence both pass. This notebook only shows those results and sends your decisions.
     """)
     return
 
@@ -66,6 +88,27 @@ def _(mo):
         set_status,
         set_waiting,
     )
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 1. Describe the goal
+
+    Write what you need in plain English, as you would to a colleague: the property, the direction
+    (higher, lower, near a value), a reference material if you have one, and any limits such as
+    "lead-free" or "stable on the hull". Several properties can be targets at once; every one must be met.
+
+    - **Model access**: *Auto* uses an Anthropic API key if one is saved, otherwise your Claude Code login.
+    - **When no tool fits**: *Ask me* lets the agent propose a tool for a property no built-in tool
+      computes, for you to approve. *Off* stops the run instead.
+    - **Turn off the built-in elastic tools**: for the demo, so the agent has to build its own tool for a
+      bulk-modulus goal.
+
+    Click **Review goal**. Each click starts a new run, so change the goal and review again as often as
+    you like before you start.
+    """)
+    return
 
 
 @app.cell(hide_code=True)
@@ -118,6 +161,23 @@ def _(
             set_session({"error": f"{type(_e).__name__}: {_e}"})
     set_status(None)
     set_waiting(())
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 2. Check the specification
+
+    This is what the run will look for. Check the targets and the hard constraints. If the goal names a
+    reference material ("smaller than SrTiO3"), the target value is computed later with the same model as
+    the candidates, so both sit on the same scale.
+
+    - A **yellow note** means no built-in tool computes a property: the agent will propose one at the
+      start of the run.
+    - If the parser **asks questions**, answer them in the boxes and click **Re-check with my answers**.
+    - A **red note** lists problems with the goal: edit it above and review again.
+    """)
     return
 
 
@@ -177,6 +237,18 @@ def _(answers, get_session, mo, questions, recheck, set_session):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 3. Start the run
+
+    **Start run** appears once the specification is ready. The run continues in the background, so you can
+    scroll, read and decide while it works. **Stop the search** ends the search early: the best candidate so
+    far still gets the final re-check and a lab brief.
+    """)
+    return
+
+
 @app.cell
 def _(get_session, get_status, mo, parsed):
     """Offer Start once the goal is ready, and Stop while the run is active."""
@@ -201,6 +273,18 @@ def _(get_session, mo, set_status, start):
     mo.stop(not start.value)
     get_session()["exp"].start()
     set_status("running")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 4. Watch the run
+
+    The live view refreshes every two seconds (change or pause it with the control below). The table shows
+    the latest steps, newest first: literature searches, structures built, relaxations, stability checks,
+    property predictions, reviews and decisions.
+    """)
     return
 
 
@@ -256,6 +340,31 @@ def _(get_session, get_status, get_waiting, mo, set_status, set_waiting, tick):
             else mo.md("_No events yet._"),
         ]
     )
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 5. Decide on the agent's tools
+
+    When the run needs your decision, a yellow card appears here and the run waits until you answer. Only
+    the buttons that apply to that card are shown.
+
+    - **Tool plan**: what the tool will compute and how, with its sources. **Accept** to let the agent
+      write it, or type what should change and click **Request changes**.
+    - **Code review**: the checks code ran (static check, tests, a trial run on a reference material and the
+      range it should fall in), with the full source and tests under the headings. Read the code, then
+      **Accept** to use it in this run and save it for later runs.
+    - **Package request**: the agent wants a package outside its sandbox. **Allow** (installing it if
+      needed) or **Don't allow**.
+    - **Question**: click a suggested answer, or type your own and click **Send answer**.
+    - **Proposal to stop**: the agent thinks no tool can be built. **Allow** lets it stop; type an approach
+      and click **Send answer** to have it build that instead.
+
+    **Cancel the tool** continues the run without it (that property cannot be checked); **Cancel the run**
+    ends the run.
+    """)
     return
 
 
@@ -392,6 +501,20 @@ def _(get_session, get_waiting, mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## 6. Results
+
+    When the run ends you get the recommended composition, why the search stopped, and the verdict of the
+    higher-fidelity re-check (*confirmed*, *weakened* or *overturned*). The table lists every candidate with
+    its energy above the hull and each target property; ★ marks the recommendation. Values from an
+    agent-built tool have no error bar. Open **Lab brief** for the full write-up, with synthesis steps and
+    references. Runs are saved under `runs/`, so the web UI can show this one too.
+    """)
+    return
+
+
 @app.cell
 def _(get_session, get_status, mo):
     """Show the results once the run has ended: the best candidate, the candidates and the brief."""
@@ -456,6 +579,25 @@ def _(get_session, get_status, mo):
         mo.accordion({"Lab brief": mo.md(_exp.brief or "_The brief was not written._")}),
     ]
     mo.vstack(_out)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Troubleshooting
+
+    - **Nothing happens when I click a button.** If a banner says you are connected as a *reader*, click
+      **Take over**: only one tab can control the notebook. If cells show a yellow "not run" marker, click
+      **Run all** (bottom right).
+    - **"Could not read the goal"** usually means no way to reach Claude. In a terminal run
+      `hephaestus login` (Claude Code) or `hephaestus login --api-key` (API key), then reopen the notebook.
+    - **A Materials Project error.** Save your key with `hephaestus login --mp-api-key`, then reopen.
+    - **Literature searches fail.** Sign in to Valency with `hephaestus signin`.
+    - **Check everything at once** with `hephaestus backends`.
+    - **Run paused: usage limit.** Your Claude account reached its limit. Resume the run later from the web
+      UI, or with `Experiment.load(run_id).resume()`.
+    """)
     return
 
 
