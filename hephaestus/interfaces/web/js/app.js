@@ -23,15 +23,15 @@ const app = {
 const EXAMPLES = [
   {
     short: "Smaller band gap than SrTiO3, stable",
-    goal: "a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable (≤ 0.05 eV/atom above hull) and dynamically stable",
+    goal: "Find a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable (≤ 0.05 eV/atom above hull) and dynamically stable.",
   },
   {
     short: "Stiffer than SrTiO3",
-    goal: "a lead-free oxide perovskite with a higher bulk modulus than SrTiO3 that is thermodynamically stable (≤ 0.05 eV/atom above hull) and dynamically stable",
+    goal: "Find a lead-free oxide perovskite with a higher bulk modulus than SrTiO3 that is thermodynamically stable (≤ 0.05 eV/atom above hull) and dynamically stable.",
   },
   {
     short: "Visible-light absorber, no Pb or Cd",
-    goal: "an oxide perovskite photocatalyst with a band gap between 2.0 and 2.6 eV, without Pb or Cd, stable on the hull",
+    goal: "Find an oxide perovskite photocatalyst with a band gap between 2.0 and 2.6 eV that contains no Pb or Cd and is stable on the hull.",
   },
 ];
 

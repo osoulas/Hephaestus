@@ -40,8 +40,8 @@ from hephaestus.interfaces.python import backend_ready, device_status, list_runs
 ReadLine = Callable[[str], str]
 PROMPT = f"{GLYPH['tool']} "  # the main goal-or-command prompt
 EXAMPLE_GOAL = (
-    "a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically "
-    "stable (≤ 0.05 eV/atom above hull) and dynamically stable"
+    "Find a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically "
+    "stable (≤ 0.05 eV/atom above hull) and dynamically stable."
 )
 # Every RunConfig field, grouped as in the web composer (OR-4); /config lists and completes them.
 CONFIG_GROUPS: dict[str, tuple[str, ...]] = {

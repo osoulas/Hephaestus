@@ -144,8 +144,8 @@ def _(mo):
     """Show the goal box and the run settings."""
     goal = mo.ui.text_area(
         label="Goal",
-        value="a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable "
-        "(≤ 0.05 eV/atom above hull) and dynamically stable",
+        value="Find a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable "
+        "(≤ 0.05 eV/atom above hull) and dynamically stable.",
         full_width=True,
         rows=3,
     )

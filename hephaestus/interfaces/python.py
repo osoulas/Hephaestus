@@ -7,7 +7,7 @@ the same budgets, events and gates the orchestrator uses. Nothing here re-implem
 
 Examples
 --------
->>> exp = Experiment("a lead-free oxide perovskite with a smaller band gap than SrTiO3")
+>>> exp = Experiment("Find a lead-free oxide perovskite with a smaller band gap than SrTiO3.")
 >>> parsed = exp.parse()                # spec and clarifying questions
 >>> exp.start()                         # background thread
 >>> for event in exp.events():          # history, then live, until the run ends

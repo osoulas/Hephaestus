@@ -17,8 +17,8 @@ Read this whole file before writing code. Then read:
 
 A research agent for materials discovery. The user types a goal in plain English, for example:
 
-> a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable
-> (≤ 0.05 eV/atom above hull) and dynamically stable
+> Find a lead-free oxide perovskite with a smaller band gap than SrTiO3 that is thermodynamically stable
+> (≤ 0.05 eV/atom above hull) and dynamically stable.
 
 The package returns a recommended composition, checked by simulation, and a lab-ready brief that cites
 the literature.

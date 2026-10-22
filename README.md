@@ -176,7 +176,7 @@ This underlies both the web GUI and interactive CLI, and can be accessed directl
 ```python
 from hephaestus.interfaces.python import Experiment
 
-exp = Experiment("a lead-free oxide perovskite with a smaller band gap than SrTiO3",
+exp = Experiment("Find a lead-free oxide perovskite with a smaller band gap than SrTiO3.",
                  llm_backend="claude-code", custom_tools="ask")
 
 parsed = exp.parse()                 # the specification, clarifying questions and any capability gap
