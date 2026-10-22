@@ -1481,9 +1481,7 @@ def coerce_decision(raw: Any, prop: ToolProposal | UserRequest) -> ToolDecision:
             action, message = raw.get("action"), raw.get("message")
         elif raw is None:
             action, message = {"package": "deny", "question": "answer", "give_up": "allow"}[prop.kind], None
-        elif prop.kind == "question" and raw != "cancel_run":
-            action, message = "answer", str(raw)
-        elif prop.kind == "give_up" and raw not in ("allow", "cancel_run"):
+        elif (prop.kind == "question" and raw != "cancel_run") or (prop.kind == "give_up" and raw not in ("allow", "cancel_run")):
             action, message = "answer", str(raw)
         else:
             action, message = str(raw), None
