@@ -1,4 +1,4 @@
-"""Outer order: parse, campaign, final re-check, brief (OR-1, OR-6, OR-8).
+"""Outer order: parse, capability phase, campaign, final re-check, brief (OR-1, OR-6, OR-8).
 
 ``run`` is the single entry point the Python API, HTTP API and CLI call. Every
 dependency (models, tool handlers, final check) can be injected so tests run offline.
@@ -27,11 +27,20 @@ from hephaestus.core.types import (
 from hephaestus.harness.agent import Campaign, NoveltyFn
 from hephaestus.harness.brief import assemble_brief
 from hephaestus.harness.brief_pdf import export_pdf
+from hephaestus.harness.capability import HUB, CapabilityPhase, Decider, find_gap, load_state
 from hephaestus.harness.compute_brief import assemble_compute_brief
-from hephaestus.harness.goal import apply_stability_options, parse_goal, validate_spec
+from hephaestus.harness.goal import apply_stability_options, parse_goal, validate_for_run
 from hephaestus.harness.state import RunFiles, load_for_resume, save_snapshot, sync_state, write_artifacts
 from hephaestus.llm.base import LLM, LoggedLLM, make_llm
-from hephaestus.tools.registry import CandidateState, Handler, Workspace, execute, load_default_handlers
+from hephaestus.tools import custom
+from hephaestus.tools.registry import (
+    CandidateState,
+    Handler,
+    Workspace,
+    execute,
+    load_default_handlers,
+    target_step,
+)
 
 FinalCheck = Callable[[Workspace, Submission], list[ValidationReport]]
 TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
@@ -94,6 +103,8 @@ class Deps:
     final_check: FinalCheck | None = None
     bus: EventBus = field(default_factory=lambda: BUS)
     root: Path | None = None
+    decide: Decider | None = None  # agent-built tool decisions; else they come through HUB (AT-29)
+    toolkit_factory: custom.ToolkitFactory | None = None  # building blocks for agent-built tools
 
 
 def default_final_check() -> Callable[..., list[ValidationReport]] | None:
@@ -132,6 +143,7 @@ def request_stop(run_id: str, mode: str = "campaign") -> bool:
         camp = ACTIVE.get(run_id)
     if ev:
         ev.set()
+        HUB.cancel_run(run_id)  # a stop during the capability phase cancels the run
     if abort and mode == "all":
         abort.set()
     if camp:
@@ -218,11 +230,12 @@ def _models(cfg: RunConfig, deps: Deps, files: RunFiles) -> tuple[LoggedLLM, Log
 def resolve_reference(
     ws: Workspace, handlers: Mapping[str, Handler], potential: str | None = None, fmax: float = 0.02
 ) -> tuple[SearchSpec, list[ErrorRecord]]:
-    """Compute a relative target's reference value with the candidates' model (GP-11).
+    """Compute every relative target's reference value with the candidates' model (GP-11).
 
-    Builds the reference material from Materials Project (ambient polymorph), relaxes it with
-    the given potential and predicts the target property, through the same tool handlers. The
-    final check calls it again with the final potential (Section 9).
+    For each target with a reference material and no reference value yet: build the reference
+    from Materials Project (ambient polymorph), relax it with the given potential and compute the
+    target property, through the same tool handlers. The final check calls it again with the
+    final potential (Section 9).
 
     Parameters
     ----------
@@ -238,14 +251,56 @@ def resolve_reference(
     Returns
     -------
     spec : SearchSpec
-        Spec with ``reference_value`` and ``target_value`` set, when it worked.
+        Spec with each target's ``reference_value`` and ``value`` set, where it worked.
     errors : list of ErrorRecord
         What failed.
     """
     spec = ws.spec
-    if not spec.reference_material or spec.reference_value is not None:
-        return spec, []
-    ref = spec.reference_material
+    errors: list[ErrorRecord] = []
+    for i, t in enumerate(spec.targets()):
+        if not t.reference_material or t.reference_value is not None or not t.evaluable:
+            continue
+        pred, err = _reference_value(ws, spec.target_view(i), handlers, potential, fmax)
+        if err:
+            errors.append(err)
+            continue
+        assert pred is not None
+        spec = spec.with_target(i, t.model_copy(update={"reference_value": pred, "value": pred.value}))
+        spec.assumptions = [
+            *spec.assumptions,
+            f"Target value for {t.property} is the model's own prediction for {t.reference_material} "
+            f"({pred.value:.3g} {pred.units}), so candidates and reference sit on the same scale (GP-11).",
+        ]
+    return spec, errors
+
+
+def _reference_value(
+    ws: Workspace, view: SearchSpec, handlers: Mapping[str, Handler], potential: str | None, fmax: float
+) -> tuple[Quantity | None, ErrorRecord | None]:
+    """Compute one target's value for its reference material.
+
+    Parameters
+    ----------
+    ws : Workspace
+        Workspace; a temporary ``ref`` candidate is added and removed.
+    view : SearchSpec
+        Spec whose primary target is the one to compute.
+    handlers : mapping
+        Tool handlers.
+    potential : str or None
+        Potential; the screening one by default.
+    fmax : float
+        Force threshold, eV/Å.
+
+    Returns
+    -------
+    value : Quantity or None
+        The reference value.
+    error : ErrorRecord or None
+        What failed.
+    """
+    ref = view.reference_material
+    assert ref
     cand = Candidate(
         candidate_id="ref",
         iteration=0,
@@ -257,33 +312,23 @@ def resolve_reference(
     calls: list[tuple[str, dict[str, Any]]] = [
         ("build_structure", {"candidate_id": "ref", "source": "auto", "mp_id": None, "seed": ws.cfg.seed}),
         ("relax", {"candidate_id": "ref", "potential": potential or ws.cfg.potential, "fmax": fmax}),
-        ("predict_property", {"candidate_id": "ref", "property": spec.target_property}),
+        target_step(view, "ref"),
     ]
     result: dict[str, Any] = {}
     try:
         for name, args in calls:
             result, is_error = execute(ws, name, args, handlers)
             if is_error:
-                return spec, [
-                    ErrorRecord(
-                        step="reference", code=f"{name}_failed", message=str(result.get("error"))[:300]
-                    )
-                ]
+                msg = f"{view.target_property}: {result.get('error')}"
+                return None, ErrorRecord(step="reference", code=f"{name}_failed", message=msg[:300])
     finally:
         ws.candidates.pop("ref", None)
-    pred = Quantity(
+    return Quantity(
         value=float(result["value"]),
         uncertainty=result.get("uncertainty"),
-        units=result.get("units", spec.target_units),
+        units=result.get("units", view.target_units),
         source=f"{result.get('model')} on {ref}",
-    )
-    new = spec.model_copy(update={"reference_value": pred, "target_value": pred.value})
-    new.assumptions = [
-        *spec.assumptions,
-        f"Target value is the model's own prediction for {ref} ({pred.value:.3g} {pred.units}), so candidates and "
-        "reference sit on the same scale (GP-11).",
-    ]
-    return new, []
+    ), None
 
 
 def run(
@@ -399,11 +444,35 @@ def _drive(
             return state
         handlers = dict(deps.handlers) if deps.handlers is not None else load_default_handlers()
         ws, critiques = _workspace(state, files, resume)
-        if not resume and ws.spec.reference_material and ws.spec.reference_value is None:
+        outcome = _capability(state, files, ws, llm, handlers, deps, stop)
+        if outcome in ("cancelled_run", "off"):
+            if outcome == "off":
+                state.status = "failed"
+            else:
+                state.status, state.stop_reason = "stopped", "cancelled by user"
+            meter.update()
+            save_json(files.state, state)
+            bus.emit(
+                rid,
+                "run",
+                "failed" if outcome == "off" else "finished",
+                {
+                    "status": state.status,
+                    "stop_reason": state.stop_reason,
+                    "best": None,
+                    "errors": [e.model_dump() for e in state.errors],
+                },
+            )
+            return state
+        handlers.update(custom.custom_handlers(ws, deps.toolkit_factory))
+        needs_ref = any(
+            t.reference_material and t.reference_value is None and t.evaluable for t in ws.spec.targets()
+        )
+        if needs_ref and not ws.candidates:
             spec, errors = resolve_reference(ws, handlers)
             state.errors += errors
             ws.spec = state.spec = spec
-            if spec.target_value is None:
+            if any(t.value is None and t.evaluable for t in spec.targets()):
                 state.status = "failed"
                 state.errors.append(
                     ErrorRecord(step="reference", code="no_target", message="Reference value unavailable.")
@@ -470,7 +539,7 @@ def _parse(state: RunState, files: RunFiles, llm: LLM, answers: dict[str, str] |
     bus.emit(state.run_id, "goal_parser", "started", {"goal": state.raw_goal})
     spec, questions, errors = parse_goal(llm, state.raw_goal, state.config, answers)
     state.errors += errors
-    if spec is None or questions or validate_spec(spec):
+    if spec is None or questions or validate_for_run(spec, state.config):
         state.status = "needs_input" if spec is not None else "failed"
         state.spec = spec
         save_json(files.state, state)
@@ -490,6 +559,183 @@ def _parse(state: RunState, files: RunFiles, llm: LLM, answers: dict[str, str] |
     save_json(files.state, state)
     bus.emit(state.run_id, "goal_parser", "finished", {"spec": spec.model_dump()})
     return True
+
+
+def _capability(
+    state: RunState,
+    files: RunFiles,
+    ws: Workspace,
+    llm: LLM,
+    handlers: Mapping[str, Handler],
+    deps: Deps,
+    stop: threading.Event,
+) -> str | None:
+    """Fill every capability gap before the campaign: reuse library tools or run phases (Section 14).
+
+    Each target no built-in tool computes gets its own capability phase, one after another; a
+    phase sees the spec with that target as its primary one.
+
+    Parameters
+    ----------
+    state : RunState
+        State; each gap's target gains ``tool``, or ``evaluable=False`` when it gets none.
+    files : RunFiles
+        Run paths.
+    ws : Workspace
+        Workspace; approved tools go into ``ws.custom_tools``.
+    llm : LLM
+        The orchestrator's model.
+    handlers : mapping
+        Tool handlers.
+    deps : Deps
+        Decision callback and toolkit factory.
+    stop : threading.Event
+        A user stop.
+
+    Returns
+    -------
+    str or None
+        ``None`` without a gap; ``"off"`` or ``"cancelled_run"`` to end the run; else the last
+        outcome.
+    """
+    last: str | None = None
+    for i in range(len(ws.spec.targets())):
+        outcome = _capability_one(state, files, ws, llm, handlers, deps, stop, i)
+        if outcome in ("off", "cancelled_run"):
+            return outcome
+        last = outcome or last
+    return last
+
+
+def _capability_one(
+    state: RunState,
+    files: RunFiles,
+    ws: Workspace,
+    llm: LLM,
+    handlers: Mapping[str, Handler],
+    deps: Deps,
+    stop: threading.Event,
+    i: int,
+) -> str | None:
+    """Fill one target's gap, if it has one.
+
+    Parameters
+    ----------
+    state, files, ws, llm, handlers, deps, stop
+        As for ``_capability``.
+    i : int
+        Index into ``spec.targets()``.
+
+    Returns
+    -------
+    str or None
+        ``None`` without a gap; ``"reused"``, ``"off"``, or the phase's outcome.
+    """
+    cfg = state.config
+    t = ws.spec.targets()[i]
+    if t.tool or not t.evaluable or t.property == "unsupported":
+        return None
+    if t.property in custom.run_registry(cfg, []):
+        return None
+    approved, _ = custom.scan_library(custom.library_dir(cfg))
+    reused = next((x for x in approved if x.property == t.property), None)
+    if reused is not None:  # AT-22: an approved library tool fills the gap without a proposal
+        ws.custom_tools[reused.name] = reused
+        _set_target_tool(
+            state,
+            ws,
+            i,
+            reused,
+            f"The agent-built tool {reused.name} from the tool library computes {t.property}.",
+        )
+        deps.bus.emit(
+            state.run_id,
+            "capability",
+            "finished",
+            {"kind": "library", "reused": [reused.name], "property": t.property},
+        )
+        save_snapshot(files, state, ws, [])
+        return "reused"
+    view = ws.spec.target_view(i)
+    gap = find_gap(view, cfg, approved)
+    if gap is None:
+        return None
+    if cfg.custom_tools == "off":  # AT-3: a gap ends the run before the campaign
+        state.errors.append(
+            ErrorRecord(
+                step="capability",
+                code="capability_gap",
+                message=f"No tool can compute {gap!r}, and agent-built tools are off for this run.",
+            )
+        )
+        return "off"
+    folder = files.root / ("capability" if i == 0 else f"capability_{gap}")
+    saved = load_state(folder)
+    state.status = "capability"
+    save_json(files.state, state)
+    phase_ws = ws.model_copy(update={"spec": view})  # shares candidates and custom_tools with ws
+    phase = CapabilityPhase(
+        phase_ws,
+        llm,
+        handlers,
+        deps.bus,
+        folder,
+        gap,
+        decide=deps.decide,
+        stop=stop,
+        state=saved,
+        toolkit_factory=deps.toolkit_factory,
+    )
+    outcome = phase.run(resume=saved is not None)
+    state.errors += phase.errors
+    for k, v in phase.usage.items():
+        state.usage[f"capability_{k}"] = state.usage.get(f"capability_{k}", 0) + int(v)
+    if outcome == "cancelled_run":
+        save_json(files.state, state)
+        return outcome
+    tool = next((x for x in phase.state.registered if x.property == gap), None)
+    if outcome == "filled" and tool is not None:
+        _set_target_tool(
+            state, ws, i, tool, f"The agent-built tool {tool.name}, approved by the user, computes {gap}."
+        )
+    else:
+        why = {
+            "cancelled_tool": "the user cancelled the tool for it",
+            "budget": "the capability phase ran out of time",
+            "failed": phase.state.end_reason or "no tool could be built for it",
+        }
+        new = ws.spec.with_target(i, t.model_copy(update={"evaluable": False}))
+        new.assumptions.append(
+            f"The target property {gap} was not evaluated: {why.get(outcome, 'no tool could be built for it')}; "
+            "the run did not check it (AT-8)."
+        )
+        ws.spec = state.spec = new
+    state.status = "running"
+    save_json(files.spec, state.spec)
+    save_snapshot(files, state, ws, [])
+    return outcome
+
+
+def _set_target_tool(state: RunState, ws: Workspace, i: int, tool: Any, assumption: str) -> None:
+    """Point target ``i`` at an agent-built tool (AT-16, AT-17).
+
+    Parameters
+    ----------
+    state : RunState
+        State whose spec is replaced.
+    ws : Workspace
+        Workspace whose spec is replaced.
+    i : int
+        Index into ``spec.targets()``.
+    tool : CustomTool
+        The tool.
+    assumption : str
+        Recorded for the brief.
+    """
+    t = ws.spec.targets()[i]
+    new = ws.spec.with_target(i, t.model_copy(update={"tool": f"custom_{tool.name}", "units": tool.units}))
+    new.assumptions.append(assumption + " Its values carry no uncertainty (agent-built tool).")
+    ws.spec = state.spec = new
 
 
 def _workspace(state: RunState, files: RunFiles, resume: bool) -> tuple[Workspace, list[Any]]:
@@ -587,6 +833,7 @@ def _campaign(
         novelty_fn=deps.novelty_fn,
         snapshot=snapshot,
         elapsed_offset_s=offset,
+        tools=custom.campaign_tools(ws),
     )
     if stop.is_set():
         camp.request_stop()

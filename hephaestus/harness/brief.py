@@ -44,7 +44,7 @@ LLM_SECTIONS = [
 NUMBER = re.compile(r"(?<![\w.])[-+\u2212]?\d+(?:\.\d+)?(?![\w.]*\d)")
 DASH = "\u2013"  # shown for a missing value
 CITATION = re.compile(r"\[([^\[\]]+)\](?!\()")
-REQ_CODE = re.compile(r"\b(?:CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b")
+REQ_CODE = re.compile(r"\b(?:AT|CG|DL|EB|FC|GP|LM|OR|PP|SC|SE|SG|SYS|UI)-\d{1,2}\b")
 # Lab conditions an "inferred" step may state: temperatures, times, rates, pressures, amounts.
 PROCESS_UNIT = re.compile(
     r"\s*(?:°\s?C|℃|K\b|C\b|h\b|hrs?\b|hours?\b|min\b|minutes?\b|days?\b|°C/min|K/min|MPa\b|bar\b|"
@@ -215,6 +215,8 @@ def collect_facts(state: RunState, ws: Workspace) -> dict[str, Any]:
         "target_name": property_name(spec.target_property),
         "target_value": spec.target_value,
         "target_units": spec.target_units,
+        "target_tool": spec.target_tool,  # agent-built tool: values carry no uncertainty (AT-17)
+        "target_evaluable": spec.target_evaluable,
         "direction": spec.direction,
         "reference_material": spec.reference_material,
         "e_hull_threshold": spec.stability_thresholds.e_hull_max_eV_per_atom,
@@ -248,6 +250,27 @@ def collect_facts(state: RunState, ws: Workspace) -> dict[str, Any]:
             out[f"{prefix}_source"] = f["source"]
             out[f"{prefix}_structure_type"] = ws.candidates[cid].candidate.structure_type
             out[f"{prefix}_decomposes_to"] = list(ws.candidates[cid].decomposes_to)
+            # Further targets: flat keys, so the number check accepts their values in prose
+            for r in G.target_rows(ws.candidates[cid], ws.spec)[1:]:
+                out[f"{prefix}_value__{r['property']}"] = r["value"]
+                out[f"{prefix}_uncertainty__{r['property']}"] = r["uncertainty"]
+                out[f"{prefix}_met_central__{r['property']}"] = r["met_central"]
+                out[f"{prefix}_met_conservative__{r['property']}"] = r["met_conservative"]
+    out["extra_targets"] = [
+        {
+            "property": t.property,
+            "name": property_name(t.property),
+            "value": t.value,
+            "units": t.units,
+            "direction": t.direction,
+            "reference_material": t.reference_material,
+            "tool": t.tool,
+            "evaluable": t.evaluable,
+        }
+        for t in ws.spec.extra_targets
+    ]
+    for t in ws.spec.extra_targets:
+        out[f"target_value__{t.property}"] = t.value
     out["gate_passed"] = bool(sub and sub.gate_passed)
     return out
 
@@ -507,9 +530,13 @@ def template_sections(state: RunState, ws: Workspace, facts: dict[str, Any]) -> 
 
     plan = [
         "**XRD.** Confirm the structure and space group; stop if secondary phases dominate.",
-        CHARACTERISATION.get(
-            ws.spec.target_property,
-            f"**Measure the {property_name(ws.spec.target_property).lower()}.** Compare it with the target.",
+        *(
+            CHARACTERISATION.get(
+                t.property,
+                f"**Measure the {property_name(t.property).lower()}.** Compare it with the target.",
+            )
+            for t in ws.spec.targets()
+            if t.evaluable
         ),
         "**Raman.** Check octahedral tilts and ordering the model may miss.",
         "**XPS.** Confirm the cation oxidation states.",
@@ -768,6 +795,41 @@ def write_sections(
 # ---------------------------------------------------------------------- code-built parts
 
 
+def _extra_target_row(facts: dict[str, Any], t: dict[str, Any]) -> str:
+    """One table row for a further property target.
+
+    Parameters
+    ----------
+    facts : dict
+        Output of ``collect_facts``.
+    t : dict
+        Entry of ``facts["extra_targets"]``.
+
+    Returns
+    -------
+    str
+        Markdown row.
+    """
+    p, units = t["property"], t["units"]
+    arrow = {"minimise": "<", "maximise": ">", "hit": "≈"}[t["direction"]]
+    target = f"{arrow} {_fmt(t['value'])} {units}" + (
+        f" ({t['reference_material']}, same model)" if t["reference_material"] else ""
+    )
+    if not t["evaluable"]:
+        return f"| {t['name']} | not evaluated: no tool in this run | {target} | No |"
+    value, unc = facts.get(f"win_value__{p}"), facts.get(f"win_uncertainty__{p}")
+    if t["tool"]:
+        pred = f"{_fmt(value)} {units} (agent-built tool)"
+    elif unc is not None:
+        pred = f"{_fmt(value)} ± {_fmt(unc)} {units}"
+    else:
+        pred = f"{_fmt(value)} {units} (no uncertainty available)"
+    cons, central = facts.get(f"win_met_conservative__{p}"), facts.get(f"win_met_central__{p}")
+    end = "high" if arrow == "<" else "low"
+    met = f"Yes, even at the {end} end of the error bar" if cons and unc else "Yes" if central else "No"
+    return f"| {t['name']} | {pred} | {target} | {met} |"
+
+
 def property_table(facts: dict[str, Any]) -> str:
     """Markdown table: property, predicted ± uncertainty, target, met (EB-3).
 
@@ -784,11 +846,12 @@ def property_table(facts: dict[str, Any]) -> str:
     arrow = {"minimise": "<", "maximise": ">", "hit": "≈"}[facts["direction"]]
     unc = facts.get("win_uncertainty")
     units = facts["target_units"]
-    pred = (
-        f"{_fmt(facts.get('win_value'))} ± {_fmt(unc)} {units}"
-        if unc is not None
-        else f"{_fmt(facts.get('win_value'))} {units} (no uncertainty available)"
-    )
+    if facts.get("target_tool"):
+        pred = f"{_fmt(facts.get('win_value'))} {units} (agent-built tool)"
+    elif unc is not None:
+        pred = f"{_fmt(facts.get('win_value'))} ± {_fmt(unc)} {units}"
+    else:
+        pred = f"{_fmt(facts.get('win_value'))} {units} (no uncertainty available)"
     ref = facts.get("reference_material")
     target = f"{arrow} {_fmt(facts['target_value'])} {units}" + (f" ({ref}, same model)" if ref else "")
     central, cons = facts.get("win_target_met_central"), facts.get("win_target_met_conservative")
@@ -805,6 +868,7 @@ def property_table(facts: dict[str, Any]) -> str:
         "| Property | Predicted | Target | Met |",
         "| --- | --- | --- | --- |",
         f"| {facts['target_name']} | {pred} | {target} | {met} |",
+        *(_extra_target_row(facts, t) for t in facts.get("extra_targets") or []),
         f"| Energy above hull | {_fmt(facts.get('win_e_hull'))} eV/atom | ≤ {_fmt(facts['e_hull_threshold'])} eV/atom | "
         f"{_yes_no(facts.get('win_thermo_stable'))} |",
         f"| Lowest phonon frequency | {_fmt(facts.get('win_min_freq'))} THz | no unstable modes after mode mapping | "
@@ -907,11 +971,20 @@ def _summary(facts: dict[str, Any], state: RunState, next_step: str | None) -> l
     pred = f"{_fmt(facts.get('win_value'))}" + (
         f" ± {_fmt(facts['win_uncertainty'])}" if facts.get("win_uncertainty") is not None else ""
     )
+    if facts.get("target_tool"):
+        pred += " (agent-built tool)"
     target = f"{_fmt(facts['target_value'])} {facts['target_units']}" + (f" for {ref}" if ref else "")
     lines = [
         f"- **What to make:** {facts['win_composition']}, {facts.get('win_structure_type', '').replace('_', ' ')}"
         f"{', ' + facts['win_space_group'] if facts.get('win_space_group') else ''}.",
-        f"- **Why:** predicted {facts['target_name'].lower()} {pred} {facts['target_units']} against {target} on the same model.",
+        f"- **Why:** predicted {facts['target_name'].lower()} {pred} {facts['target_units']} against {target} on the same model"
+        + "".join(
+            f"; {t['name'].lower()} {_fmt(facts.get('win_value__' + t['property']))} {t['units']} against "
+            f"{_fmt(t['value'])} {t['units']}"
+            for t in facts.get("extra_targets") or []
+            if t["evaluable"]
+        )
+        + ".",
         "- **Stable?** "
         + (
             "hull not checked; "
@@ -984,8 +1057,9 @@ def assemble_brief(state: RunState, ws: Workspace, llm: LLM | None = None) -> tu
             [
                 f"| Candidate | {facts['target_name']} | Energy above hull | Dynamically stable |",
                 "| --- | --- | --- | --- |",
-                f"| {facts['run_composition']} ({candidate_label(facts['run_id'])}) | {_fmt(facts['run_value'])} ± "
-                f"{_fmt(facts['run_uncertainty'])} {facts['target_units']} | {_fmt(facts['run_e_hull'])} eV/atom | "
+                f"| {facts['run_composition']} ({candidate_label(facts['run_id'])}) | {_fmt(facts['run_value'])}"
+                + (f" ± {_fmt(facts['run_uncertainty'])}" if facts.get("run_uncertainty") is not None else "")
+                + f" {facts['target_units']} | {_fmt(facts['run_e_hull'])} eV/atom | "
                 f"{_yes_no(facts['run_dyn_stable'])} |",
             ]
         )

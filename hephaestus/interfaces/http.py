@@ -29,13 +29,16 @@ from hephaestus.harness import runner
 from hephaestus.interfaces.python import (
     Experiment,
     ExperimentError,
+    approve_tool,
     backend_ready,
     backend_status,
     device_status,
     list_runs,
     models,
+    remove_tool,
     run_blockers,
     simulation_status,
+    tool_library,
 )
 from hephaestus.llm.auth import (
     ClaudeLogin,
@@ -94,6 +97,8 @@ class ParseRequest(BaseModel):
     run_hull: bool | None = None
     e_hull_max_eV_per_atom: float | None = None
     run_phonons: bool | None = None
+    custom_tools: str | None = None
+    disabled_capabilities: list[str] | None = None
 
 
 class RunRequest(BaseModel):
@@ -105,6 +110,24 @@ class RunRequest(BaseModel):
     config: RunConfig = Field(default_factory=RunConfig)
     raw_goal: str = ""
     answers: dict[str, str] | None = None
+
+
+class ToolDecisionRequest(BaseModel):
+    """Body of ``POST /runs/{run_id}/tool-decisions`` (AT-7, AT-13)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_id: str
+    action: str
+    message: str | None = None
+
+
+class ApproveToolRequest(BaseModel):
+    """Body of ``POST /tools/{name}/approve``: the fingerprint of the files reviewed (AT-21)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sha256: str
 
 
 class CodeRequest(BaseModel):
@@ -212,6 +235,7 @@ def create_app(
     claude_login: ClaudeLogin | None = None,
     key_check: Callable[[str], str | None] | None = check_api_key,
     mp_check: Callable[[str], str | None] | None = check_mp_key,
+    library_dir: Path | None = None,
 ) -> FastAPI:
     """Build the API (tests pass a runs folder and scripted dependencies).
 
@@ -230,6 +254,8 @@ def create_app(
         Checks an Anthropic API key before saving; ``None`` skips the check (tests).
     mp_check : callable or None
         Checks a Materials Project key before saving; ``None`` skips the check (tests).
+    library_dir : pathlib.Path, optional
+        Tool library folder; ``RunConfig().tool_library_dir`` by default.
 
     Returns
     -------
@@ -643,6 +669,97 @@ def create_app(
         with lock:
             experiments[run_id] = exp
         return {"run_id": run_id, "resumed": True}
+
+    # ------------------------------------------------------------------ agent-built tools (Section 14)
+
+    @app.get("/runs/{run_id}/tool-proposals")
+    def tool_proposals(run_id: str) -> list[dict[str, Any]]:
+        """Proposals of a run's capability phase, with source at the code stage (AT-13).
+
+        Parameters
+        ----------
+        run_id : str
+            Run ID.
+
+        Returns
+        -------
+        list of dict
+            ``ToolProposal`` fields plus ``waiting`` and ``allowed``.
+        """
+        return get_experiment(run_id).tool_proposals()
+
+    @app.post("/runs/{run_id}/tool-decisions")
+    def tool_decision(run_id: str, req: ToolDecisionRequest) -> dict[str, Any]:
+        """Deliver the user's decision on a waiting proposal (AT-7, AT-13).
+
+        Parameters
+        ----------
+        run_id : str
+            Run ID.
+        req : ToolDecisionRequest
+            Proposal, action and message.
+
+        Returns
+        -------
+        dict
+            ``{accepted: true, decision}``; 409 when the proposal is not waiting or the action is
+            not offered.
+        """
+        try:
+            decision = get_experiment(run_id).decide(req.proposal_id, req.action, req.message)
+        except (ExperimentError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"accepted": True, "decision": decision.model_dump(mode="json")}
+
+    @app.get("/tools")
+    def tools() -> dict[str, Any]:
+        """Return the tool library: approved tools and files waiting for review (AT-20, AT-21).
+
+        Returns
+        -------
+        dict
+            ``{dir, approved, unapproved}``.
+        """
+        return tool_library(library_dir)
+
+    @app.post("/tools/{name}/approve")
+    def tools_approve(name: str, req: ApproveToolRequest) -> dict[str, Any]:
+        """Approve a library file exactly as it was shown (AT-21).
+
+        Parameters
+        ----------
+        name : str
+            Tool name.
+        req : ApproveToolRequest
+            Fingerprint of the reviewed files.
+
+        Returns
+        -------
+        dict
+            The approved ``CustomTool``; 409 when the files changed or fail the static check.
+        """
+        try:
+            return approve_tool(name, req.sha256, library_dir).model_dump(mode="json")
+        except ExperimentError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.delete("/tools/{name}")
+    def tools_remove(name: str) -> dict[str, Any]:
+        """Delete a tool and its tests from the library.
+
+        Parameters
+        ----------
+        name : str
+            Tool name.
+
+        Returns
+        -------
+        dict
+            ``{removed: true}``; 404 when there was nothing to remove.
+        """
+        if not remove_tool(name, library_dir):
+            raise HTTPException(404, f"No tool {name}.")
+        return {"removed": True}
 
     @app.post("/replay/{run_id}")
     def replay(run_id: str, req: ReplayRequest | None = None) -> dict[str, Any]:

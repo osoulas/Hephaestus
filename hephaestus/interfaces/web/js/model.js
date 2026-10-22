@@ -3,6 +3,7 @@
 
 export const PHASES = [
   { key: "parse", name: "Parse goal" },
+  { key: "tools", name: "Build tool" }, // only shown when the run has a capability gap
   { key: "campaign", name: "Campaign" },
   { key: "final", name: "Final re-check" },
   { key: "brief", name: "Lab brief" },
@@ -61,7 +62,8 @@ export class RunModel {
     this.brief = null; // {pdf, cited}
     this.briefStarted = false;
     this.runResult = null; // payload of run finished/failed
-    this.phase = { parse: "pending", campaign: "pending", final: "pending", brief: "pending" };
+    this.phase = { parse: "pending", tools: "pending", campaign: "pending", final: "pending", brief: "pending" };
+    this.capability = null; // {gap, waiting: {proposal_id, stage} | null, registered, cancelled} once a gap opens
     this.startTime = null;
     this.lastTime = null;
     this.campaignStart = null; // first orchestrator start
@@ -113,7 +115,7 @@ export class RunModel {
       }
       if (e.status === "failed") {
         this.errors += (p.errors || []).length || 1;
-        const stuck = PHASES.find((ph) => this.phase[ph.key] !== "done" && this.phase[ph.key] !== "skipped");
+        const stuck = PHASES.find((ph) => (ph.key !== "tools" || this.capability) && this.phase[ph.key] !== "done" && this.phase[ph.key] !== "skipped");
         if (stuck && this.phase[stuck.key] !== "input") this.phase[stuck.key] = "failed";
       }
       this.log.push({
@@ -144,6 +146,7 @@ export class RunModel {
   on_orchestrator(e, p) {
     if (e.status === "started") {
       if (this.phase.parse === "pending") this.phase.parse = "done";
+      if (this.phase.tools === "active" || this.phase.tools === "input") this.phase.tools = "done";
       this.phase.campaign = "active";
       if (!this.campaignStart) this.campaignStart = new Date(e.time);
       this.campaignEnd = null; // a resume continues the campaign
@@ -180,8 +183,10 @@ export class RunModel {
   }
 
   on_tool(e, p) {
-    if (this.phase.campaign === "pending") this.phase.campaign = "active";
     if (this.phase.parse === "pending") this.phase.parse = "done";
+    if (p.phase === "capability") {
+      if (this.phase.tools === "pending") this.phase.tools = "active";
+    } else if (this.phase.campaign === "pending") this.phase.campaign = "active";
     let call = this.calls.get(p.call_id);
     if (!call) {
       call = { id: p.call_id, tool: p.tool, input: p.input, status: "started", round: e.iteration, started: e.time };
@@ -205,21 +210,69 @@ export class RunModel {
       const next = { ...prev };
       for (const k of [
         "composition", "cand_round", "e_hull", "thermo_stable", "dyn_stable", "min_freq", "verdict",
-        "space_group", "value", "uncertainty", "novelty", "rationale", "evidence_ids",
+        "space_group", "value", "uncertainty", "novelty", "rationale", "evidence_ids", "targets",
       ]) {
         if (p[k] !== undefined && p[k] !== null) next[k] = p[k];
       }
-      if (p.tool === "predict_property" && p.result && !p.result.error) {
+      if ((p.tool === "predict_property" || String(p.tool).startsWith("custom_")) && p.result && !p.result.error) {
         next.units = p.result.units;
         next.property = p.result.property;
         next.model = p.result.model;
         next.target = p.result.target;
+        next.agentBuilt = String(p.result.model || "").startsWith("agent-built:");
       }
       this.candidates.set(p.candidate_id, next);
     }
     for (const paper of p.papers || []) {
       if (!this.papers.has(paper.paper_id)) this.papers.set(paper.paper_id, paper);
     }
+  }
+
+  /** The capability phase: plan and code cards, checks, decisions (agent-built tools). */
+  on_capability(e, p) {
+    if (this.phase.parse === "pending") this.phase.parse = "done";
+    const cap = (this.capability = this.capability || { gap: null, waiting: null, registered: null, cancelled: null });
+    const kind = p.kind;
+    if (kind === "gap") {
+      cap.gap = p.property;
+      this.phase.tools = "active";
+    } else if (kind === "library") {
+      cap.gap = cap.gap || p.property;
+      cap.registered = { name: (p.reused || [])[0] };
+      this.phase.tools = "done";
+    } else if (kind === "plan" || kind === "code") {
+      cap.waiting = { proposal_id: p.proposal.proposal_id, stage: kind };
+      this.phase.tools = "input";
+      this.log.push({ type: "capability", kind, seq: e.seq, proposal: p.proposal, allowed: p.allowed || [], decision: null, time: e.time });
+      return;
+    } else if (kind === "package" || kind === "question" || kind === "give_up") {
+      cap.waiting = { proposal_id: p.request.request_id, stage: kind };
+      this.phase.tools = "input";
+      this.log.push({ type: "capability", kind, seq: e.seq, request: p.request, allowed: p.allowed || [], decision: null, time: e.time });
+      return;
+    } else if (kind === "decision") {
+      const d = p.decision;
+      const idOf = (x) => (x.proposal ? x.proposal.proposal_id : x.request ? x.request.request_id : null);
+      const card = [...this.log].reverse().find((x) => x.type === "capability" && idOf(x) === d.proposal_id && x.kind === d.stage && !x.decision);
+      if (card) card.decision = d;
+      if (cap.waiting && cap.waiting.proposal_id === d.proposal_id) cap.waiting = null;
+      this.phase.tools = "active";
+      if (card) return; // the card shows the decision
+    } else if (kind === "withdrawn") {
+      const card = [...this.log].reverse().find((x) => x.type === "capability" && x.kind === "code" && x.proposal && x.proposal.proposal_id === p.proposal_id && !x.decision && !x.withdrawn);
+      if (card) card.withdrawn = p.reason;
+      if (cap.waiting && cap.waiting.proposal_id === p.proposal_id) cap.waiting = null;
+      this.phase.tools = "active";
+      if (card) return; // the card shows it
+    } else if (kind === "registered") {
+      cap.registered = p.tool;
+      this.phase.tools = "done";
+    } else if (kind === "cancelled") {
+      cap.cancelled = p;
+      cap.waiting = null;
+      this.phase.tools = p.scope === "run" ? "skipped" : "done";
+    }
+    this.log.push({ type: "capability", kind, seq: e.seq, payload: p, time: e.time });
   }
 
   on_final_calculation(e, p) {

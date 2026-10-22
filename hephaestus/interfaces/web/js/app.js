@@ -5,6 +5,7 @@ import { api, ApiError } from "./api.js";
 import { ago, append, cid, cidLong, h, icon, label, pill, store, stored, toast, wordmark } from "./dom.js";
 import { openConnectDialog } from "./auth.js";
 import { mountRun } from "./run.js";
+import { mountTools } from "./tools.js";
 import { CONFIG_GROUPS, DEPENDS_ON, LIMITS, POTENTIALS, PROFILES, TOP_LEVEL_SETTINGS, VALUE_NAMES, modelName, potentialName, specGrid } from "./spec.js";
 
 const main = document.getElementById("main");
@@ -49,6 +50,7 @@ function route() {
     main.replaceChildren();
     main.scrollTop = 0;
     if (next.view === "run" && next.id) app.current = mountRun(main, next.id, next.tab, { onChange: refreshRuns });
+    else if (next.view === "tools") app.current = mountTools(main);
     else app.current = mountComposer(main);
   }
   renderSidebar();
@@ -109,7 +111,12 @@ function renderSidebar() {
       wordmark(),
       h("div.brand-tag", { title: "forged in simulation · checked by code · grounded in the literature" }, "self-designing experiments for materials discovery"),
     ),
-    h("div.sidebar-actions", null, h("a.btn.primary", { href: "#/new" }, icon("plus"), "New run")),
+    h(
+      "div.sidebar-actions",
+      null,
+      h("a.btn.primary", { href: "#/new" }, icon("plus"), "New run"),
+      h("a.btn.ghost", { href: "#/tools", "aria-current": app.route && app.route.view === "tools" ? "page" : null }, icon("wrench"), "Tool library"),
+    ),
     h("div.sidebar-section", null, "Runs", h("span.num", null, app.runs.length || "")),
     list,
     statusPanel(),
@@ -296,6 +303,8 @@ function mountComposer(root) {
           run_hull: cfg.run_hull,
           e_hull_max_eV_per_atom: cfg.e_hull_max_eV_per_atom,
           run_phonons: cfg.run_phonons,
+          custom_tools: cfg.custom_tools,
+          disabled_capabilities: cfg.disabled_capabilities,
         },
       });
     } catch (e) {
@@ -544,7 +553,10 @@ function mountComposer(root) {
     };
     let control;
     let note = hint;
-    if (key === "band_gap_model") {
+    if (key === "disabled_capabilities") {
+      const on = (value || []).includes("elastic");
+      control = h("label.switch", null, h("input", { type: "checkbox", checked: on, onchange: (e) => set(e.target.checked ? ["elastic"] : []) }), on ? "Off for this run" : "Available");
+    } else if (key === "band_gap_model") {
       const models = (app.models && app.models.band_gap_models) || enumValues.map((id) => ({ id, label: id, description: "" }));
       const sel = models.find((m) => m.id === value);
       note = sel ? sel.description : hint;
@@ -664,7 +676,7 @@ function mountComposer(root) {
           ? h(
               "div.group-body",
               null,
-              h("div.group-grid", null, fields.map(([k, meta]) => settingControl(k, schema[k], meta, Boolean(DEPENDS_ON[k]) && !c[DEPENDS_ON[k]]))),
+              h("div.group-grid", null, fields.map(([k, meta]) => settingControl(k, schema[k], meta, Boolean(DEPENDS_ON[k]) && (!c[DEPENDS_ON[k]] || c[DEPENDS_ON[k]] === "off")))),
               changedHere.length
                 ? h(
                     "button.link.reset-group",
@@ -775,6 +787,16 @@ function mountComposer(root) {
       ),
     );
     if (spec) card.append(specGrid(spec, config()));
+    if (p.gap) {
+      card.append(
+        h(
+          "div.callout.info",
+          { style: { margin: "0 18px 16px" } },
+          icon("wrench"),
+          h("div", null, h("strong", null, `No tool computes ${label(p.gap).toLowerCase()} yet.`), " The agent will read how papers compute it and propose a tool. You review the plan and then the code before the search starts."),
+        ),
+      );
+    }
     if (open) {
       card.append(
         h(
@@ -812,11 +834,40 @@ function mountComposer(root) {
     return card;
   }
 
+  // The status refresh redraws the composer, which would rebuild a field the user is typing in and
+  // drop the cursor, or replace a button between press and release so the click is lost. Hold the
+  // redraw while a field has focus or a pointer is down, and run it once both are over.
+  let heldDraw = false;
+  let pointerDown = false;
+  const typing = () => {
+    const el = document.activeElement;
+    return Boolean(el && view.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  };
+  const flush = () => {
+    if (heldDraw && !typing() && !pointerDown && !st.busy) {
+      heldDraw = false;
+      draw();
+    }
+  };
+  view.addEventListener("pointerdown", () => (pointerDown = true), true);
+  const onPointerUp = () => {
+    pointerDown = false;
+    setTimeout(flush, 0); // after the click that follows this pointerup
+  };
+  window.addEventListener("pointerup", onPointerUp, true);
+  window.addEventListener("pointercancel", onPointerUp, true);
+  view.addEventListener("focusout", () => setTimeout(flush, 0));
+
   draw();
   return {
-    unmount() {},
+    unmount() {
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+    },
     onHealth() {
-      if (!st.busy) draw();
+      if (st.busy) return;
+      if (typing() || pointerDown) heldDraw = true;
+      else draw();
     },
   };
 }
@@ -830,7 +881,8 @@ async function boot() {
     api("/models").catch(() => null),
     api("/config/schema").catch(() => null),
   ]);
-  app.defaults = defaults;
+  // The UI asks about agent-built tools by default; scripts and the Python API default to off (AT-3)
+  app.defaults = defaults ? { ...defaults, custom_tools: "ask" } : defaults;
   app.models = models;
   app.schema = schema;
   window.addEventListener("hashchange", route);

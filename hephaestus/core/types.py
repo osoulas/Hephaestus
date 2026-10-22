@@ -18,13 +18,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from hephaestus.core.config import RunConfig
 
 Direction = Literal["maximise", "minimise", "hit"]
-FindingType = Literal["positive", "negative", "mechanism", "synthesis"]
+FindingType = Literal["positive", "negative", "mechanism", "synthesis", "method"]
 Novelty = Literal["known", "variant", "novel"]
 Feasibility = Literal["easy", "moderate", "difficult", "unknown"]
 Severity = Literal["critical", "major", "minor", "info"]
 EventStatus = Literal["started", "finished", "failed"]
 RunStatus = Literal[
-    "created", "needs_input", "running", "final_check", "writing_brief", "finished", "failed", "stopped"
+    "created",
+    "needs_input",
+    "capability",
+    "running",
+    "final_check",
+    "writing_brief",
+    "finished",
+    "failed",
+    "stopped",
 ]
 
 
@@ -82,6 +90,23 @@ class StabilityThresholds(Record):
     dynamic: bool = True
 
 
+class Target(Record):
+    """One property target; every target of a spec must be met.
+
+    The spec's own ``target_*`` fields are the primary target; more go in ``SearchSpec.extra_targets``.
+    """
+
+    property: str
+    value: float | None = None
+    units: str = ""
+    direction: Direction = "minimise"
+    tolerance: float | None = None  # only for direction "hit"
+    reference_material: str | None = None
+    reference_value: Quantity | None = None
+    tool: str | None = None  # agent-built tool that computes it (Section 14)
+    evaluable: bool = True  # false when no tool can compute it in this run
+
+
 class SearchSpec(Record):
     """Structured search specification produced by the goal parser (Section 1)."""
 
@@ -102,6 +127,82 @@ class SearchSpec(Record):
     soft_preferences: list[str] = Field(default_factory=list)
     stability_thresholds: StabilityThresholds = Field(default_factory=StabilityThresholds)
     assumptions: list[str] = Field(default_factory=list)
+    # Agent-built tools (Section 14): the tool that supplies the target property, and whether the
+    # target can be evaluated at all (false when the user cancelled the tool for it, AT-8)
+    target_tool: str | None = None
+    target_evaluable: bool = True
+    # Further property targets; every target must be met (the fields above are the primary one)
+    extra_targets: list[Target] = Field(default_factory=list)
+
+    def targets(self) -> list[Target]:
+        """Return every target: the primary one, then ``extra_targets``.
+
+        Returns
+        -------
+        list of Target
+            At least one target.
+        """
+        primary = Target(
+            property=self.target_property,
+            value=self.target_value,
+            units=self.target_units,
+            direction=self.direction,
+            tolerance=self.target_tolerance,
+            reference_material=self.reference_material,
+            reference_value=self.reference_value,
+            tool=self.target_tool,
+            evaluable=self.target_evaluable,
+        )
+        return [primary, *self.extra_targets]
+
+    def target_view(self, i: int) -> SearchSpec:
+        """Return a copy whose primary target is target ``i``, for single-target code.
+
+        Parameters
+        ----------
+        i : int
+            Index into ``targets()``.
+
+        Returns
+        -------
+        SearchSpec
+            The copy; ``extra_targets`` is emptied.
+        """
+        return self.with_target(0, self.targets()[i]).model_copy(update={"extra_targets": []})
+
+    def with_target(self, i: int, t: Target) -> SearchSpec:
+        """Return a copy with target ``i`` replaced.
+
+        Parameters
+        ----------
+        i : int
+            Index into ``targets()``; 0 is the primary target.
+        t : Target
+            The new target.
+
+        Returns
+        -------
+        SearchSpec
+            The copy.
+        """
+        if i == 0:
+            return self.model_copy(
+                update={
+                    "target_property": t.property,
+                    "target_value": t.value,
+                    "target_units": t.units,
+                    "direction": t.direction,
+                    "target_tolerance": t.tolerance,
+                    "reference_material": t.reference_material,
+                    "reference_value": t.reference_value,
+                    "target_tool": t.tool,
+                    "target_evaluable": t.evaluable,
+                },
+                deep=True,
+            )
+        extra = [x.model_copy(deep=True) for x in self.extra_targets]
+        extra[i - 1] = t
+        return self.model_copy(update={"extra_targets": extra}, deep=True)
 
 
 class Paper(Record):
@@ -339,3 +440,80 @@ class RunState(Record):
     errors: list[ErrorRecord] = Field(default_factory=list)
     usage: dict[str, int] = Field(default_factory=dict)
     versions: dict[str, str] = Field(default_factory=dict)
+
+
+ToolStage = Literal["plan", "code", "package", "question", "give_up"]
+ToolAction = Literal["accept", "revise", "cancel_tool", "cancel_run", "allow", "deny", "answer"]
+
+
+class ToolCheck(Record):
+    """One code check on an agent-built tool (AT-11, AT-12)."""
+
+    passed: bool
+    report: str = ""
+
+
+class ToolProposal(Record):
+    """A plan for an agent-built tool, and later its code, waiting for the user (Section 14)."""
+
+    proposal_id: str
+    name: str
+    property: str
+    units: str
+    description: str
+    method: str
+    citations: list[str] = Field(default_factory=list)
+    inputs: dict[str, Any] = Field(default_factory=dict)  # JSON schema beyond candidate_id
+    building_blocks: list[str] = Field(default_factory=list)
+    expected_runtime_s: float | None = None
+    supplies_target: bool = True
+    if_cancelled: str = ""
+    revision: int = 1
+    stage: ToolStage = "plan"
+    status: Literal["waiting", "accepted", "revise", "cancelled", "registered"] = "waiting"
+    author: Literal["agent", "user"] = "agent"
+    source: str | None = None
+    tests: str | None = None
+    checks: dict[str, ToolCheck] = Field(default_factory=dict)  # static, tests, trial
+    trial: dict[str, Any] | None = None  # trial-run output on the reference material
+    toolkit_calls: list[str] = Field(default_factory=list)
+    revisions_left: int = 0
+
+
+class UserRequest(Record):
+    """Something the tool builder asks the user: a package outside the sandbox, or a question."""
+
+    request_id: str
+    kind: Literal["package", "question", "give_up"]
+    question: str  # the agent's reason (package, give_up) or question
+    package: str | None = None  # import name, e.g. "phonopy"
+    pip_name: str | None = None  # what to install when it is missing
+    installed: bool | None = None  # whether the server's Python can import it now
+    options: list[str] = Field(default_factory=list)  # suggested answers to a question
+    status: Literal["waiting", "answered"] = "waiting"
+    answer: str | None = None
+
+
+class ToolDecision(Record):
+    """The user's decision on a proposal at the plan or the code stage (AT-7, AT-13)."""
+
+    proposal_id: str
+    stage: ToolStage
+    action: ToolAction
+    message: str | None = None
+    time: datetime = Field(default_factory=utcnow)
+
+
+class CustomTool(Record):
+    """An approved tool in the tool library (AT-20); ``sha256`` covers the tool and its tests."""
+
+    name: str
+    property: str
+    units: str
+    file: str
+    sha256: str
+    author: Literal["agent", "user"] = "agent"
+    approved_at: datetime = Field(default_factory=utcnow)
+    run_id: str | None = None
+    description: str = ""
+    packages: list[str] = Field(default_factory=list)  # imports beyond the allowlist, approved by the user
