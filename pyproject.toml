@@ -54,7 +54,7 @@ sim = [
 ]
 dev = [
   "build>=1.2",
-  "mypy>=1.11",
+  "mypy>=2.4.1",
   "pre-commit>=4.0",
   "pytest>=8.3",
   "marimo>=0.25",
